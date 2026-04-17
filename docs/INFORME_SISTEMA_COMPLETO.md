@@ -586,6 +586,10 @@ docker compose stop backend && docker compose up -d backend
 - `app/.env.example` (REESCRITO): documentado con todas las variables de entorno, cero valores reales, indicación de que secretos van en Docker Secrets
 - `README.md` (REESCRITO): eliminada API key de n8n hardcoded (FlYgwhZg...) y referencias obsoletas a n8n/xanflatest.com; nuevo README profesional con stack actual, arquitectura, setup, convenciones de commits y estructura del repo
 - Auditoría de secretos ejecutada: 3 hallazgos analizados (2 en settings.local.json gitignored, 1 falso positivo en docs), código limpio para primer commit
+- Repositorio Git inicializado en VPS, push a GitHub: `github.com/Juliohes/Setex-facturas` (privado)
+- Ramas creadas: `main` (producción) + `develop` (staging). Primer commit: 87 archivos, 23.362 líneas (hash 00e51ec)
+- Clave SSH ed25519 generada en VPS y vinculada a GitHub (title: "VPS SETEX")
+- `git config --global safe.directory /opt/setex-captu-facture` requerido por ownership del directorio en /opt/
 
 **Fase 0 — Decisiones arquitectónicas:**
 
