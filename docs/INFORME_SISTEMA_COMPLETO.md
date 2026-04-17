@@ -590,6 +590,13 @@ docker compose stop backend && docker compose up -d backend
 - Ramas creadas: `main` (producción) + `develop` (staging). Primer commit: 87 archivos, 23.362 líneas (hash 00e51ec)
 - Clave SSH ed25519 generada en VPS y vinculada a GitHub (title: "VPS SETEX")
 - `git config --global safe.directory /opt/setex-captu-facture` requerido por ownership del directorio en /opt/
+- GitHub Pro activado ($4/mes) para branch protection enforced en repo privado
+- Branch protection configurada en `main`: require PR, require linear history, do not allow bypassing, no force push, no deletions
+- Branch protection configurada en `develop`: require PR, do not allow bypassing, no force push, no deletions
+- Prueba de humo ejecutada: push directo a main correctamente rechazado (GH006)
+- 2FA activado en cuenta GitHub (authenticator app)
+- Push protection a nivel de cuenta GitHub activado (bloquea push con secretos)
+- Dependabot alerts + security updates activados en el repo
 
 **Fase 0 — Decisiones arquitectónicas:**
 
