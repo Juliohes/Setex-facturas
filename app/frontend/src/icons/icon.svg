@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Fondo oscuro redondeado -->
+  <rect width="512" height="512" rx="80" ry="80" fill="#2d3748"/>
+  <!-- Logo SETEX: SE naranja + TEX blanco -->
+  <text
+    x="256"
+    y="315"
+    font-family="Helvetica, Arial, sans-serif"
+    font-weight="bold"
+    font-size="130"
+    text-anchor="middle"
+  ><tspan fill="#FF6600">SE</tspan><tspan fill="#ffffff">TEX</tspan></text>
+</svg>

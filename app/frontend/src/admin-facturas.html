@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SETEX — Panel de Administración</title>
+  <link rel="icon" href="favicon-admin.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="tabulator.min.css">
+  <link rel="stylesheet" href="admin-facturas.css?v=20260411-001">
+</head>
+<body>
+
+  <div id="login-screen" style="display:none;">
+    <div class="login-card">
+      <div class="login-logo"><span class="se">SE</span><span class="tex">TEX</span></div>
+      <h1 class="login-title">Panel de Administración</h1>
+      <p class="login-subtitle">Acceso exclusivo para administradores</p>
+      <form id="login-form" autocomplete="on">
+        <div class="login-field">
+          <label for="login-email">Correo electrónico</label>
+          <input type="email" id="login-email" name="email" placeholder="tu@email.com" required autocomplete="email">
+        </div>
+        <div class="login-field">
+          <label for="login-password">Contraseña</label>
+          <input type="password" id="login-password" name="password" placeholder="••••••••" required autocomplete="current-password">
+        </div>
+        <p id="login-error" class="login-error" style="display:none;"></p>
+        <button type="submit" id="login-btn" class="login-btn">Entrar</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="app" style="display:none;">
+
+    <header class="header">
+      <div class="header-left">
+        <span class="logo"><span class="se">SE</span><span class="tex">TEX</span></span>
+        <nav class="header-nav">
+          <button class="nav-tab active" data-tab="facturas">Facturas</button>
+          <button class="nav-tab" data-tab="empresas">Empresas <span id="badge-pendientes" style="display:none;background:#d69e2e;color:#fff;font-size:11px;font-weight:700;padding:1px 7px;border-radius:10px;margin-left:4px;vertical-align:middle;"></span></button>
+        </nav>
+      </div>
+      <div class="header-right">
+        <span id="user-email" class="user-email"></span>
+        <button id="btn-logout" class="btn-logout">Cerrar sesión</button>
+      </div>
+    </header>
+
+    <!-- ── Tab: Facturas ──────────────────────────────────────────────────── -->
+    <main id="tab-facturas" class="main tab-content active">
+
+      <!-- Banner: filtro activo por empresa -->
+      <div id="company-filter-banner" style="display:none;align-items:center;gap:10px;background:#ebf8ff;border:1px solid #bee3f8;border-radius:8px;padding:8px 16px;margin:12px 16px 0;font-size:13px;color:#2b6cb0;">
+        <span>📂 Mostrando facturas de:</span>
+        <strong id="company-filter-name"></strong>
+        <button id="btn-company-filter-clear" style="margin-left:auto;background:none;border:1px solid #90cdf4;border-radius:6px;color:#2b6cb0;padding:2px 10px;cursor:pointer;font-size:12px;">✕ Ver todas</button>
+      </div>
+
+      <div class="filters-card">
+        <div class="filters-row">
+          <div class="filter-group">
+            <label>Fecha factura desde</label>
+            <input type="date" id="f-desde" class="filter-input">
+          </div>
+          <div class="filter-group">
+            <label>Fecha factura hasta</label>
+            <input type="date" id="f-hasta" class="filter-input">
+          </div>
+          <div class="filter-group">
+            <label>Proveedor / CIF</label>
+            <input type="text" id="f-proveedor" class="filter-input" placeholder="Nombre o CIF...">
+          </div>
+          <div class="filter-group">
+            <label>Usuario</label>
+            <select id="f-usuario" class="filter-input">
+              <option value="">Todos los usuarios</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label>Estado</label>
+            <select id="f-estado" class="filter-input">
+              <option value="">Todos</option>
+              <option value="procesado">Procesado ✓</option>
+              <option value="pendiente">Pendiente ⏳</option>
+            </select>
+          </div>
+          <div class="filter-actions">
+            <button id="btn-filtrar" class="btn-primary">Filtrar</button>
+            <button id="btn-limpiar" class="btn-secondary">Limpiar</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-card">
+        <div class="table-header">
+          <div class="table-meta">
+            <span id="total-label" class="total-label">Cargando...</span>
+          </div>
+          <div class="table-actions">
+            <button id="btn-refresh" class="btn-icon" title="Actualizar">↺ Actualizar</button>
+            <button id="btn-csv" class="btn-export">⬇ Descargar Excel</button>
+          </div>
+        </div>
+        <div id="facturas-table"></div>
+      </div>
+
+    </main>
+
+    <!-- ── Tab: Empresas (whitelist de clientes) ────────────────────────── -->
+    <main id="tab-empresas" class="main tab-content" style="display:none;">
+
+      <!-- Formulario nueva empresa (inline, colapsable) -->
+      <div class="filters-card" style="margin-bottom:0;border-bottom-left-radius:0;border-bottom-right-radius:0;">
+        <div class="filters-row" style="align-items:flex-end;gap:12px;">
+          <div class="filter-group" style="flex:2;min-width:180px;">
+            <label style="font-weight:600;color:#2d3748;">Nueva empresa autorizada</label>
+            <p style="font-size:12px;color:#718096;margin:2px 0 0;">Las empresas <strong style="color:#276749;">activas</strong> tienen acceso completo. Las <strong style="color:#d69e2e;">pendientes</strong> esperan revisión antes de poder iniciar sesión.</p>
+          </div>
+          <div class="filter-actions">
+            <button id="btn-nueva-empresa" class="btn-primary">+ Nueva empresa</button>
+            <button id="btn-modo-eliminar" class="btn-secondary">🗑 Eliminar</button>
+            <button id="btn-refresh-empresas" class="btn-icon">↺ Actualizar</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-card" style="border-top-left-radius:0;border-top-right-radius:0;">
+        <div class="table-header">
+          <div class="table-meta">
+            <span id="empresas-label" class="total-label">Cargando...</span>
+          </div>
+        </div>
+        <div id="empresas-table"></div>
+      </div>
+    </main>
+
+
+  </div>
+
+  <!-- Modal: Renombrar empresa -->
+  <div id="rename-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Nombre de la empresa</h3>
+        <button id="rename-modal-close" class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="rename-user-id">
+        <label class="edit-label">Nombre visible en el panel (ej: SETEX TEXTIL SL)</label>
+        <input type="text" id="rename-company-input" class="edit-input" placeholder="Nombre de la empresa" maxlength="255">
+        <p id="rename-error" class="edit-error" style="display:none;"></p>
+      </div>
+      <div class="modal-footer">
+        <button id="rename-cancel" class="btn-secondary">Cancelar</button>
+        <button id="rename-save" class="btn-primary">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Empresa (nueva / editar) -->
+  <div id="empresa-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-card" style="min-width:400px;max-width:540px;">
+      <div class="modal-header">
+        <h3 id="emp-modal-title">Nueva empresa</h3>
+        <button id="emp-modal-close" class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body" style="display:flex;flex-direction:column;gap:14px;">
+        <div>
+          <label class="edit-label">Nombre de la empresa <span style="color:#e53e3e;">*</span></label>
+          <input type="text" id="emp-nombre" class="edit-input" placeholder="Ej: Textiles García S.L." maxlength="255">
+        </div>
+        <div>
+          <label class="edit-label">CIF / NIF <span style="color:#e53e3e;">*</span></label>
+          <input type="text" id="emp-cif" class="edit-input" placeholder="Ej: B12345678" maxlength="20" style="font-family:monospace;letter-spacing:1px;text-transform:uppercase;">
+        </div>
+        <div>
+          <label class="edit-label">Código de cliente <span style="color:#718096;font-weight:400;font-size:12px;">(ID único opcional — aparece en la columna ID de facturas)</span></label>
+          <input type="text" id="emp-codigo" class="edit-input" placeholder="Ej: CLI-001, GARCIA, 0042…" maxlength="50" style="font-family:monospace;letter-spacing:1px;">
+        </div>
+        <div>
+          <label class="edit-label">Notas internas (opcional)</label>
+          <input type="text" id="emp-notas" class="edit-input" placeholder="Ej: Cliente desde 2024, sector hostelería" maxlength="500">
+        </div>
+        <p id="emp-error" class="edit-error" style="display:none;margin:0;"></p>
+      </div>
+      <div class="modal-footer">
+        <button id="emp-cancel" class="btn-secondary">Cancelar</button>
+        <button id="emp-save" class="btn-primary">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Galería de facturas de una empresa -->
+  <div id="facemp-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-card" style="width:min(960px,96vw);max-height:92vh;display:flex;flex-direction:column;padding:0;">
+      <div class="modal-header" style="padding:16px 20px;flex-shrink:0;">
+        <div>
+          <h3 id="facemp-title" style="margin:0;font-size:16px;">Facturas de empresa</h3>
+          <span id="facemp-count" style="font-size:12px;color:#718096;"></span>
+        </div>
+        <button id="facemp-close" class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body" style="overflow-y:auto;flex:1;padding:16px 20px;">
+        <div id="facemp-loading" style="text-align:center;padding:50px;color:#718096;font-size:14px;">Cargando facturas...</div>
+        <div id="facemp-empty" style="display:none;text-align:center;padding:50px;color:#a0aec0;font-size:14px;">Esta empresa aún no tiene facturas.</div>
+        <div id="facemp-grid" class="facemp-grid"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Lightbox -->
+  <div id="lightbox" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:999999;align-items:center;justify-content:center;cursor:zoom-out;">
+    <img id="lightbox-img" style="max-width:95vw;max-height:95vh;object-fit:contain;border-radius:6px;box-shadow:0 8px 40px rgba(0,0,0,0.5);" src="" alt="">
+  </div>
+
+  <!-- Modal de edición -->
+  <div id="edit-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="edit-modal-title">Editar campo</h3>
+        <button id="edit-modal-close" class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <label id="edit-field-label" class="edit-label"></label>
+        <input type="text" id="edit-field-input" class="edit-input">
+        <p id="edit-error" class="edit-error" style="display:none;"></p>
+      </div>
+      <div class="modal-footer">
+        <button id="edit-cancel" class="btn-secondary">Cancelar</button>
+        <button id="edit-save" class="btn-primary">Guardar en BD</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="tabulator.min.js"></script>
+  <script src="auth.js?v=20260414-003"></script>
+  <script src="admin-facturas.js?v=20260414-003"></script>
+</body>
+</html>

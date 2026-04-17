@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SETEX - Captura de Facturas</title>
+    <link rel="icon" href="favicon-app.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="styles.css">
+    <!-- PWA -->
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#667eea">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="Setex">
+    <link rel="apple-touch-icon" href="/icons/icon-192x192-v5.png">
+</head>
+<body>
+    <div id="app">
+        <!-- Auth Screen -->
+        <div id="auth-screen" class="screen">
+            <h1><span class="setex-badge"><span class="se">SE</span><span class="tex">TEX</span></span> Facturas</h1>
+            <div id="login-form">
+                <h2>Iniciar Sesión</h2>
+                <input type="email" id="login-email" placeholder="Email">
+                <input type="password" id="login-password" placeholder="Contraseña">
+                <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#718096;cursor:pointer;margin-bottom:4px;">
+                    <input type="checkbox" id="login-remember" style="width:auto;margin:0;cursor:pointer;">
+                    Mantener sesión iniciada
+                </label>
+                <button id="btn-login">Entrar</button>
+                <p>¿No tienes cuenta? <a href="#" id="link-register">Regístrate</a></p>
+                <p><a href="#" id="link-forgot">¿Olvidaste tu contraseña?</a></p>
+            </div>
+            <div id="register-form" style="display:none;">
+                <h2>Registro</h2>
+                <p style="font-size: 14px; color: #888;">El registro está disponible solo para usuarios autorizados.</p>
+                <input type="text" id="register-company-name" placeholder="Nombre de la empresa">
+                <input type="text" id="register-company-nif" placeholder="CIF de la empresa (ej: B12345678)" maxlength="9" style="font-family:monospace;letter-spacing:2px;text-transform:uppercase;">
+                <input type="email" id="register-email" placeholder="Email">
+                <input type="password" id="register-password" placeholder="Contraseña (mínimo 8 caracteres)">
+                <button id="btn-register">Registrarse</button>
+                <p>¿Ya tienes cuenta? <a href="#" id="link-login-from-register">Inicia sesión</a></p>
+                <div id="register-message"></div>
+            </div>
+            <div id="forgot-password-form" style="display:none;">
+                <h2>Recuperar Contraseña</h2>
+                <p>Ingresa tu email y te enviaremos instrucciones para restablecer tu contraseña.</p>
+                <input type="email" id="forgot-email" placeholder="Email">
+                <button id="btn-forgot-send">Enviar</button>
+                <p><a href="#" id="link-login-from-forgot">Volver al inicio de sesión</a></p>
+                <div id="forgot-message"></div>
+            </div>
+        </div>
+
+        <!-- Reset Password Screen -->
+        <div id="reset-password-screen" class="screen" style="display:none;">
+            <h1><span class="setex-badge"><span class="se">SE</span><span class="tex">TEX</span></span> Facturas</h1>
+            <div id="reset-password-form">
+                <h2>Restablecer Contraseña</h2>
+                <p>Ingresa tu nueva contraseña.</p>
+                <input type="password" id="new-password" placeholder="Nueva contraseña (mínimo 6 caracteres)">
+                <input type="password" id="confirm-password" placeholder="Confirmar contraseña">
+                <button id="btn-reset">Restablecer</button>
+                <div id="reset-message"></div>
+            </div>
+        </div>
+
+        <!-- Pending Approval Screen -->
+        <div id="pending-approval-screen" class="screen" style="display:none;">
+            <h1><span class="setex-badge"><span class="se">SE</span><span class="tex">TEX</span></span> Facturas</h1>
+            <div style="max-width:420px;margin:0 auto;padding:32px 24px;background:#fff;border-radius:16px;box-shadow:0 4px 24px rgba(0,0,0,0.08);text-align:center;">
+                <div style="font-size:56px;margin-bottom:16px;">⏳</div>
+                <h2 style="color:#2d3748;margin-bottom:12px;">Empresa pendiente de verificación</h2>
+                <p style="color:#718096;font-size:15px;line-height:1.6;margin-bottom:20px;">
+                    Tu empresa está siendo revisada por el equipo de <strong>SETEX</strong>.<br>
+                    Recibirás acceso completo una vez que sea aprobada.
+                </p>
+                <div id="pending-company-info" style="background:#ebf8ff;border:1px solid #bee3f8;border-radius:10px;padding:14px;margin-bottom:20px;font-size:14px;color:#2b6cb0;"></div>
+                <p style="font-size:13px;color:#a0aec0;">Si tienes dudas, contacta con el administrador de SETEX.</p>
+                <button id="btn-pending-logout" style="margin-top:20px;background:#e53e3e;color:#fff;border:none;border-radius:8px;padding:10px 24px;font-size:14px;font-weight:600;cursor:pointer;">Cerrar sesión</button>
+                <button id="btn-pending-check" style="margin-top:12px;background:#4299e1;color:#fff;border:none;border-radius:8px;padding:10px 24px;font-size:14px;font-weight:600;cursor:pointer;display:block;width:100%;">Verificar estado</button>
+            </div>
+        </div>
+
+        <!-- Main App Screen -->
+        <div id="main-screen" class="screen" style="display:none;">
+            <div class="header">
+                <div class="header-top">
+                    <h1><span class="setex-badge"><span class="se">SE</span><span class="tex">TEX</span></span> Facturas</h1>
+                    <button id="btn-logout">Salir</button>
+                </div>
+                <div id="company-chip" class="company-chip">
+                    <span id="company-name-chip" class="company-name-chip"></span>
+                </div>
+            </div>
+            <div class="upload-area">
+                <!-- ── Selector tipo de factura (siempre visible) ──────────── -->
+                <div style="display:flex; gap:8px; margin-bottom:14px; width:100%;">
+                    <button id="btn-type-recibida" style="flex:1; padding:13px 6px; background:#ebf8ff; border:2px solid #4299e1; border-radius:10px; cursor:pointer; text-align:center; font-size:13px; font-weight:700; color:#2b6cb0; box-shadow:0 0 0 2px #4299e1; transition:all 0.15s;">
+                        📥 Factura Recibida
+                    </button>
+                    <button id="btn-type-emitida" style="flex:1; padding:13px 6px; background:#f7fafc; border:2px solid #e2e8f0; border-radius:10px; cursor:pointer; text-align:center; font-size:13px; font-weight:700; color:#a0aec0; transition:all 0.15s;">
+                        📤 Factura Emitida
+                    </button>
+                </div>
+                <!-- ── Selector empresa cliente (solo admins) ─────────────── -->
+                <div id="admin-client-selector" style="display:none; width:100%; margin-bottom:14px;">
+                    <label for="select-client-company" style="display:block; font-size:12px; font-weight:700; color:#2b6cb0; margin-bottom:6px; text-transform:uppercase; letter-spacing:0.5px;">Empresa cliente (receptor de la factura)</label>
+                    <select id="select-client-company" style="width:100%; padding:10px 12px; border:2px solid #4299e1; border-radius:8px; font-size:13px; color:#2d3748; background:#ebf8ff; cursor:pointer; appearance:none; -webkit-appearance:none;">
+                        <option value="">— Selecciona empresa cliente —</option>
+                    </select>
+                    <p style="font-size:11px; color:#718096; margin:4px 0 0 0;">Como administrador, indica qué empresa cliente es el receptor de esta factura.</p>
+                </div>
+                <!-- ── Botones de acción ───────────────────────────────────── -->
+                <button id="btn-capture-photo" class="btn-primary">📷 Capturar Foto</button>
+                <button id="btn-select-file" class="btn-secondary">📄 Subir Archivo</button>
+                <input type="file" id="file-input" accept="image/*,application/pdf" style="display:none">
+                <input type="file" id="camera-input" accept="image/*" capture="environment" style="display:none">
+                <div id="preview"></div>
+                <button id="upload-btn" disabled>Enviar</button>
+            </div>
+            <div id="message"></div>
+            <div style="margin-top:20px;">
+                <button id="btn-toggle-history" style="width:100%;background:#f7fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 16px;font-size:13px;font-weight:700;color:#4a5568;cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
+                    <span>📋 Historial de facturas</span>
+                    <span id="history-count" style="font-size:12px;color:#a0aec0;font-weight:400;"></span>
+                </button>
+                <div id="history-section" style="display:none; margin-top:8px;">
+                    <div id="history-list" style="border:1px solid #e2e8f0;border-radius:8px;overflow-x:auto;background:#fff;"></div>
+                    <div id="history-actions" style="display:none;margin-top:8px;text-align:center;">
+                        <button id="btn-ver-mas" style="background:transparent;border:1px solid #cbd5e0;border-radius:6px;padding:6px 20px;font-size:12px;color:#718096;cursor:pointer;">Ver más facturas</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── MODAL CONFIRMACIÓN FACTURA ──────────────────────────────────── -->
+        <div id="confirm-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.75); z-index:2000; overflow-y:auto; padding:20px 0;">
+          <div style="max-width:500px; margin:0 auto; padding:16px;">
+            <div class="screen" style="border-top:4px solid #38a169; padding:24px;">
+              <h2 style="color:#276749; margin-bottom:6px; text-align:left;">Confirma los datos</h2>
+              <p style="font-size:13px; color:#718096; margin-bottom:20px; text-align:left;">Revisa que la información extraída es correcta. Puedes corregir cualquier campo antes de guardar.</p>
+
+              <!-- Tipo de factura (badge informativo) -->
+              <div id="confirm-invoice-type-badge" style="margin-bottom:14px;"></div>
+
+              <div id="confirm-ocr-status" style="display:none; margin-bottom:16px;"></div>
+
+              <!-- Empresa detectada por OCR (proveedor/emisor + nº factura) -->
+              <div style="margin-bottom:16px; padding:10px 12px; background:#fffaf0; border:1px solid #fbd38d; border-radius:8px;">
+                <div style="font-size:10px; font-weight:700; color:#c05621; letter-spacing:.06em; margin-bottom:10px;" id="confirm-proveedor-section-label">EMPRESA EN LA FACTURA (IA)</div>
+
+                <!-- Número de factura -->
+                <div style="margin-bottom:10px;">
+                  <label style="display:block; font-size:11px; font-weight:700; color:#718096; letter-spacing:.05em; margin-bottom:4px;">Nº FACTURA</label>
+                  <input type="text" id="confirm-numero-factura" maxlength="50" placeholder="Ej: F2024-001 (opcional)" style="font-family:monospace; font-size:14px; letter-spacing:1px;" />
+                </div>
+
+                <!-- Proveedor / Emisor (nombre editable) -->
+                <div style="margin-bottom:10px;">
+                  <label style="display:block; font-size:11px; font-weight:700; color:#718096; letter-spacing:.05em; margin-bottom:4px;" id="confirm-proveedor-label">PROVEEDOR / EMISOR</label>
+                  <input type="text" id="confirm-proveedor" maxlength="255" placeholder="Nombre o razón social" style="font-size:14px; color:#2d3748; font-weight:600;" />
+                  <div id="confirm-known-badge" style="display:none; margin-top:5px; font-size:12px; color:#276749; font-weight:600;">✓ Proveedor conocido — CIF verificado anteriormente</div>
+                  <div id="confirm-relationship-hint" style="display:none; margin-top:5px;"></div>
+                </div>
+
+                <!-- CIF / NIF del proveedor/emisor -->
+                <div style="margin-bottom:0;">
+                  <label style="display:block; font-size:11px; font-weight:700; color:#718096; letter-spacing:.05em; margin-bottom:4px;" id="confirm-nif-label">CIF / NIF PROVEEDOR</label>
+                  <input type="text" id="confirm-nif" maxlength="9" placeholder="B12345678" style="font-family:monospace; font-size:18px; letter-spacing:3px; text-transform:uppercase;" />
+                  <div id="confirm-cif-status" style="font-size:12px; margin-top:4px; font-weight:600;"></div>
+                  <div id="confirm-vies-status" style="font-size:12px; margin-top:2px;"></div>
+                </div>
+              </div>
+
+              <!-- Receptor / Nuestra empresa (siempre visible, pre-rellenado) -->
+              <div style="margin-bottom:16px; padding:10px 12px; background:#f0f4f8; border:1px solid #e2e8f0; border-radius:8px;">
+                <div style="font-size:10px; font-weight:700; color:#718096; letter-spacing:.06em; margin-bottom:8px;" id="confirm-receptor-section-label">RECEPTOR (NUESTRA EMPRESA)</div>
+                <div style="display:flex; flex-direction:column; gap:8px;">
+                  <div>
+                    <label style="display:block; font-size:10px; font-weight:700; color:#718096; margin-bottom:3px;">NOMBRE</label>
+                    <input type="text" id="confirm-receptor-nombre" maxlength="255" placeholder="Razón social" style="font-size:13px;" />
+                  </div>
+                  <div>
+                    <label style="display:block; font-size:10px; font-weight:700; color:#718096; margin-bottom:3px;">CIF / NIF</label>
+                    <input type="text" id="confirm-receptor-nif" maxlength="9" placeholder="A12345678" style="font-family:monospace; font-size:13px; letter-spacing:2px; text-transform:uppercase;" />
+                  </div>
+                </div>
+              </div>
+
+              <!-- Fecha y Total -->
+              <div style="display:flex; gap:12px; margin-bottom:16px;">
+                <div style="flex:1;">
+                  <label style="display:block; font-size:11px; font-weight:700; color:#718096; letter-spacing:.05em; margin-bottom:4px;">FECHA</label>
+                  <input type="text" id="confirm-fecha" maxlength="10" placeholder="DD/MM/AAAA" />
+                </div>
+                <div style="flex:1;">
+                  <label style="display:block; font-size:11px; font-weight:700; color:#718096; letter-spacing:.05em; margin-bottom:4px;">TOTAL CON IVA (€)</label>
+                  <input type="text" id="confirm-total" maxlength="20" placeholder="0,00" />
+                </div>
+              </div>
+
+              <!-- ── SECCIÓN IVA ─────────────────────────────────────────── -->
+              <div style="border:1px solid #bee3f8; border-radius:8px; padding:14px; background:#ebf8ff; margin-bottom:16px;">
+                <div style="font-size:11px; font-weight:700; color:#2b6cb0; letter-spacing:.06em; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center;">
+                  <span>DESGLOSE IVA</span>
+                  <span id="confirm-iva-status" style="font-size:11px; font-weight:700;"></span>
+                </div>
+
+                <!-- Base imponible + IVA % + Cuota IVA en fila -->
+                <div style="display:flex; gap:8px; margin-bottom:8px;">
+                  <div style="flex:2;">
+                    <label style="display:block; font-size:10px; font-weight:700; color:#4a90d9; margin-bottom:3px;">BASE IMPONIBLE</label>
+                    <input type="text" id="confirm-base" maxlength="15" placeholder="0,00" style="font-size:14px; border-color:#90cdf4; background:#fff;" />
+                  </div>
+                  <div style="flex:1;">
+                    <label style="display:block; font-size:10px; font-weight:700; color:#4a90d9; margin-bottom:3px;">IVA %</label>
+                    <input type="text" id="confirm-iva-pct" maxlength="5" placeholder="21,0" style="font-size:14px; border-color:#90cdf4; background:#fff; text-align:center;" />
+                  </div>
+                  <div style="flex:2;">
+                    <label style="display:block; font-size:10px; font-weight:700; color:#4a90d9; margin-bottom:3px;">CUOTA IVA</label>
+                    <input type="text" id="confirm-cuota-iva" maxlength="15" placeholder="0,00" style="font-size:14px; border-color:#90cdf4; background:#fff;" />
+                  </div>
+                </div>
+
+                <!-- Botón para añadir/mostrar IRPF manualmente -->
+                <div id="irpf-toggle-row" style="margin-bottom:6px;">
+                  <button id="btn-toggle-irpf" style="font-size:11px; color:#c05621; background:transparent; border:1px solid #fbd38d; border-radius:6px; padding:4px 10px; cursor:pointer; width:100%;">
+                    ➕ Añadir retención IRPF
+                  </button>
+                </div>
+
+                <!-- IRPF — visible cuando OCR lo detecta o el usuario lo activa -->
+                <div id="irpf-section" style="display:none; flex-direction:row; gap:8px; margin-bottom:8px; align-items:flex-end;">
+                  <div style="flex:1;">
+                    <label style="display:block; font-size:10px; font-weight:700; color:#c05621; margin-bottom:3px;">RETENCIÓN IRPF %</label>
+                    <input type="text" id="confirm-irpf-pct" maxlength="5" placeholder="15,0" style="font-size:14px; border-color:#fbd38d; background:#fff; text-align:center;" />
+                  </div>
+                  <div style="flex:2;">
+                    <label style="display:block; font-size:10px; font-weight:700; color:#c05621; margin-bottom:3px;">CUOTA IRPF (retención)</label>
+                    <input type="text" id="confirm-cuota-irpf" maxlength="15" placeholder="0,00" style="font-size:14px; border-color:#fbd38d; background:#fff;" />
+                  </div>
+                  <div style="display:flex; align-items:flex-end; padding-bottom:2px;">
+                    <button id="btn-remove-irpf" title="Quitar IRPF" style="background:transparent; border:1px solid #e2e8f0; border-radius:6px; padding:6px 8px; font-size:13px; cursor:pointer; color:#a0aec0;">✕</button>
+                  </div>
+                </div>
+
+                <!-- IVA múltiple (lineas_iva) — solo lectura informativa -->
+                <div id="confirm-lineas-iva" style="display:none; margin-top:6px;"></div>
+
+                <!-- Cálculo en tiempo real -->
+                <div id="confirm-iva-calc" style="font-size:11px; color:#4a5568; margin-top:6px; padding:6px 8px; background:#fff; border-radius:4px; border:1px solid #bee3f8;"></div>
+              </div>
+
+              <div id="confirm-message" style="margin-bottom:8px;"></div>
+              <button id="btn-confirm-invoice" class="btn-primary" style="margin-bottom:8px;">✓ Confirmar y guardar</button>
+              <button id="btn-cancel-invoice" style="background:linear-gradient(135deg,#e53e3e,#c53030); color:white;">✗ Repetir foto</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Camera Overlay -->
+        <div id="camera-overlay" style="display:none">
+            <div class="camera-top-bar">
+                <span>Encuadra la factura en el marco</span>
+                <button id="btn-close-camera" class="camera-close-btn">&times;</button>
+            </div>
+            <div class="camera-viewfinder">
+                <video id="camera-video" autoplay playsinline muted></video>
+                <div class="camera-guide">
+                    <div class="guide-corner tl"></div>
+                    <div class="guide-corner tr"></div>
+                    <div class="guide-corner bl"></div>
+                    <div class="guide-corner br"></div>
+                </div>
+            </div>
+            <button id="btn-take-photo" class="btn-capture">Capturar</button>
+            <canvas id="camera-canvas" style="display:none"></canvas>
+        </div>
+    </div>
+    <script src="auth.js?v=20260414-004"></script>
+    <script src="app.js?v=20260414-004"></script>
+    <script>
+        // ── Service Worker: registro + detección de actualizaciones ─────────
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', function () {
+                navigator.serviceWorker
+                    .register('/service-worker.js')
+                    .then(function (reg) {
+                        console.log('[PWA] SW registrado. Scope:', reg.scope);
+                        reg.addEventListener('updatefound', function () {
+                            var nuevo = reg.installing;
+                            nuevo.addEventListener('statechange', function () {
+                                if (nuevo.state === 'installed' && navigator.serviceWorker.controller) {
+                                    mostrarBannerActualizacion(nuevo);
+                                }
+                            });
+                        });
+                    })
+                    .catch(function (err) {
+                        console.warn('[PWA] Error al registrar SW:', err);
+                    });
+                navigator.serviceWorker.addEventListener('controllerchange', function () {
+                    window.location.reload();
+                });
+            });
+        }
+
+        // ── Prompt de instalación PWA ────────────────────────────────────────
+        var _installEvt = null;
+        var _yaInstalada = window.matchMedia('(display-mode: standalone)').matches
+            || window.navigator.standalone === true;
+
+        if (!_yaInstalada) {
+            // Android / Chrome / Edge: capturar el prompt nativo antes de que desaparezca
+            window.addEventListener('beforeinstallprompt', function (e) {
+                e.preventDefault();
+                _installEvt = e;
+                // Pequeño retardo para que la página cargue antes de mostrar el banner
+                setTimeout(mostrarBannerInstalacion, 1500);
+            });
+
+            // iOS Safari: no existe beforeinstallprompt → instrucciones manuales
+            var _esIOS = /iphone|ipad|ipod/i.test(navigator.userAgent)
+                && !window.navigator.standalone
+                && !/crios|fxios/i.test(navigator.userAgent); // excluir Chrome/Firefox en iOS
+            if (_esIOS) {
+                setTimeout(mostrarBannerInstalacionIOS, 2000);
+            }
+        }
+
+        // Banner instalación Android/Chrome ──────────────────────────────────
+        function mostrarBannerInstalacion() {
+            var dismissed = localStorage.getItem('pwa-install-dismissed');
+            if (dismissed && (Date.now() - parseInt(dismissed, 10)) < 7 * 24 * 3600 * 1000) return;
+            if (document.getElementById('pwa-install-banner')) return;
+
+            var b = document.createElement('div');
+            b.id = 'pwa-install-banner';
+            b.style.cssText = 'position:fixed;bottom:0;left:0;right:0;'
+                + 'background:#2d3748;color:#fff;'
+                + 'padding:16px 18px;'
+                + 'display:flex;align-items:center;gap:12px;'
+                + 'z-index:99998;'
+                + 'box-shadow:0 -4px 24px rgba(0,0,0,0.4);'
+                + 'font-family:-apple-system,BlinkMacSystemFont,sans-serif;'
+                + 'border-radius:16px 16px 0 0;';
+            b.innerHTML = ''
+                + '<div style="flex:1;min-width:0;">'
+                +   '<div style="font-weight:800;font-size:15px;letter-spacing:0.01em;">'
+                +     '<span style="color:#FF6600;">SE</span>'
+                +     '<span style="color:#fff;">TEX</span>'
+                +     '<span style="font-weight:500;color:#a0aec0;"> — Instalar app</span>'
+                +   '</div>'
+                +   '<div style="font-size:12px;color:#a0aec0;margin-top:3px;">'
+                +     'Accede directamente desde tu pantalla de inicio'
+                +   '</div>'
+                + '</div>'
+                + '<button id="pwa-install-btn" style="background:#FF6600;color:#fff;border:none;'
+                +   'border-radius:8px;padding:10px 20px;font-weight:700;font-size:14px;'
+                +   'cursor:pointer;white-space:nowrap;flex-shrink:0;">Instalar</button>'
+                + '<button id="pwa-install-close" style="background:none;border:none;'
+                +   'color:#718096;font-size:22px;cursor:pointer;padding:0 2px;'
+                +   'line-height:1;flex-shrink:0;">✕</button>';
+            document.body.appendChild(b);
+
+            document.getElementById('pwa-install-btn').addEventListener('click', function () {
+                if (_installEvt) {
+                    _installEvt.prompt();
+                    _installEvt.userChoice.then(function (r) {
+                        if (r.outcome === 'accepted') b.remove();
+                        _installEvt = null;
+                    });
+                }
+            });
+            document.getElementById('pwa-install-close').addEventListener('click', function () {
+                b.remove();
+                localStorage.setItem('pwa-install-dismissed', Date.now().toString());
+            });
+        }
+
+        // Banner instalación iOS/Safari ───────────────────────────────────────
+        function mostrarBannerInstalacionIOS() {
+            var dismissed = localStorage.getItem('pwa-install-dismissed');
+            if (dismissed && (Date.now() - parseInt(dismissed, 10)) < 7 * 24 * 3600 * 1000) return;
+            if (document.getElementById('pwa-install-banner')) return;
+
+            var b = document.createElement('div');
+            b.id = 'pwa-install-banner';
+            b.style.cssText = 'position:fixed;bottom:0;left:0;right:0;'
+                + 'background:#2d3748;color:#fff;'
+                + 'padding:18px 20px 28px;'
+                + 'z-index:99998;'
+                + 'box-shadow:0 -4px 24px rgba(0,0,0,0.4);'
+                + 'font-family:-apple-system,BlinkMacSystemFont,sans-serif;'
+                + 'border-radius:16px 16px 0 0;';
+            b.innerHTML = ''
+                + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
+                +   '<div style="font-weight:800;font-size:16px;">'
+                +     '<span style="color:#FF6600;">SE</span>'
+                +     '<span style="color:#fff;">TEX</span>'
+                +     '<span style="font-weight:500;color:#a0aec0;"> — Instalar en iPhone</span>'
+                +   '</div>'
+                +   '<button id="pwa-install-close" style="background:none;border:none;'
+                +     'color:#718096;font-size:24px;cursor:pointer;padding:0;line-height:1;">✕</button>'
+                + '</div>'
+                + '<div style="font-size:14px;color:#cbd5e0;line-height:1.8;">'
+                +   '1. Toca el botón <strong style="color:#fff;">Compartir</strong> '
+                +   '<span style="display:inline-block;background:#555;border-radius:5px;'
+                +     'padding:1px 7px;font-size:13px;">⎋</span> en la barra de Safari<br>'
+                +   '2. Desplázate y toca <strong style="color:#fff;">"Añadir a pantalla de inicio"</strong><br>'
+                +   '3. Pulsa <strong style="color:#FF6600;">Añadir</strong> — ¡listo!'
+                + '</div>';
+            document.body.appendChild(b);
+
+            document.getElementById('pwa-install-close').addEventListener('click', function () {
+                b.remove();
+                localStorage.setItem('pwa-install-dismissed', Date.now().toString());
+            });
+        }
+
+        // Banner de actualización de versión ─────────────────────────────────
+        function mostrarBannerActualizacion(worker) {
+            if (document.getElementById('pwa-update-banner')) return;
+            var b = document.createElement('div');
+            b.id = 'pwa-update-banner';
+            b.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#FF6600;'
+                + 'color:#fff;padding:14px 20px;display:flex;align-items:center;'
+                + 'justify-content:space-between;z-index:99999;'
+                + 'box-shadow:0 -3px 16px rgba(0,0,0,0.3);'
+                + 'font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:14px;';
+            b.innerHTML = '<span><strong>Nueva versión disponible</strong> — toca para aplicar</span>'
+                + '<button id="pwa-update-btn" style="background:#fff;color:#FF6600;border:none;'
+                + 'border-radius:6px;padding:8px 18px;font-weight:700;cursor:pointer;'
+                + 'white-space:nowrap;margin-left:12px;font-size:14px;">Actualizar</button>';
+            document.body.appendChild(b);
+            document.getElementById('pwa-update-btn').addEventListener('click', function () {
+                worker.postMessage({ type: 'SKIP_WAITING' });
+            });
+        }
+    </script>
+</body>
+</html>

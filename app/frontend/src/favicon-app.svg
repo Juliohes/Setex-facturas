@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a1a"/>
+      <stop offset="100%" style="stop-color:#2d2d2d"/>
+    </linearGradient>
+  </defs>
+  <!-- Fondo redondeado negro/carbón -->
+  <rect width="64" height="64" rx="14" fill="url(#bg)"/>
+  <!-- Trazo naranja estilizado (swoosh SETEX) -->
+  <path d="M18 22 Q22 14 30 16 Q38 18 36 24 Q34 28 28 27 Q22 26 24 32 Q26 38 34 38 Q42 38 44 32" fill="none" stroke="#D4621A" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Texto SETEX en blanco -->
+  <text x="32" y="54" text-anchor="middle" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="13" fill="#ffffff" letter-spacing="1">SETEX</text>
+</svg>

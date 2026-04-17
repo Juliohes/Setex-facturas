@@ -1,0 +1,35 @@
+{
+  "_info": "Seguridad SETEX — efecto inmediato sin rebuild. Recargado cada 30s.",
+
+  "time_restriction": {
+    "_info": "Bloquea el acceso fuera del horario laboral (hora de Madrid)",
+    "enabled": true,
+    "start_hour": 0,
+    "end_hour": 6,
+    "timezone": "Europe/Madrid"
+  },
+
+  "ip_whitelist": [
+    "_info_: IPs aquí NUNCA son bloqueadas (ni por hora, ni por rate limit, ni por blacklist)"
+  ],
+
+  "ip_blacklist": [
+    "_info_: IPs/rangos CIDR bloqueados permanentemente. Ejemplo: '1.2.3.4' o '10.0.0.0/8'"
+  ],
+
+  "auto_block": {
+    "_info": "Bloqueo temporal automático por exceso de peticiones desde una misma IP",
+    "enabled": true,
+    "max_requests": 100,
+    "window_seconds": 300,
+    "block_duration_minutes": 60
+  },
+
+  "max_users": 350,
+
+  "global_rate_limit": {
+    "_info": "Límite global por IP (complementa los limiters de auth/upload)",
+    "max": 200,
+    "window_minutes": 15
+  }
+}

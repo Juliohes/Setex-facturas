@@ -1,0 +1,89 @@
+# ═══════════════════════════════════════════════════════════════
+# SETEX Captura de Facturas — .gitignore
+# Generado: 2026-04-17
+# ═══════════════════════════════════════════════════════════════
+
+# ── SECRETOS (CRÍTICO — nunca commitear) ─────────────────────
+secrets/
+secrets-staging/
+*.secret
+*.key
+*.pem
+*.p12
+*.pfx
+*.cert
+*.crt
+
+# ── VARIABLES DE ENTORNO ─────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── DATOS DE PRODUCCIÓN (CRÍTICO) ────────────────────────────
+data/
+backups/
+
+# ── LOGS ─────────────────────────────────────────────────────
+logs/
+*.log
+*.log.*
+*.log.gz
+*.log.old
+*.log.old.gz
+
+# ── NODE.JS ──────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-error.log*
+package-lock.json.bak
+
+# ── PADDLEOCR (sin usar, ~3 GB) ─────────────────────────────
+ocr-service/
+
+# ── DOCKER ───────────────────────────────────────────────────
+# Certificados Traefik
+acme.json
+
+# ── TESTS — BINARIOS Y RESULTADOS ───────────────────────────
+tests/invoices/
+tests/results/
+
+# ── LEGACY (n8n eliminado del proyecto) ──────────────────────
+My workflow*.json
+
+# ── PLAYWRIGHT MCP (artefactos de test) ──────────────────────
+.playwright-mcp/
+
+# ── CLAUDE CODE (configuración local, no compartible) ────────
+.claude/settings.local.json
+
+# ── IDE ──────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# ── OS ───────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# ── IMÁGENES DE LOGO (binarios no esenciales) ────────────────
+# El logo se puede incluir si se necesita — descomentar para excluir
+# setex-logo-page.png
+
+# ── DUMPS DE BASE DE DATOS (prevención) ──────────────────────
+*.sql
+*.sql.gz
+*.sql.gz.gpg
+*.dump
+
+# ── BACKUPS DE CONFIGURACIÓN ─────────────────────────────────
+*.bak
+*.orig
+*.backup

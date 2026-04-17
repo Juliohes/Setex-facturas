@@ -1,0 +1,11 @@
+# Cron jobs para setex-captu-facture
+# Instalar con: sudo -u setex crontab /opt/setex-captu-facture/config/crontab.txt
+
+# Backup diario de PostgreSQL a las 2:00 AM
+0 2 * * * /opt/setex-captu-facture/scripts/backup-db.sh >> /opt/setex-captu-facture/logs/cron/backup.log 2>&1
+
+# Health check cada 15 minutos
+*/15 * * * * /opt/setex-captu-facture/scripts/health-check.sh >> /opt/setex-captu-facture/logs/cron/health.log 2>&1
+
+# Limpieza de uploads antiguos (>7 días) cada día a las 4:00 AM
+0 4 * * * find /opt/setex-captu-facture/data/uploads -type f -mtime +7 -delete >> /opt/setex-captu-facture/logs/cron/cleanup.log 2>&1

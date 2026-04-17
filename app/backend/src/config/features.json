@@ -1,0 +1,8 @@
+{
+  "ocr_enabled": true,
+  "_OCR_MODE": "Modo OCR: 'dual' = OpenAI + Azure en paralelo (máxima confianza, RECOMENDADO) | 'openai' = solo GPT-4.1 | 'azure' = solo Azure DI",
+  "ocr_mode": "dual",
+  "ocr_primary_engine": "openai",
+  "image_max_resolution": 1536,
+  "image_jpeg_quality": 85
+}
