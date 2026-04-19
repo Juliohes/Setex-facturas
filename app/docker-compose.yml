@@ -1,12 +1,12 @@
 services:
   postgres:
-    container_name: setex-postgres
+    container_name: ${COMPOSE_PROJECT_NAME}-postgres
     image: postgres:15-alpine
     restart: unless-stopped
     networks:
-      - setex_internal          # Red interna aislada
+      - internal
     volumes:
-      - /opt/setex-captu-facture/data/postgres:/var/lib/postgresql/data
+      - ${SETEX_DATA_DIR}/postgres:/var/lib/postgresql/data
     environment:
       POSTGRES_DB: setex_db
       POSTGRES_USER: setex_user
@@ -19,7 +19,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
-    logging:                    # Rotación de logs Docker
+    logging:
       driver: "json-file"
       options:
         max-size: "10m"
@@ -27,31 +27,28 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'
-          memory: 512M
+          cpus: '${CPU_LIMIT_DB}'
+          memory: ${MEM_LIMIT_DB}
 
   backend:
-    container_name: setex-backend
+    container_name: ${COMPOSE_PROJECT_NAME}-backend
     build:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
-    # HAL-012: eliminado extra_hosts — el backend no necesita acceso al host físico
     networks:
-      - setex_internal          # Red interna aislada
+      - internal
     volumes:
-      - /opt/setex-captu-facture/data/uploads:/app/uploads
-      - /opt/setex-captu-facture/logs/backend:/app/logs
-      - /opt/setex-captu-facture/app/backend/src/config/features.json:/app/src/config/features.json
+      - ${SETEX_DATA_DIR}/uploads:/app/uploads
+      - ${SETEX_LOGS_DIR}/backend:/app/logs
+      - ${SETEX_BASE_DIR}/app/backend/src/config/features.json:/app/src/config/features.json
     environment:
-      NODE_ENV: production
-      PORT: 3000
-      # SMTP: migrado a Docker secrets (HAL-006) — eliminadas SMTP_USER y SMTP_PASS de aquí
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: ${PORT:-3000}
       SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_SECURE: ${SMTP_SECURE:-false}
-      # HAL-008: Redis URL sin contraseña en claro — la pass se lee del secret redis_password en queue/index.js
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       UPLOAD_RATE_LIMIT: ${UPLOAD_RATE_LIMIT:-30}
     secrets:
       - jwt_secret
@@ -59,15 +56,15 @@ services:
       - openai_api_key
       - azure_di_key
       - azure_di_endpoint
-      - smtp_user                # HAL-006: SMTP desde secrets
-      - smtp_pass                # HAL-006: SMTP desde secrets
-      - redis_password           # HAL-008: para que el backend pueda leer la pass si necesario
+      - smtp_user
+      - smtp_pass
+      - redis_password
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    logging:                    # Rotación de logs Docker
+    logging:
       driver: "json-file"
       options:
         max-size: "10m"
@@ -75,28 +72,26 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'
-          memory: 512M
+          cpus: '${CPU_LIMIT_BACKEND}'
+          memory: ${MEM_LIMIT_BACKEND}
 
   redis:
-    container_name: setex-redis
+    container_name: ${COMPOSE_PROJECT_NAME}-redis
     image: redis:7-alpine
     restart: unless-stopped
-    # SEC-001: contraseña y config en redis.conf (volumen read-only) — NO en command ni en healthcheck
-    # La contraseña NO aparece en docker inspect, docker ps, ni en el histórico git
     command: redis-server /etc/redis/redis.conf
     volumes:
-      - /opt/setex-captu-facture/data/redis:/data
-      - /opt/setex-captu-facture/secrets/redis.conf:/etc/redis/redis.conf:ro
+      - ${SETEX_DATA_DIR}/redis:/data
+      - ${SETEX_SECRETS_DIR}/redis.conf:/etc/redis/redis.conf:ro
     networks:
-      - setex_internal          # Red interna aislada
+      - internal
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -a \"$(grep -m1 requirepass /etc/redis/redis.conf | awk '{print $2}')\" ping | grep -q PONG"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
-    logging:                    # Rotación de logs Docker
+    logging:
       driver: "json-file"
       options:
         max-size: "5m"
@@ -104,18 +99,18 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.25'
-          memory: 192M
+          cpus: '${CPU_LIMIT_REDIS}'
+          memory: ${MEM_LIMIT_REDIS}
 
   frontend:
-    container_name: setex-frontend
+    container_name: ${COMPOSE_PROJECT_NAME}-frontend
     build:
       context: ./frontend
       dockerfile: Dockerfile
     restart: unless-stopped
     networks:
-      - setex_internal          # Para comunicarse con el backend
-      - n8n_default             # Red de Traefik (HTTPS)
+      - internal
+      - n8n_default
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/health || exit 1"]
       interval: 30s
@@ -125,17 +120,23 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=n8n_default"
-      - "traefik.http.routers.setex-http.rule=Host(`setex-facturas.es`)"
-      - "traefik.http.routers.setex-http.entrypoints=web"
-      - "traefik.http.routers.setex-http.middlewares=setex-redirect"
-      - "traefik.http.routers.setex.rule=Host(`setex-facturas.es`)"
-      - "traefik.http.routers.setex.entrypoints=websecure"
-      - "traefik.http.routers.setex.tls=true"
-      - "traefik.http.routers.setex.tls.certresolver=mytlschallenge"
-      - "traefik.http.middlewares.setex-redirect.redirectscheme.scheme=https"
-      - "traefik.http.middlewares.setex-redirect.redirectscheme.permanent=true"
-      - "traefik.http.services.setex.loadbalancer.server.port=80"
-    logging:                    # Rotación de logs Docker
+      # HTTP → HTTPS redirect
+      - "traefik.http.routers.${SETEX_ROUTER}-http.rule=Host(`${SETEX_DOMAIN}`)"
+      - "traefik.http.routers.${SETEX_ROUTER}-http.entrypoints=web"
+      - "traefik.http.routers.${SETEX_ROUTER}-http.middlewares=${SETEX_ROUTER}-redirect"
+      # HTTPS
+      - "traefik.http.routers.${SETEX_ROUTER}.rule=Host(`${SETEX_DOMAIN}`)"
+      - "traefik.http.routers.${SETEX_ROUTER}.entrypoints=websecure"
+      - "traefik.http.routers.${SETEX_ROUTER}.tls=true"
+      - "traefik.http.routers.${SETEX_ROUTER}.tls.certresolver=mytlschallenge"
+      - "traefik.http.routers.${SETEX_ROUTER}.middlewares=${SETEX_HTTPS_MIDDLEWARES:-}"
+      # Middlewares
+      - "traefik.http.middlewares.${SETEX_ROUTER}-redirect.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.${SETEX_ROUTER}-redirect.redirectscheme.permanent=true"
+      - "traefik.http.middlewares.${SETEX_ROUTER}-auth.basicauth.users=${SETEX_BASICAUTH_USERS:-noop:noop}"
+      # Service
+      - "traefik.http.services.${SETEX_ROUTER}.loadbalancer.server.port=80"
+    logging:
       driver: "json-file"
       options:
         max-size: "5m"
@@ -143,29 +144,29 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.25'
-          memory: 128M
+          cpus: '${CPU_LIMIT_FRONTEND}'
+          memory: ${MEM_LIMIT_FRONTEND}
 
 networks:
   n8n_default:
     external: true
-  setex_internal:               # Red interna aislada — postgres, redis y backend
+  internal:
     driver: bridge
 
 secrets:
   postgres_password:
-    file: /opt/setex-captu-facture/secrets/postgres_password.txt
+    file: ${SETEX_SECRETS_DIR}/postgres_password.txt
   jwt_secret:
-    file: /opt/setex-captu-facture/secrets/jwt_secret.txt
+    file: ${SETEX_SECRETS_DIR}/jwt_secret.txt
   openai_api_key:
-    file: /opt/setex-captu-facture/secrets/openai_api_key.txt
+    file: ${SETEX_SECRETS_DIR}/openai_api_key.txt
   azure_di_key:
-    file: /opt/setex-captu-facture/secrets/azure_di_key.txt
+    file: ${SETEX_SECRETS_DIR}/azure_di_key.txt
   azure_di_endpoint:
-    file: /opt/setex-captu-facture/secrets/azure_di_endpoint.txt
-  smtp_user:                    # HAL-006: SMTP desde secrets
-    file: /opt/setex-captu-facture/secrets/smtp_user.txt
-  smtp_pass:                    # HAL-006: SMTP desde secrets
-    file: /opt/setex-captu-facture/secrets/smtp_pass.txt
-  redis_password:               # HAL-008: Redis password
-    file: /opt/setex-captu-facture/secrets/redis_password.txt
+    file: ${SETEX_SECRETS_DIR}/azure_di_endpoint.txt
+  smtp_user:
+    file: ${SETEX_SECRETS_DIR}/smtp_user.txt
+  smtp_pass:
+    file: ${SETEX_SECRETS_DIR}/smtp_pass.txt
+  redis_password:
+    file: ${SETEX_SECRETS_DIR}/redis_password.txt
