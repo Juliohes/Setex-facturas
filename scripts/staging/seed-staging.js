@@ -9,11 +9,14 @@
 // ═══════════════════════════════════════════════════════════════
 
 const bcrypt = require('bcrypt');
+const path = require('path');
+const sharp = require('sharp');
 const { Pool } = require('pg');
 const fs = require('fs').promises;
 
 const PASSWORD = 'Staging2026!';
 const BCRYPT_ROUNDS = 12;
+const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/uploads';
 
 async function main() {
   // Guard: nunca correr fuera de staging
@@ -125,6 +128,9 @@ async function main() {
     ];
     const hoy = new Date();
 
+    // Asegurar que el directorio de uploads existe
+    await fs.mkdir(UPLOADS_DIR, { recursive: true });
+
     const uploads = [];
     for (let i = 0; i < 15; i++) {
       const user = empresaUsers[i % empresaUsers.length];
@@ -137,11 +143,31 @@ async function main() {
       fecha.setDate(fecha.getDate() - (i * 7));        // facturas escalonadas cada semana
       const fechaStr = fecha.toISOString().slice(0, 10);
 
+      // Generar JPEG sintético con sharp. Color único por índice para
+      // identificar visualmente cada factura sin confundir con una real.
+      const hue = (i * 24) % 360;                      // reparte tonos en el círculo
+      const rgb = hueToRgb(hue, 0.20, 0.92);           // pastel muy suave
+      const filename = `staging-seed-${String(i+1).padStart(2,'0')}.jpg`;
+      const filePath = path.join(UPLOADS_DIR, filename);
+      // skip si ya existe (idempotencia con disco real)
+      let sizeBytes;
+      try {
+        const stat = await fs.stat(filePath);
+        sizeBytes = stat.size;
+      } catch {
+        const buf = await sharp({
+          create: { width: 480, height: 360, channels: 3, background: rgb }
+        }).jpeg({ quality: 78 }).toBuffer();
+        await fs.writeFile(filePath, buf);
+        sizeBytes = buf.length;
+      }
+
       uploads.push({
         user_id: user.id,
-        filename: `staging-seed-${String(i+1).padStart(2,'0')}.jpg`,
+        filename,
         mimetype: 'image/jpeg',
-        size_bytes: 245000 + (i * 1000),
+        size_bytes: sizeBytes,
+        file_path: filePath,
         proveedor_nif: proveedor.nif,
         proveedor_nombre: proveedor.nombre,
         receptor_nif: user.company_nif,
@@ -161,10 +187,20 @@ async function main() {
     }
 
     let inserted = 0;
+    let fileUpdated = 0;
     for (const u of uploads) {
+      // Actualizar file_path si el upload ya existe (re-ejecución)
+      const upd = await client.query(
+        `UPDATE uploads SET file_path = $1, size_bytes = $2
+         WHERE user_id = $3 AND proveedor_nif = $4 AND fecha_emision = $5 AND total_factura = $6
+           AND (file_path IS NULL OR file_path <> $1)`,
+        [u.file_path, u.size_bytes, u.user_id, u.proveedor_nif, u.fecha_emision, u.total_factura]
+      );
+      fileUpdated += upd.rowCount;
+
       const r = await client.query(
         `INSERT INTO uploads (
-           user_id, filename, mimetype, size_bytes,
+           user_id, filename, mimetype, size_bytes, file_path,
            proveedor_nif, proveedor_nombre, receptor_nif,
            fecha_emision, numero_factura, base_imponible,
            iva_porcentaje, cuota_iva, total_factura, moneda,
@@ -172,17 +208,17 @@ async function main() {
            confidence_level, upload_status
          )
          VALUES (
-           $1,$2,$3,$4,
-           $5,$6,$7,
-           $8,$9,$10,
-           $11,$12,$13,$14,
-           $15,$16,$17,
-           $18,'active'
+           $1,$2,$3,$4,$5,
+           $6,$7,$8,
+           $9,$10,$11,
+           $12,$13,$14,$15,
+           $16,$17,$18,
+           $19,'active'
          )
          ON CONFLICT DO NOTHING
          RETURNING id`,
         [
-          u.user_id, u.filename, u.mimetype, u.size_bytes,
+          u.user_id, u.filename, u.mimetype, u.size_bytes, u.file_path,
           u.proveedor_nif, u.proveedor_nombre, u.receptor_nif,
           u.fecha_emision, u.numero_factura, u.base_imponible,
           u.iva_porcentaje, u.cuota_iva, u.total_factura, u.moneda,
@@ -209,7 +245,7 @@ async function main() {
 
     console.log('');
     console.log('═══════════════════════════════════════════════════');
-    console.log(`  SEED OK · ${inserted} nuevos uploads insertados`);
+    console.log(`  SEED OK · ${inserted} nuevos uploads · ${fileUpdated} file_path actualizados`);
     console.log('═══════════════════════════════════════════════════');
     console.log(`  Usuarios: ${summary[0].usuarios} (${summary[0].admins} admins)`);
     console.log(`  Empresas cliente: ${summary[0].empresas} (${summary[0].empresas_pendientes} pendientes)`);
@@ -234,6 +270,17 @@ async function main() {
     client.release();
     await pool.end();
   }
+}
+
+// HSL → RGB (para generar colores pastel únicos por índice)
+function hueToRgb(h, s, l) {
+  h /= 360;
+  const a = s * Math.min(l, 1 - l);
+  const f = n => {
+    const k = (n + h * 12) % 12;
+    return Math.round(255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))));
+  };
+  return { r: f(0), g: f(8), b: f(4) };
 }
 
 main().catch(e => { console.error(e); process.exit(1); });

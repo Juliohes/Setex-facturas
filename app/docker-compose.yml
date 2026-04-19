@@ -147,6 +147,12 @@ services:
       - "traefik.http.middlewares.${SETEX_ROUTER}-redirect.redirectscheme.scheme=https"
       - "traefik.http.middlewares.${SETEX_ROUTER}-redirect.redirectscheme.permanent=true"
       - "traefik.http.middlewares.${SETEX_ROUTER}-auth.basicauth.users=${SETEX_BASICAUTH_USERS:-noop:noop}"
+      # Middleware IP allowlist (opt-in). Solo actúa si se lo incluye en
+      # SETEX_HTTPS_MIDDLEWARES, por ejemplo:
+      #   SETEX_HTTPS_MIDDLEWARES=setex-stg-auth,setex-stg-ipallow
+      # sourceRange puede ser uno o varios CIDR separados por coma.
+      # Default 0.0.0.0/0 = permite todo (inocuo si nadie añade el middleware).
+      - "traefik.http.middlewares.${SETEX_ROUTER}-ipallow.ipallowlist.sourcerange=${SETEX_ALLOWED_IPS:-0.0.0.0/0}"
       # Service
       - "traefik.http.services.${SETEX_ROUTER}.loadbalancer.server.port=80"
     logging:
