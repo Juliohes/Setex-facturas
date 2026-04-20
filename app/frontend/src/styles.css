@@ -86,7 +86,7 @@ button {
   max-width: 100%;
   animation: chipFadeUp 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
-.company-chip.visible { display: block; }
+.company-chip.visible { display: flex; align-items: center; flex-wrap: nowrap; }
 
 .company-name-chip {
   font-size: 13px;
@@ -97,8 +97,26 @@ button {
   text-overflow: ellipsis;
   display: block;
   max-width: 100%;
+  flex: 0 1 auto;
+  min-width: 0;
   text-shadow: 0 1px 2px rgba(0,0,0,0.18);
   letter-spacing: 0.02em;
+}
+
+/* Aviso visual cuando el CIF guardado no pasa el algoritmo AEAT.
+   Se renderiza al lado del nombre, sin romper el ellipsis del nombre. */
+.company-cif-warning {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 6px;
+  font-size: 13px;
+  line-height: 1;
+  background: rgba(255, 255, 255, 0.85);
+  color: #b7791f;
+  border-radius: 999px;
+  cursor: help;
+  vertical-align: middle;
+  text-shadow: none;
 }
 
 @keyframes chipFadeUp {

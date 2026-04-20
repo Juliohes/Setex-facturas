@@ -233,7 +233,7 @@ function getCompanyColor(name) {
  * Si es admin o no hay nombre de empresa, oculta el chip.
  * También "brandea" el border-top del main-screen con el color de la empresa.
  */
-function showCompanyIdentity(companyName, isAdmin) {
+function showCompanyIdentity(companyName, isAdmin, aeatWarning = false) {
     const chip = document.getElementById('company-chip');
     if (!chip) return;
     if (!companyName || isAdmin) { chip.style.display = 'none'; return; }
@@ -246,6 +246,11 @@ function showCompanyIdentity(companyName, isAdmin) {
 
     document.getElementById('company-name-chip').textContent = companyName;
     chip.classList.add('visible');
+
+    // Aviso visual cuando el CIF guardado no pasa el algoritmo AEAT (typo probable).
+    // No bloquea — sólo informa para que el usuario revise.
+    const warn = document.getElementById('company-cif-warning');
+    if (warn) warn.style.display = aeatWarning ? 'inline-block' : 'none';
 
     // El borde superior de la tarjeta toma el mismo color — UI "branded"
     const mainScreen = document.getElementById('main-screen');
@@ -269,7 +274,7 @@ async function loadUserSettings() {
         userCompanyNif  = data.company_nif  || null;
         userCompanyName = data.company_name || null;
         userIsAdmin     = data.is_admin === true;
-        showCompanyIdentity(data.company_name, data.is_admin === true);
+        showCompanyIdentity(data.company_name, data.is_admin === true, data.company_nif_aeat_warning === true);
         if (userIsAdmin) loadClientCompanies();
     } catch { /* no bloquear */ }
 }
