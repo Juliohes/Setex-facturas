@@ -166,7 +166,7 @@ let pool;
 async function initDB() {
   const password = await readSecret('postgres_password');
   pool = new Pool({
-    host: 'setex-postgres',
+    host: process.env.POSTGRES_HOST || 'postgres',
     port: 5432,
     database: 'setex_db',
     user: 'setex_user',
@@ -208,9 +208,6 @@ async function initDB() {
     CREATE INDEX IF NOT EXISTS idx_uploads_duplicate ON uploads(user_id, proveedor_nif, fecha_emision, total_factura);
     ALTER TABLE uploads ADD COLUMN IF NOT EXISTS ocr_result JSONB;
     ALTER TABLE uploads ADD COLUMN IF NOT EXISTS confidence_level VARCHAR(10);
-    ALTER TABLE known_cifs ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id);
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_known_cifs_user_nombre ON known_cifs(user_id, proveedor_nombre_norm) WHERE user_id IS NOT NULL;
-    CREATE INDEX IF NOT EXISTS idx_known_cifs_user_nif ON known_cifs(user_id, proveedor_nif);
     CREATE TABLE IF NOT EXISTS failed_jobs (
       id SERIAL PRIMARY KEY,
       upload_id INTEGER REFERENCES uploads(id) ON DELETE SET NULL,
@@ -263,6 +260,9 @@ async function initDB() {
       last_seen TIMESTAMP DEFAULT NOW(),
       created_at TIMESTAMP DEFAULT NOW()
     );
+    ALTER TABLE known_cifs ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_known_cifs_user_nombre ON known_cifs(user_id, proveedor_nombre_norm) WHERE user_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_known_cifs_user_nif ON known_cifs(user_id, proveedor_nif);
     -- google_tokens eliminada: integración Google Drive/Sheets retirada
     CREATE EXTENSION IF NOT EXISTS pg_trgm;
     CREATE TABLE IF NOT EXISTS company_catalog (
@@ -437,6 +437,12 @@ app.use((req, res, next) => {
 
 // Capa 2: auto-block por exceso de peticiones (usa Redis para persistir contadores)
 app.use((req, res, next) => {
+  // Las rutas /api/internal/* son subrequests de nginx (auth_request). auth_request sólo
+  // acepta 200/401/403; un 429 del auto-block hace que nginx devuelva 500 al cliente, dejando
+  // el sitio inutilizable hasta que el bloqueo caduque (60 min). Se exceptúan: son endpoints
+  // internos, idempotentes, sin BD ni coste relevante.
+  if (req.path.startsWith('/api/internal/')) return next();
+
   const cfg = loadSecurityConfig();
   if (!cfg?.auto_block?.enabled || !redisClient) return next();
   const ip = (req.ip || '').replace(/^::ffff:/, '');
@@ -2430,10 +2436,15 @@ app.get('/api/mis-facturas/export.xlsx', authenticateToken, requireActiveCompany
 app.get('/api/me/settings', authenticateToken, async (req, res) => {
   try {
     const r = await pool.query('SELECT auto_confirm_enabled, company_nif, company_name, is_admin FROM users WHERE id = $1', [req.user.userId]);
+    const cif = r.rows[0]?.company_nif || null;
+    // Warning AEAT (no rechazo) — true sólo si es CIF con dígito de control inválido.
+    // checkDigitCIF retorna null para NIF/NIE → no aplica.
+    const company_nif_aeat_warning = cif ? checkDigitCIF(cif) === false : false;
     res.json({
       auto_confirm_enabled: r.rows[0]?.auto_confirm_enabled !== false,
-      company_nif: r.rows[0]?.company_nif || null,
+      company_nif: cif,
       company_name: r.rows[0]?.company_name || null,
+      company_nif_aeat_warning,
       is_admin: r.rows[0]?.is_admin === true,
     });
   } catch (err) {
@@ -2462,7 +2473,9 @@ app.get('/api/me/profile', authenticateToken, async (req, res) => {
   try {
     const r = await pool.query('SELECT id, email, company_name, company_nif, auto_confirm_enabled, created_at FROM users WHERE id = $1', [req.user.userId]);
     if (!r.rows.length) return res.status(404).json({ error: 'Usuario no encontrado' });
-    res.json({ profile: r.rows[0] });
+    const profile = r.rows[0];
+    profile.company_nif_aeat_warning = profile.company_nif ? checkDigitCIF(profile.company_nif) === false : false;
+    res.json({ profile });
   } catch (err) {
     logger.error('Get profile error:', err);
     res.status(500).json({ error: 'Error al obtener perfil' });
