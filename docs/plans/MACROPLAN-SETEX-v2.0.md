@@ -632,7 +632,8 @@ app/backend/src/
 | 18 | `services/auth/password.service.js` | Service | Bajo | 2h | Unit tests | ✅ **2026-04-20 16:38** |
 | 19 | `services/auth/jwt.service.js` | Service | Medio | 3h | Unit tests | ✅ **2026-04-20 16:38** |
 | 20 | `services/auth/csrf.service.js` | Service | Bajo | 2h | Unit + E2E | ✅ **2026-04-20 16:38** |
-| 21 | Cablear nuevos módulos en server.js | HTTP | Alto | 2 días | E2E completo | ⏳ F1 |
+| 21a | Cablear imports + rate-limiters + request-id en server.js | HTTP | Medio | 1h | Smoke staging | ✅ **2026-04-20 18:03** |
+| 21b | Cablear services/auth + repositories en rutas existentes | HTTP | Alto | 2 días | E2E completo | ⏳ F1 |
 | 22 | Eliminar shims + legacy/ + renombrar server.js → src/app.js | Limpieza | — | 1h | Verificación | ⏳ F2 final |
 | 6 | Arbitrator OCR formalizado | Clase + deps | Medio | 1 día | 25 casos + E2E | ⏳ F2 |
 | 7 | Lib crypto + helpers (`lib/crypto.js`, `lib/date.js`) | Utils | Bajo | 3h | 10 casos | ⏳ F2 |
@@ -1171,12 +1172,25 @@ docker compose start backend
 - [x] AUDIT-2026-04-20.md + ROADMAP.md archivados
 
 #### Pendientes Fase 0 (próximas horas)
-- [ ] **P0-1** Backups offsite Backblaze B2
-- [ ] **P0-2** CSRF double-submit cookie
-- [ ] **P0-3** ESLint + Prettier + Husky configurados
-- [ ] **P0-4** Endpoints RGPD `/api/me/export` + `/api/me/delete-account`
-- [ ] **P0-5** `docs/GUIA_USUARIO.md` para cliente
-- [ ] **P0-6** Monitorización externa BetterStack
+- [x] **P0-1** Backups offsite — **VPS secundario Hostinger 72.62.189.27** (2026-04-20 18:53 UTC)
+  - 7 backups GPG replicados vía rsync+SSH
+  - Cron `0 5 * * *` activo
+  - Integridad verificada (tamaños coinciden)
+  - Retention: últimos 14 backups en remoto
+  - `/opt/setex/prod/scripts/backup-offsite-replicate.sh`
+- [ ] **P0-2** CSRF double-submit cookie — POSPUESTO a F1 (módulo `services/auth/csrf.service.js` listo en staging pero no cableado; cablearlo correctamente sin romper login existente requiere tests E2E que aún no tenemos)
+- [x] **P0-3** ESLint + Prettier configurados (2026-04-20 19:03 UTC)
+  - `eslint.config.js` flat config con `max-lines: 500`, `max-lines-per-function: 80`
+  - `.prettierrc.json` + `.prettierignore`
+  - Exención temporal para server.js durante Strangler-Fig (eliminar tras round 22)
+- [x] **P0-4** Endpoints RGPD `/api/me/export` + `DELETE /api/me/account` (2026-04-20 19:03 UTC)
+  - GET /api/me/export — art. 15+20 RGPD, devuelve JSON con users+uploads+audit_logs
+  - DELETE /api/me/account — art. 17 RGPD, borrado en cascada transaccional, requiere confirmation textual
+  - Activos en prod, verificados con 401 sin auth (correcto)
+- [x] **P0-5** `docs/GUIA_USUARIO.md` para cliente (2026-04-20 19:03 UTC)
+  - 134 líneas: acceso, subida factura, historial, mensajes comunes, RGPD, soporte, ventana 00-06, próximas mejoras
+  - Email soporte: juliohesuni@gmail.com
+- [ ] **P0-6** Monitorización externa BetterStack — PENDIENTE (requiere cuenta externa de Julio)
 - [x] **P0-7** Refactor STAGING — Rounds 1-4 completados: pasos 1-20/22 (2026-04-20)
   - ✓ **Round 1** (PR #36): validators + lib — pasos 1-5
     - `domain/validators/{nif,iva}.js` (movidos desde ocr/ con shims)
