@@ -166,7 +166,7 @@ let pool;
 async function initDB() {
   const password = await readSecret('postgres_password');
   pool = new Pool({
-    host: 'setex-postgres',
+    host: process.env.POSTGRES_HOST || 'postgres',
     port: 5432,
     database: 'setex_db',
     user: 'setex_user',
@@ -208,9 +208,6 @@ async function initDB() {
     CREATE INDEX IF NOT EXISTS idx_uploads_duplicate ON uploads(user_id, proveedor_nif, fecha_emision, total_factura);
     ALTER TABLE uploads ADD COLUMN IF NOT EXISTS ocr_result JSONB;
     ALTER TABLE uploads ADD COLUMN IF NOT EXISTS confidence_level VARCHAR(10);
-    ALTER TABLE known_cifs ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id);
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_known_cifs_user_nombre ON known_cifs(user_id, proveedor_nombre_norm) WHERE user_id IS NOT NULL;
-    CREATE INDEX IF NOT EXISTS idx_known_cifs_user_nif ON known_cifs(user_id, proveedor_nif);
     CREATE TABLE IF NOT EXISTS failed_jobs (
       id SERIAL PRIMARY KEY,
       upload_id INTEGER REFERENCES uploads(id) ON DELETE SET NULL,
@@ -263,6 +260,9 @@ async function initDB() {
       last_seen TIMESTAMP DEFAULT NOW(),
       created_at TIMESTAMP DEFAULT NOW()
     );
+    ALTER TABLE known_cifs ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_known_cifs_user_nombre ON known_cifs(user_id, proveedor_nombre_norm) WHERE user_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_known_cifs_user_nif ON known_cifs(user_id, proveedor_nif);
     -- google_tokens eliminada: integración Google Drive/Sheets retirada
     CREATE EXTENSION IF NOT EXISTS pg_trgm;
     CREATE TABLE IF NOT EXISTS company_catalog (
