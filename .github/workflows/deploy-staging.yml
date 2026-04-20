@@ -1,0 +1,55 @@
+name: Deploy a staging
+
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: SSH al VPS y desplegar staging
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Despliegue remoto
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: 22
+          # script_stop hace que falle el job si CUALQUIER comando falla
+          script_stop: true
+          script: |
+            set -e
+            cd /opt/setex/staging
+            echo "── Sincronizando con origin/develop ──"
+            git fetch origin develop
+            git reset --hard origin/develop
+
+            echo "── Reconstruyendo imágenes (backend + frontend) ──"
+            cd app
+            docker compose build backend frontend
+
+            echo "── Swap en caliente ──"
+            docker compose stop backend frontend
+            docker compose up -d backend frontend
+
+            echo "── Esperando healthchecks (60s máx) ──"
+            for i in $(seq 1 12); do
+              be_health=$(docker inspect setex-staging-backend --format '{{.State.Health.Status}}' 2>/dev/null || echo unknown)
+              fe_health=$(docker inspect setex-staging-frontend --format '{{.State.Health.Status}}' 2>/dev/null || echo unknown)
+              if [ "$be_health" = "healthy" ] && [ "$fe_health" = "healthy" ]; then
+                echo "── Healthchecks verdes en ${i}x5s ──"
+                exit 0
+              fi
+              echo "  intento $i/12 — backend=$be_health frontend=$fe_health"
+              sleep 5
+            done
+            echo "::error::Timeout esperando healthchecks"
+            docker compose logs backend --tail 50
+            exit 1

@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main]
+
+jobs:
+  lint-audit:
+    name: Lint sintaxis + npm audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'app/backend/package-lock.json'
+
+      - name: Install backend deps (lockfile estricto)
+        working-directory: app/backend
+        run: npm ci --no-audit --no-fund
+
+      - name: Sintaxis Node — backend
+        run: |
+          set -e
+          for f in $(find app/backend/src -name '*.js'); do
+            node --check "$f"
+          done
+
+      - name: Sintaxis Node — scripts
+        run: |
+          set -e
+          for f in scripts/*.js; do
+            [ -f "$f" ] && node --check "$f"
+          done
+
+      - name: npm audit (sin dev deps, severity moderate+)
+        working-directory: app/backend
+        run: npm audit --omit=dev --audit-level=moderate
+
+      - name: Verificar que no hay marcadores de conflicto sin resolver
+        run: |
+          # Patrones EXACTOS que git mete en conflictos (no separadores markdown):
+          #   <<<<<<< <ref>          (siempre seguido de espacio + ref)
+          #   =======                (exactamente 7 = al inicio de línea, EOL inmediato)
+          #   >>>>>>> <ref>
+          if grep -rnE --exclude-dir=node_modules '^<<<<<<< |^=======$|^>>>>>>> ' app/ docs/ 2>/dev/null; then
+            echo "::error::Marcadores de conflicto sin resolver en el repo"
+            exit 1
+          fi
+
+  smoke-syntax:
+    name: Smoke test syntax
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Verificar smoke-test-ocr
+        run: node --check scripts/smoke-test-ocr.js
+      - name: Verificar list-invalid-cifs
+        run: node --check scripts/list-invalid-cifs.js

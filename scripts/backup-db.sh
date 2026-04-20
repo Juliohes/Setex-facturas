@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-BACKUP_DIR="/opt/setex-captu-facture/backups/postgres"
+BACKUP_DIR="/opt/setex/shared/backups/postgres"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 BACKUP_FILE="$BACKUP_DIR/setex_db_$TIMESTAMP.sql.gz"
 

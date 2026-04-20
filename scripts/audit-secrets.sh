@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-PROJECT_DIR="${1:-/opt/setex-captu-facture}"
+PROJECT_DIR="${1:-/opt/setex/prod}"
 FOUND=0
 REPORT=""
 
