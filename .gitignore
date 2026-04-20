@@ -23,6 +23,13 @@ secrets-staging/
 data/
 backups/
 
+# Aunque data/ ya cubre data/uploads/, dejamos uploads/ explícito por
+# si en algún entorno se monta fuera de data/. Las facturas reales con
+# datos fiscales no deben llegar nunca al repo bajo ningún path.
+uploads/
+app/uploads/
+data/uploads/
+
 # ── LOGS ─────────────────────────────────────────────────────
 logs/
 *.log
