@@ -2494,6 +2494,92 @@ app.get('/api/me/profile', authenticateToken, async (req, res) => {
   }
 });
 
+// ─── RGPD / Derechos ARCO-POL ──────────────────────────────────────────────────
+// GET /api/me/export — Derecho de acceso y portabilidad (RGPD art. 15 + 20).
+// Devuelve TODOS los datos personales del usuario en JSON portable.
+app.get('/api/me/export', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const userResult = await pool.query(
+      'SELECT id, email, company_name, company_nif, is_admin, auto_confirm_enabled, created_at FROM users WHERE id = $1',
+      [userId]
+    );
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+    const uploadsResult = await pool.query(
+      'SELECT * FROM uploads WHERE user_id = $1 ORDER BY uploaded_at DESC',
+      [userId]
+    );
+    const auditResult = await pool.query(
+      'SELECT action, details, ip_address, created_at FROM audit_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1000',
+      [userId]
+    );
+
+    auditLog('USER_DATA_EXPORTED', { rows_uploads: uploadsResult.rowCount, rows_audit: auditResult.rowCount }, userId, req.ip);
+
+    res.setHeader('Content-Disposition', `attachment; filename="setex-export-user-${userId}-${Date.now()}.json"`);
+    res.json({
+      export_date: new Date().toISOString(),
+      legal_basis: 'RGPD art. 15 (derecho de acceso) + art. 20 (portabilidad)',
+      user: userResult.rows[0],
+      uploads: uploadsResult.rows,
+      audit_log_last_1000: auditResult.rows,
+      contact_for_questions: 'juliohesuni@gmail.com',
+    });
+  } catch (err) {
+    logger.error('Export user data error:', err);
+    res.status(500).json({ error: 'Error al exportar datos del usuario' });
+  }
+});
+
+// DELETE /api/me/account — Derecho al olvido (RGPD art. 17).
+// Borrado en cascada: uploads + audit_logs + user. Requiere confirmación textual.
+app.delete('/api/me/account', authenticateToken, async (req, res) => {
+  const { confirmation } = req.body || {};
+  if (confirmation !== 'BORRAR_MI_CUENTA_DEFINITIVAMENTE') {
+    return res.status(400).json({
+      error: 'Para confirmar el borrado, envía en el body: { "confirmation": "BORRAR_MI_CUENTA_DEFINITIVAMENTE" }',
+      legal_warning: 'Esta acción ES IRREVERSIBLE y elimina todos tus datos y facturas. Considera primero exportarlos con GET /api/me/export.',
+    });
+  }
+  const userId = req.user.userId;
+  const userEmail = req.user.email;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const uploadsDeleted = await client.query('DELETE FROM uploads WHERE user_id = $1 RETURNING id', [userId]);
+    const auditDeleted = await client.query('DELETE FROM audit_logs WHERE user_id = $1 RETURNING id', [userId]);
+    const userDeleted = await client.query('DELETE FROM users WHERE id = $1 RETURNING id, email', [userId]);
+    await client.query('COMMIT');
+
+    // Audit final con userId=null (el usuario ya no existe pero queremos huella)
+    auditLog('USER_ACCOUNT_DELETED_RGPD', {
+      deleted_user_id: userId,
+      deleted_email: userEmail,
+      uploads_deleted: uploadsDeleted.rowCount,
+      audit_logs_deleted: auditDeleted.rowCount,
+    }, null, req.ip);
+
+    logger.warn(`[RGPD] Cuenta borrada: user_id=${userId} email=${userEmail} uploads=${uploadsDeleted.rowCount}`);
+    res.json({
+      success: true,
+      message: 'Tu cuenta y todos tus datos han sido eliminados de forma permanente.',
+      deleted_user_id: userId,
+      uploads_deleted: uploadsDeleted.rowCount,
+      audit_logs_deleted: auditDeleted.rowCount,
+      legal_basis: 'RGPD art. 17 (derecho de supresión)',
+    });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    logger.error('Delete account error:', err);
+    res.status(500).json({ error: 'Error al borrar la cuenta' });
+  } finally {
+    client.release();
+  }
+});
+
 // PUT /api/me/profile — actualizar perfil del usuario (company_nif, company_name)
 app.put('/api/me/profile', authenticateToken, async (req, res) => {
   const { company_nif, company_name } = req.body || {};
