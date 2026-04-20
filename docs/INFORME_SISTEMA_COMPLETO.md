@@ -578,6 +578,153 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-04-19 — Fix crítico OCR OpenAI roto + mensaje rojo falso en CIF propio
+
+**Bug crítico OCR (problema raíz, llevaba semanas sin detectar):**
+- Logs: `[OCR] OpenAI FALLÓ: OpenAI HTTP 400: Invalid schema for response_format 'invoice_extraction': In context=('properties', 'lineas_iva'), 'oneOf' is not permitted` en TODAS las facturas procesadas hoy (21:51, 21:52, 21:56) y probablemente desde mucho antes
+- Causa: OpenAI Structured Outputs (modo `strict: true`) eliminó el soporte de `oneOf`/`anyOf` dentro del schema. El sistema seguía funcionando porque Azure DI cubría el OCR como fallback, pero Azure no extrae NIFs en algunas facturas (`nif=null` consistente en los logs) → CIFs del proveedor y del cliente llegaban vacíos al modal de confirmación
+- Fix en `app/backend/src/ocr/openai.js`:
+  - `INVOICE_SCHEMA.lineas_iva`: reemplazado `oneOf: [{type:'null'}, {type:'array',...}]` por `type: ['array','null']` con `items` directo (nullable type-array sí está soportado en strict)
+  - `extractCIFOnly` (segunda pasada CIF emisor): mismo cambio en `chars` — eliminados `oneOf` + `minItems`/`maxItems` (la longitud 9 ya se valida en JS)
+- Test directo en contenedor con la imagen `info_20260419_215632792_bdab76.jpg` que Julio acababa de probar → OpenAI ahora extrae correctamente: `proveedor_nif=B42634044` (Murimarti), `receptor_nif=B04445841` (Proyecto Reguero S.L.U — el cliente), `total=8.744,68`. Antes devolvía nada por el HTTP 400
+
+**Bug UX: mensaje rojo "Dígito de control incorrecto" sobre el propio CIF de empresa:**
+- En `showConfirmModal` (`app/frontend/src/app.js`), tras pre-rellenar `confirm-nif` con `userCompanyNif` (factura emitida — emisor=nosotros), se llamaba `updateCIFStatus(nifInput.value)` que ejecuta `validateTaxIdClient`. El algoritmo de validación CIF español es estricto y algunos CIFs reales ya almacenados en BD (introducidos manualmente o sin validación) no pasan el dígito de control → el usuario veía mensaje rojo "✗ Dígito de control incorrecto" sobre su propio CIF que él sabe que es correcto
+- Caso concreto detectado en BD: `B42634044` (Autoken / Murimarti, 3 cuentas usan este CIF). Algoritmo: dígitos 4263404 → suma=32 → control esperado='8', real='4' → falla
+- Fix: nueva variable `nifIsFromOwnCompany = isVenta && userCompanyNif && nifInput.value === userCompanyNif`. Si true → estilo verde + mensaje "✓ CIF de tu empresa", **NO** se ejecuta `updateCIFStatus`. Si el usuario edita el campo, el listener `input` (línea ~1420) sí ejecuta validación normal sobre el nuevo valor
+
+**Despliegue:**
+- `docker cp openai.js → setex-backend:/app/src/ocr/openai.js` + `docker restart setex-backend` (sin downtime real, healthcheck pasa en ~30s)
+- `docker cp app.js index.html → setex-frontend:/usr/share/nginx/html/` con cache-buster `app.js?v=20260419-003`
+- Verificación: backend `Server running on port 3000`, OCR test directo OK con 5/5 campos extraídos; frontend con 4 ocurrencias de los identificadores nuevos en disco
+
+**Cosas pendientes que han quedado expuestas (para próxima sesión):**
+1. CIF inválido `B42634044` en 3 cuentas de BD (test@autoken.es, test1@autoken.es, info@murimarti.com) — el backend debería validar el CIF al registrar y rechazar si no pasa el dígito de control
+2. La doble pasada CIF (`extractCIFOnly`) solo se aplica al EMISOR (recorta 65% superior). En facturas emitidas, el CIF del cliente queda solo bajo la pasada principal. Mejora futura: segunda pasada para el RECEPTOR cuando `invoice_type=venta`
+3. Sin tests automatizados sobre el OCR — un cambio de schema en una API externa rompió producción de forma silenciosa porque Azure cubrió el agujero. Se necesita un smoke test diario que ejecute `extractInvoice` contra una imagen de muestra y alerte si OpenAI falla
+
+### 2026-04-19 — UX captura: arreglo del "atrás" del navegador, "Repetir foto" → cámara directa, datos de empresa propia desde BD
+
+Tres mejoras quirúrgicas en el flujo de captura/confirmación, todas en el frontend:
+
+**1. Bug del botón "atrás" del navegador en el modal de confirmación:**
+- `app/frontend/src/app.js`: el modal `#confirm-modal` no sincronizaba con `history`, así que pulsar "atrás" en el móvil/PC navegaba al historial real y sacaba al usuario fuera de la PWA
+- Solución: al abrir el modal se hace `history.pushState({setexModal:'confirm'}, '')` (controlado por flag `_confirmHistoryActive` para no duplicar entradas). Listener global `popstate`: si se dispara con el modal visible → cierra modal + descarta preview/file/upload-btn y deja al usuario en la pantalla principal de captura (NO abre la cámara — UX distinta a "Repetir foto"). `closeConfirmModal()` ahora llama a `history.back()` para limpiar la entrada extra cuando se cierra por flujo normal (Confirmar / Repetir / éxito / duplicado / 401); el handler `popstate` ignora ese caso porque el modal ya está oculto
+
+**2. Botón "✗ Repetir foto" ahora abre la cámara directamente:**
+- Antes: el botón `#btn-cancel-invoice` solo llamaba a `closeConfirmModal()` y dejaba al usuario en la pantalla principal con el preview de la foto previa visible — había que pulsar "📷 Capturar Foto" otra vez
+- Solución: nueva función `repetirFoto()` que cierra modal, descarta preview/file/upload-btn (`_resetCaptureUI()`) y llama directamente a `capturePhoto()` → `getUserMedia` → overlay de cámara con botón "Capturar". Listener del cancel button cambiado de `closeConfirmModal` a `repetirFoto` (línea 1363)
+
+**3. Datos de la empresa propia (nuestra empresa) desde BD, no del OCR:**
+- Petición funcional fundamental: en el modal de confirmación, los campos de "nuestra empresa" (RECEPTOR en compras, EMISOR en ventas) deben pre-rellenarse desde el perfil del usuario logueado (`userCompanyName`/`userCompanyNif` que ya se cargan al login desde `/me/settings`), NO desde lo que el OCR haya leído de la factura
+- Cambio en 3 puntos del orden del operador `||` en `showConfirmModal()`:
+  - Línea ~920 (venta, emisor=nosotros): `userCompanyName || campos.proveedor_nombre || ''`
+  - Línea ~984-985 (compra, receptor=nosotros): `userCompanyName/Nif` primero, OCR como fallback
+  - Línea ~992-993 (venta, NIF emisor=nosotros): `userCompanyNif` primero, OCR como fallback
+- OCR queda como red de seguridad solo para casos edge (admin sin empresa propia, fallo del endpoint `/me/settings`). El campo sigue siendo editable por el usuario antes de confirmar
+- Lógica intacta para: admin con empresa cliente seleccionada (sigue prioritario), receptor en venta = cliente externo (OCR, no es "nuestra empresa"), proveedor en compra = empresa externa (OCR)
+
+**Despliegue sin downtime:**
+- `docker cp app.js index.html → setex-frontend:/usr/share/nginx/html/` (nginx sirve estáticos desde disco, no requiere reload)
+- Cache-buster `app.js?v=20260414-004` → `app.js?v=20260419-002` para forzar invalidación en navegadores
+- Verificación: `curl https://setex-facturas.es/index.html` confirma cache-buster nuevo; `curl /app.js?v=20260419-002` → 200; las nuevas funciones (`repetirFoto`, `_confirmHistoryActive`, `setexModal`) presentes en producción
+- No requiere rebuild ni `.env` (bug del `.env` de prod sigue pendiente, pero estos cambios no lo necesitan)
+
+### 2026-04-19 — Defensa en profundidad: nginx captura códigos inesperados del auth_request
+
+- `app/frontend/nginx.conf`: ampliado `error_page` en todas las `location` protegidas por `auth_request` para incluir **429/500/502/503/504** además de 401/403/404. Las cinco `location` afectadas (`/service-worker.js`, `\.(html|js|css)$`, `/api/`, `/`, `/admin-facturas.html`) mapean esos códigos a `@bloqueado` (404 neutro). En `/admin-facturas.html` se mantiene la regla `error_page 401 403 = @admin_login_redirect` para la UX de login, y los códigos nuevos van a `@bloqueado` — no se tolera un loop de redirección si el backend rasca
+- Motivo: red de seguridad complementaria al fix del middleware auto-block. Si mañana cualquier middleware futuro (rate limiter por ruta, fail-secure BD → 503, timeouts 502/504) devuelve un código fuera de 200/401/403 en un subrequest, nginx lo capturará limpiamente en vez de emitir 500 opaco. Fallo transitorio del backend → usuario ve página de "no disponible", no un crash visible
+- Despliegue sin downtime: `docker cp nginx.conf → setex-frontend` + `nginx -t` (OK) + `nginx -s reload`. Contenedor sigue healthy, sin reinicio
+- Smoke tests tras reload: `/`→200, `/index.html`→200, `/admin-facturas.html`→302, `/app.js`→200, `/styles.css`→200, `/admin-facturas.js`→200, `/api/auth/login` (bad creds)→401. Ninguna regresión
+- Pendiente no aplicado (requiere ventana de mantenimiento con OK explícito de Julio): reconstruir `.env` de prod desde `.env.example` para que `docker compose build` vuelva a funcionar — actualmente faltan `COMPOSE_PROJECT_NAME`, `CPU_LIMIT_*`, `MEM_LIMIT_*`, `SETEX_BASE_DIR`, `SETEX_DATA_DIR`, etc., por lo que cualquier rebuild/redeploy de prod está condenado a `docker cp` + `docker restart` hasta que se resuelva
+
+### 2026-04-19 — Fix crítico: auto-block rompía el sitio con 500 (nginx auth_request ↔ 429)
+
+- `app/backend/src/server.js` (middleware Capa 2, línea ~438): añadido `if (req.path.startsWith('/api/internal/')) return next()` al inicio. Razón: nginx hace `auth_request /api/internal/check-access|check-admin-page` antes de servir cada recurso; si la IP del cliente caía en auto-block, el middleware devolvía 429, pero nginx `auth_request` solo acepta 200/401/403 y convertía cualquier otro código en **500 Internal Server Error**. Durante los 60 min del bloqueo, el usuario veía 500 en todo (HTML, JS, API), incluido el propio admin. Endpoints internos son idempotentes y sin BD → exceptuarlos es seguro y elimina la raíz del 500
+- `app/backend/src/config/security.json`: `auto_block.max_requests` 100 → 400 (alinea con el default del código y reduce falsos positivos); IP admin `94.73.44.64` añadida a `ip_whitelist` como red de seguridad complementaria
+- Despliegue: `docker cp server.js + security.json → setex-backend` + `docker restart` (sin `docker compose build` porque el `.env` de prod no tiene todas las vars que el `docker-compose.yml` parametrizado requiere — bug separado ya conocido, pendiente)
+- Verificado end-to-end: con IP de subrequest bloqueada, `admin-facturas.html` responde 302 (redirect login) en lugar de 500, y `/api/auth/login` responde 401 en lugar de 500. Antes: crash total del sitio para la IP; ahora: 429 limpio solo en la ruta principal si el usuario real satura, nunca rompe la carga de páginas
+
+### 2026-04-19 — Fase 3 mejoras: IP allowlist + JPEGs en seed + suite E2E reutilizable
+
+Tres mejoras añadidas al PR #7 en respuesta a las preguntas del experto del checklist E2E:
+
+**1. IP allowlist opt-in en Traefik:**
+- `app/docker-compose.yml`: nuevo middleware `${SETEX_ROUTER}-ipallow` con `sourceRange` leído de `SETEX_ALLOWED_IPS`. Default `0.0.0.0/0` (inocuo). Se activa añadiéndolo a `SETEX_HTTPS_MIDDLEWARES` — ejemplo para endurecer staging: `SETEX_HTTPS_MIDDLEWARES=setex-stg-auth,setex-stg-ipallow` + `SETEX_ALLOWED_IPS=<ip_pública>/32`
+- `app/.env.example`: sección nueva con comentario + ejemplo
+
+**2. Seed genera JPEGs sintéticos + pobla `file_path`:**
+- `scripts/staging/seed-staging.js`: usa `sharp` (ya disponible en el contenedor backend) para crear 15 JPEGs 480×360 de colores pastel únicos por índice (HSL→RGB helper). Los archivos se crean en `UPLOADS_DIR` (default `/app/uploads`). El script es idempotente: si el fichero existe en disco, reusa su size; si el INSERT da conflict, UPDATE del `file_path` cuando sea null.
+- Permisos: el directorio `data/uploads` se ajustó a uid 1001:1001 (appuser del contenedor) antes del seed
+- Resultado: `GET /api/facturas/:id/imagen` devuelve JPEG real en staging sin necesidad de correr OCR ni subir facturas manualmente
+
+**3. Suite E2E reutilizable con aislamiento de rate-limit:**
+- `scripts/staging/e2e-tests.sh` (NUEVO): 17 checks con salida coloreada y código 0/1 apto para CI
+  - Bloque 1: TLS + Traefik routing (cert LE, BasicAuth ON/OFF, /api/* exento)
+  - Bloque 2: auth + RBAC (admin/empresa/sin token; pass correcta/incorrecta)
+  - Bloque 3: datos del seed (15 total vs 5 por empresa, aislamiento entre usuarios, imagen real via endpoint, ocr-engine, empresa pendiente)
+  - Bloque 4: rate-limit con **email único `ratelimit-$(ts)-$$@test.staging.local`** para no contaminar los tests subsecuentes en runs múltiples
+  - Extra: smoke test prod (verifica que staging no rompió nada)
+- Validado: **17/17 PASS** en staging actual
+
+**Motivo:** cerrar las recomendaciones del checklist anterior (rate-limit intermitente, endpoint imagen sin file_path, falta de allowlist IP) con soluciones reutilizables que no añaden deuda técnica.
+
+**PR #7 actualizado:** rama `feature/staging-traefik-api-router-and-seed` ahora incluye 2 commits (router /api/ + scripts seed/e2e + IP allowlist + JPEG seed).
+
+### 2026-04-19 — Fase 3 cierre: seed staging + checklist E2E + router API separado
+
+**Completado (Steps 9-10 y segundo PR pendiente):**
+- `scripts/staging/seed-staging.js` (NUEVO, Node): seed idempotente con 5 usuarios (2 admin, 3 empresa), 4 `client_companies` (3 activas + 1 pendiente para probar aprobación), 2 allowed_emails, 15 `uploads` sintéticos con distintos IVA/fechas/invoice_type. Safe-guard `NODE_ENV=staging` o aborta. Hashes bcrypt generados en tiempo real.
+- `scripts/staging/seed-staging.sh` (NUEVO, Bash wrapper): exige que el contenedor sea `setex-staging-backend` y `NODE_ENV=staging` antes de ejecutar el JS. Ejecuta vía `docker exec -i ... node -` con el script por stdin.
+- Seed ejecutado con éxito → 15 uploads insertados. Re-ejecutado para verificar idempotencia → OK (no duplicó)
+- Checklist E2E en staging (16 pruebas): HTTPS+cert LE, BasicAuth en raíz, /api sin BasicAuth, health, login OK/KO, RBAC admin vs empresa, aislamiento de facturas por usuario, rate-limit auth, seed correcto, prod sana → **15/16 PASS** (único FAIL contaminado por el propio test de rate-limit, datos OK validados directamente en BD)
+- Hallazgo durante E2E: el header `Authorization:Basic` de Traefik BasicAuth y el `Authorization:Bearer` del JWT **no pueden coexistir** en una misma request HTTP. El frontend real sufriría la misma colisión
+- Fix aplicado en staging (y en PR pendiente): segundo router Traefik `${SETEX_ROUTER}-api` con `PathPrefix('/api/')` sin middleware, priority 100 (vs 10 del principal). En prod es inocuo porque `SETEX_HTTPS_MIDDLEWARES=""`.
+- **Credenciales sembradas (staging only):** password común `Staging2026!` para `admin@staging.setex.local`, `gestor@staging.setex.local`, `empresa1/2/3@staging.setex.local`
+
+**PRs en curso:**
+- PR #6 (MERGEADO a develop): `fix: desacoplar hostnames + reordenar initDB + docker-compose parametrizado`
+- PR #7 (PENDIENTE): rama `feature/staging-traefik-api-router-and-seed` — URL: https://github.com/Juliohes/Setex-facturas/pull/new/feature/staging-traefik-api-router-and-seed
+
+**Pendiente (Fase 4):**
+- Mergear PR #7 a develop
+- Merge controlado develop → main con deploy a producción (flujo con aprobación GitHub Actions)
+
+**Motivo:** cerrar el entorno staging al 100% con datos de prueba reproducibles y arreglar en el repo la colisión Basic/Bearer que haría inservible la API real del staging en cuanto el frontend JS hiciera una petición autenticada.
+
+### 2026-04-19 — Fase 3 continuación: Staging operativo en https://staging.setex-facturas.es
+
+**Completado hoy (Steps 6-8 de Fase 3):**
+- DNS: registro A `staging.setex-facturas.es` → 72.60.186.89 creado en Hostinger (TTL 300), propagado en Google/Cloudflare/local
+- API keys reales creadas para staging (principio de mínimo privilegio):
+  - OpenAI: clave dedicada `setex-staging` con permisos restringidos a `chat/completions` + `list models` únicamente; probada con petición real a `gpt-4.1-2025-04-14` (9 tokens, $0.00003)
+  - Azure Document Intelligence: recurso nuevo `setex-staging-di` en West Europe, tier F0 gratuito (500 páginas/mes); probado con `prebuilt-invoice` contra PDF de Contoso (status `succeeded`, campos extraídos OK)
+  - SMTP: cuenta Mailtrap Sandbox (sandbox.smtp.mailtrap.io:2525), email de test enviado con éxito (`235 2.0.0 OK` + `250 queued`)
+- Primer boot staging completado tras corregir 2 bugs pre-existentes (ver sección bugs abajo)
+- Certificado Let's Encrypt emitido automáticamente por Traefik (subject `staging.setex-facturas.es`, issuer `R12`, válido hasta 2026-07-18)
+- BasicAuth de Traefik verificado funcional (sin credenciales → 401; con credenciales → 200)
+- Registro/login vía API verificado: `POST /api/auth/register` responde con validación de negocio correcta (`CIF obligatorio`)
+- Producción NO afectada durante todo el proceso (4 contenedores prod siguieron healthy)
+
+**Bugs pre-existentes descubiertos y corregidos en staging (pendientes de PR al repo):**
+- `app/backend/src/server.js:169`: `host: 'setex-postgres'` hardcoded (container_name de prod) — rompía staging por EAI_AGAIN al renombrar contenedor vía COMPOSE_PROJECT_NAME. Fix: `host: process.env.POSTGRES_HOST || 'postgres'` (service name genérico, compatible con prod y staging)
+- `app/frontend/nginx.conf`: `proxy_pass http://setex-backend:3000` en 3 líneas (106, 140, 157) — mismo problema. Fix: `http://backend:3000`
+- `app/backend/src/server.js:211-213`: `ALTER TABLE known_cifs` y 2 `CREATE INDEX` sobre `known_cifs` ejecutaban ANTES del `CREATE TABLE known_cifs` (línea 258). En prod funcionaba por legado; en BD vacía fallaba con `relation "known_cifs" does not exist`. Fix: movidos después del `CREATE TABLE`
+
+**Pendiente (Fase 3 continuación):**
+- STEP 9: Script seed para datos sintéticos en staging (usuarios + facturas)
+- STEP 10: Checklist de verificación e2e (flujo OCR completo en staging)
+- STEP 11: Commit + PR al repo con los 3 fixes + docker-compose parametrizado (rama feature → develop)
+
+**Motivo:** tener un entorno staging real donde validar cambios antes de aplicarlos a producción, con secretos y credenciales completamente independientes (OpenAI/Azure/SMTP separados, BD separada, red Docker separada).
+
+### 2026-04-19 — Fix modal aprobación empresas (CSP) + aprobación manual de 3 pendientes
+
+- `app/frontend/src/admin-facturas.js` (openReviewModal): los botones Aprobar / Rechazar / Vincular / Cerrar del modal de revisión de empresa pendiente usaban `onclick=` inline y eran bloqueados silenciosamente por la CSP (`scriptSrc: 'self'` sin `'unsafe-inline'` en `server.js:396`); reemplazados por `data-review-action` + delegación con `addEventListener` — mismo patrón CSP-safe ya usado en la tabla de empresas (line 583)
+- `app/frontend/src/admin-facturas.html`: cache-buster `admin-facturas.js?v=20260414-003` → `v=20260419-001`; rebuild + redeploy del servicio frontend
+- BD: aprobadas manualmente empresas pendientes ids 60 ("123"/12345678N), 61 ("murimarti"/B02790388), 62 ("Autoken SL"/B42634044) replicando la transacción del endpoint `POST /api/admin/companies/:id/approve` (update `client_companies` + activación de uploads pending → active + 3 entradas en `company_audit_log` con `admin_id=2` y `action=APPROVED`). Motivo: pruebas internas, se retirarán en unos días
+- Sin uploads activados (0 filas) — ninguno de los usuarios de esas empresas había subido documentos aún
+
 ### 2026-04-17 — Sesión 23: Fase 0 + Fase 1 — Decisiones arquitectónicas + preparación repo Git
 
 **Fase 1 — Preparación del repositorio Git:**
@@ -597,6 +744,31 @@ docker compose stop backend && docker compose up -d backend
 - 2FA activado en cuenta GitHub (authenticator app)
 - Push protection a nivel de cuenta GitHub activado (bloquea push con secretos)
 - Dependabot alerts + security updates activados en el repo
+
+### 2026-04-17 — Sesión 23 (continuación): Fase 3 — Preparación VPS para dos entornos (EN CURSO)
+
+**Completado:**
+- Usuario `deploy` creado (uid=1004, grupo docker, home /home/deploy)
+- Estructura `/opt/setex/{prod,staging,shared}` creada, propiedad de deploy
+- Deploy Key ed25519 generada para usuario deploy, añadida a GitHub como read-only
+- Repo clonado en `/opt/setex/staging/` (rama develop) y `/opt/setex/prod/` (rama main)
+- Secretos staging generados (jwt, postgres, redis, backup — todos únicos, diferentes de producción)
+- OpenAI/Azure/SMTP en staging con PLACEHOLDER (pendiente de crear keys reales)
+- redis.conf staging creado (FLUSHALL/FLUSHDB/DEBUG deshabilitados, maxmemory 128mb)
+- Directorios data y logs creados para ambos entornos
+- `.env` creado para staging (COMPOSE_PROJECT_NAME=setex-staging, NODE_ENV=staging, recursos reducidos)
+- `.env` creado para producción futura (COMPOSE_PROJECT_NAME=setex-prod, listo para Fase 4)
+- docker-compose.yml parametrizado con variables de entorno (mismo fichero sirve para prod y staging)
+- BasicAuth para Traefik en staging: usuario `setex`, password en `/opt/setex/staging/secrets/basicauth_password.txt`
+- Compose validado: `docker compose config` OK, todas las variables resuelven correctamente
+
+**Pendiente (reanudar aquí):**
+- PASO 6: Configurar DNS — crear registro A `staging` → 72.60.186.89 en panel Hostinger
+- PASO 7: Primer arranque de staging (docker compose build && up -d)
+- PASO 8: Verificar certificado Let's Encrypt automático
+- PASO 9: Script seed para datos sintéticos en staging
+- PASO 10: Checklist de verificación final
+- PASO 11: Commit del docker-compose parametrizado al repo via PR
 
 **Fase 0 — Decisiones arquitectónicas:**
 
