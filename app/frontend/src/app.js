@@ -8,8 +8,6 @@ let currentPreviewId = null;
 let userCompanyName = null;
 let userCompanyNif = null;
 let userIsAdmin = false;
-let clientCompanies = [];          // lista de empresas cliente para admins
-let selectedClientCompanyId = null; // empresa cliente seleccionada en el selector admin
 let historyAllFacturas = [];
 let historyShowAll = false;
 
@@ -275,23 +273,6 @@ async function loadUserSettings() {
         userCompanyName = data.company_name || null;
         userIsAdmin     = data.is_admin === true;
         showCompanyIdentity(data.company_name, data.is_admin === true, data.company_nif_aeat_warning === true);
-        if (userIsAdmin) loadClientCompanies();
-    } catch { /* no bloquear */ }
-}
-
-async function loadClientCompanies() {
-    try {
-        const res = await Auth.apiFetch(`${API_URL}/client-companies`);
-        if (!res.ok) return;
-        clientCompanies = await res.json();
-        const sel = document.getElementById('select-client-company');
-        if (!sel) return;
-        sel.innerHTML = '<option value="">— Selecciona empresa cliente —</option>' +
-            clientCompanies.map(c =>
-                `<option value="${c.id}">${c.nombre}${c.codigo_cliente ? ' [' + c.codigo_cliente + ']' : ''} — ${c.cif}</option>`
-            ).join('');
-        const selectorEl = document.getElementById('admin-client-selector');
-        if (selectorEl) selectorEl.style.display = 'block';
     } catch { /* no bloquear */ }
 }
 
@@ -972,15 +953,7 @@ function showConfirmModal(previewId, campos, meta) {
     const receptorNombreEl = document.getElementById('confirm-receptor-nombre');
     const receptorNifEl    = document.getElementById('confirm-receptor-nif');
     if (receptorNombreEl && receptorNifEl) {
-        // Admins con empresa cliente seleccionada → receptor es esa empresa (caso especial)
-        const adminClientCompany = userIsAdmin && selectedClientCompanyId
-            ? clientCompanies.find(c => String(c.id) === String(selectedClientCompanyId))
-            : null;
-
-        if (adminClientCompany) {
-            receptorNombreEl.value = adminClientCompany.nombre;
-            receptorNifEl.value    = (adminClientCompany.cif || '').toUpperCase().replace(/[\s\-\.]/g, '');
-        } else if (isVenta) {
+        if (isVenta) {
             // Para venta: el receptor es el cliente (extraído por OCR)
             receptorNombreEl.value = campos.receptor_nombre || '';
             receptorNifEl.value    = (campos.receptor_nif || '').toUpperCase().replace(/[\s\-\.]/g, '');
@@ -1311,10 +1284,6 @@ async function confirmUpload() {
             document.getElementById('camera-input').value = '';
             selectedInvoiceType = 'compra'; // resetear a defecto
             setInvoiceType('compra');        // actualizar visual
-            // Resetear selector de empresa cliente (admins)
-            selectedClientCompanyId = null;
-            const selEl = document.getElementById('select-client-company');
-            if (selEl) selEl.value = '';
             loadHistory();
         } else if (data.duplicate) {
             closeConfirmModal();
@@ -1338,10 +1307,6 @@ async function uploadFile() {
     const formData = new FormData();
     formData.append('file', selectedFile);
     formData.append('invoice_type', selectedInvoiceType); // ← tipo seleccionado por el usuario
-    // Admins: enviar empresa cliente seleccionada (receptor de la factura)
-    if (userIsAdmin && selectedClientCompanyId) {
-        formData.append('client_company_id', selectedClientCompanyId);
-    }
 
     const msgEl = document.getElementById('message');
 
@@ -1416,14 +1381,6 @@ const elTypeRecibida = document.getElementById('btn-type-recibida');
 const elTypeEmitida  = document.getElementById('btn-type-emitida');
 if (elTypeRecibida) elTypeRecibida.addEventListener('click', function() { setInvoiceType('compra'); });
 if (elTypeEmitida)  elTypeEmitida.addEventListener('click',  function() { setInvoiceType('venta'); });
-
-// Selector de empresa cliente (admins)
-const elClientCompanySel = document.getElementById('select-client-company');
-if (elClientCompanySel) {
-    elClientCompanySel.addEventListener('change', function() {
-        selectedClientCompanyId = this.value || null;
-    });
-}
 
 // Modal confirmación
 const elConfirmBtn  = document.getElementById('btn-confirm-invoice');
