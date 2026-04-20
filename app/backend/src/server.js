@@ -1060,8 +1060,11 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
       if (compCheck.rows.length === 0) {
         auditLog('LOGIN_BLOCKED', { email, reason: 'company_not_found', company_nif: user.company_nif }, user.id, req.ip);
         logger.warn(`[Login] Empresa no encontrada en BD: CIF=${user.company_nif} email=${email}`);
+        // Mensaje diagnóstico — la causa más frecuente NO es desactivación, es un typo
+        // del CIF en el registro. El antiguo "tu empresa ha sido desactivada" llevó a
+        // varios falsos positivos (incidente 2026-04-20 info@murimarti.com).
         return res.status(403).json({
-          error: 'El acceso de tu empresa ha sido desactivado. Contacta al administrador de SETEX.'
+          error: `El CIF ${user.company_nif} asociado a tu cuenta no coincide con ninguna empresa registrada en SETEX. Revisa que tu CIF sea correcto en tu perfil, o contacta con el administrador.`
         });
       }
       const company = compCheck.rows[0];
