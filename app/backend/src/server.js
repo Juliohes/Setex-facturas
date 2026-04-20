@@ -7,6 +7,8 @@ const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
+// rateLimit se sigue importando aquí por el `require` dinámico de algunos endpoints.
+// Los limiters reales vienen ahora de middleware/rate-limit.js (paso 9/22).
 const rateLimit = require('express-rate-limit');
 const axios = require('axios');
 const winston = require('winston');
@@ -15,10 +17,30 @@ const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const sharp = require('sharp');
 const { extractInvoiceOCR, extractCIFOnlyOCR } = require('./ocr/index');
-const { validateSpanishTaxId, checkDigitCIF } = require('./ocr/validateCIF');
-const { validateIVACoherencia } = require('./ocr/validateIVA');
+
+// ── Módulos refactorizados (Strangler-Fig, pasos 1-20 completados) ────────────
+// Ubicación objetivo: domain/, services/, repositories/, middleware/, lib/, config/
+// Los requires desde ./ocr/validateCIF e ./ocr/validateIVA siguen funcionando por
+// shims retrocompatibles, pero ahora importamos directamente desde domain/.
+const { validateSpanishTaxId, checkDigitCIF } = require('./domain/validators/nif');
+const { validateIVACoherencia } = require('./domain/validators/iva');
 const { connection: redisClient } = require('./queue/index');
 const { validateVIES } = require('./services/viesValidator');
+
+// Rate limiters centralizados (middleware/rate-limit.js)
+const {
+  authLimiter: authLimiterV2,
+  uploadLimiter: uploadLimiterV2,
+  confirmLimiter: confirmLimiterV2,
+  refreshLimiter: refreshLimiterV2,
+  viesLimiter: viesLimiterV2,
+} = require('./middleware/rate-limit');
+
+// Audit service con dependency injection (services/audit/audit.service.js)
+const { createAuditLogger } = require('./services/audit/audit.service');
+
+// Request ID middleware (middleware/request-id.js)
+const requestIdMiddleware = require('./middleware/request-id');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -29,6 +51,11 @@ let jwtSecretCached = null;
 // Trust proxy for correct IP detection behind Traefik/Nginx
 app.set('trust proxy', 1);
 app.disable('x-powered-by'); // No revelar que usamos Express
+
+// Request ID middleware — añade X-Request-Id a cada request (trazabilidad).
+// Se aplica antes que cualquier otro middleware para que req.requestId esté
+// disponible en logs, audit y respuestas de error. (Strangler-Fig paso 8/22)
+app.use(requestIdMiddleware);
 
 // ── Seguridad: carga de security.json (equivalente a .htaccess) ───────────────
 const SECURITY_PATH = '/app/src/config/security.json';
@@ -469,32 +496,14 @@ app.use((req, res, next) => {
   }).catch(() => next());
 });
 
-// Rate limiters
-const authLimiter = rateLimit({
-  windowMs: 15*60*1000,
-  max: 10,
-  standardHeaders: true,
-  message: { error: 'Demasiados intentos. Espera unos minutos e inténtalo de nuevo.' }
-});
-const uploadLimiter = rateLimit({
-  windowMs: 15*60*1000,
-  max: parseInt(process.env.UPLOAD_RATE_LIMIT) || 30,
-  standardHeaders: true,
-  message: { error: 'Demasiados envíos. Espera unos minutos e inténtalo de nuevo.' }
-});
-const confirmLimiter = rateLimit({
-  windowMs: 15*60*1000,
-  max: 60,
-  standardHeaders: true,
-  message: { error: 'Demasiadas solicitudes. Espera unos minutos.' }
-});
-const refreshLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 60, // 60 refreshes por 15min por IP — muy permisivo (renovación cada 15min es normal)
-  keyGenerator: (req) => req.ip,
-  standardHeaders: true,
-  message: { error: 'Demasiadas peticiones de refresco. Espera un momento.' }
-});
+// Rate limiters — ahora vienen centralizados de middleware/rate-limit.js
+// (Strangler-Fig paso 9/22). Se alias a los nombres originales para no romper
+// las ~9 rutas que los consumen abajo. En Round 6 estos alias se eliminarán
+// cuando las rutas se extraigan a src/routes/*.routes.js.
+const authLimiter = authLimiterV2;
+const uploadLimiter = uploadLimiterV2;
+const confirmLimiter = confirmLimiterV2;
+const refreshLimiter = refreshLimiterV2;
 
 // Multer upload — organizado por usuario
 const storage = multer.diskStorage({
@@ -2550,14 +2559,8 @@ app.post('/api/admin/retry-failed/:id', authenticateToken, requireAdmin, require
   }
 });
 
-// Rate limiter específico para VIES (consulta a servicio externo de la UE)
-const viesLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 20,
-  keyGenerator: (req) => String(req.user?.userId || req.ip),
-  standardHeaders: true,
-  message: { error: 'Demasiadas consultas VIES. Espera un momento.' }
-});
+// Rate limiter específico para VIES — centralizado en middleware/rate-limit.js
+const viesLimiter = viesLimiterV2;
 
 // GET /api/vies/:nif — consulta VIES pública (dato público de la UE, con rate limit)
 app.get('/api/vies/:nif', authenticateToken, requireActiveCompany, viesLimiter, async (req, res) => { // SEC-014: añadido viesLimiter
