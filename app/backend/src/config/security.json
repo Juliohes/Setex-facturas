@@ -10,7 +10,8 @@
   },
 
   "ip_whitelist": [
-    "_info_: IPs aquí NUNCA son bloqueadas (ni por hora, ni por rate limit, ni por blacklist)"
+    "_info_: IPs aquí NUNCA son bloqueadas (ni por hora, ni por rate limit, ni por blacklist)",
+    "94.73.44.64"
   ],
 
   "ip_blacklist": [
@@ -20,7 +21,7 @@
   "auto_block": {
     "_info": "Bloqueo temporal automático por exceso de peticiones desde una misma IP",
     "enabled": true,
-    "max_requests": 100,
+    "max_requests": 400,
     "window_seconds": 300,
     "block_duration_minutes": 60
   },
