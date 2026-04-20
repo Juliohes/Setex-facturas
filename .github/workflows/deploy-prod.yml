@@ -93,13 +93,13 @@ jobs:
               sleep 5
             done
 
-            echo "── Smoke test OCR ──"
-            if [ -x scripts/smoke-test-ocr.js ]; then
-              node scripts/smoke-test-ocr.js || {
-                echo "::error::Smoke test OCR FALLÓ tras despliegue"
-                docker compose logs backend --tail 80
-                exit 1
-              }
+            echo "── Smoke test OCR (informativo, no aborta deploy) ──"
+            # El cron diario en HOST también lo ejecuta. Si falla aquí, log warning
+            # pero NO abortamos el deploy (containers ya healthy validan que el
+            # binario y la red funcionan; OCR depende de servicios externos cuya
+            # caída no debería revertir un deploy bueno).
+            if [ -f scripts/smoke-test-ocr.js ]; then
+              node scripts/smoke-test-ocr.js && echo "── Smoke OK ──" || echo "::warning::Smoke test OCR FALLÓ — revisar /opt/setex/prod/logs/smoke-ocr.log y status de OpenAI/Azure"
             else
               echo "::warning::scripts/smoke-test-ocr.js no presente — skip smoke"
             fi
