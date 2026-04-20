@@ -6,7 +6,7 @@
 
 set -uo pipefail
 
-BASE=/opt/setex-captu-facture
+BASE=/opt/setex/prod
 COMPOSE="docker compose -f $BASE/app/docker-compose.yml"
 LOG="$BASE/logs/watchdog.log"
 ALERT_LOG="$BASE/logs/watchdog-alerts.log"

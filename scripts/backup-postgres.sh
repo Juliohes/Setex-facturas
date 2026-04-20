@@ -1,12 +1,12 @@
 #!/bin/bash
 # Backup automático de PostgreSQL — SETEX Captura Facturas
 # Cifrado con GPG (AES-256). Retención: 7 backups.
-# Cron: 0 3 * * * /opt/setex-captu-facture/scripts/backup-postgres.sh
+# Cron: 0 3 * * * /opt/setex/prod/scripts/backup-postgres.sh
 
 set -euo pipefail
 
-BACKUP_DIR="/opt/setex-captu-facture/backups/postgres"
-PASSPHRASE_FILE="/opt/setex-captu-facture/secrets/backup_passphrase.txt"
+BACKUP_DIR="/opt/setex/shared/backups/postgres"
+PASSPHRASE_FILE="/opt/setex/prod/secrets/backup_passphrase.txt"
 DATE=$(date +%Y%m%d_%H%M%S)
 FILENAME="setex_db_${DATE}.sql.gz.gpg"
 TMP_FILE=$(mktemp)
@@ -22,7 +22,7 @@ if [ ! -f "$PASSPHRASE_FILE" ]; then
 fi
 
 # Dump → gzip → GPG cifrado simétrico (AES-256) — en pipeline sin archivo intermedio en claro
-docker exec setex-postgres pg_dump -U setex_user setex_db \
+docker exec setex-prod-postgres pg_dump -U setex_user setex_db \
   | gzip -9 \
   | gpg --batch --yes --symmetric --cipher-algo AES256 \
         --passphrase-file "$PASSPHRASE_FILE" \
