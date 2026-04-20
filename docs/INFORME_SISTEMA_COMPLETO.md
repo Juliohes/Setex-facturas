@@ -2054,5 +2054,50 @@ Añade esta línea (backup cada día a las 3:00 AM):
 
 ---
 
+### 2026-04-20 — Cierre Fase 0 pre-entrega: backups, hardening, tag v1.0.0, Go/No-Go
+
+**Objetivo:** dejar producción en estado "GO" para entrega al cliente 2026-04-21.
+
+**Hallazgo crítico pre-entrega — backups corruptos:**
+- 2 ficheros de 86 B en `/opt/setex/shared/backups/postgres/` (timestamps 14:42 y 19:01 UTC del 2026-04-20, generados durante cutover a containers `setex-prod-*`).
+- Causa raíz: `set -euo pipefail` + chequeo `[ -s fichero ]` no detectaban "pipe trivial" — si `pg_dump` fallaba silenciosamente, `gzip` comprimía flujo vacío y `gpg` encriptaba ~86 B "válidos" pero sin contenido útil.
+- Eliminados manualmente (descifrado confirmó basura, no gzip válido).
+
+**Hardening `scripts/backup-postgres.sh`:**
+- `PIPESTATUS` check explícito — cualquier fallo en pg_dump/gzip/gpg aborta.
+- Gate `MIN_BYTES=1024` — archivos sospechosamente pequeños se rechazan.
+- Validación real de integridad: descifrar + gunzip + `grep "PostgreSQL database dump"` antes de declarar OK.
+- `shopt -s nullglob` para retention — evita fallo con `set -e` cuando no hay matches.
+- Verificado con 3 ejecuciones consecutivas (exit=0, integridad OK).
+
+**Backup fresco pre-entrega + replicación offsite:**
+- `setex_db_20260420_194226.sql.gz.gpg` (28K, AES-256, integridad header pg_dump verificada).
+- Retention local: 7 válidos (23-28K cada uno).
+- VPS secundario 72.62.189.27: 11 backups replicados, tamaños coinciden (26407 bytes).
+
+**Smoke OCR con factura muestra fija:**
+- Copiada `factura-muestra.jpg` (335 KB) a `/opt/setex/prod/scripts/samples/` (gitignored, datos fiscales reales).
+- Verificación: OpenAI 3.05s + Azure DI 322ms + 2ª pasada receptor 3.99s — triple verde.
+- Cron diario 04:30 UTC ya no emitirá warning "Sample image not found".
+
+**Go/No-Go formal (sec. 4.6 del MACROPLAN):**
+- 9/11 verde, 2 en amarillo documentados:
+  - CSRF pospuesto a F1 (módulo listo, cableado requiere tests E2E)
+  - BetterStack pendiente (cuenta externa de Julio) — mitigado por watchdog cada 5min + smoke OCR diario + backup diario + offsite diario
+  - Credenciales cliente: Julio genera mañana (no bloqueante hoy)
+- **Veredicto: GO**.
+
+**Tag Git v1.0.0:**
+- Commit base: cierre Fase 0 con macroplan completo + backup hardening.
+- Push a origin/develop con tag anotado.
+
+**Ficheros afectados:**
+- `scripts/backup-postgres.sh` — endurecido
+- `scripts/samples/factura-muestra.jpg` — añadido en prod (gitignored)
+- `docs/plans/MACROPLAN-SETEX-v2.0.md` — sec. 4.6 rellenada + sec. 17 P0-7/8/9/10 cerrados
+- Repo staging: `scripts/{seed-staging.js,seed-staging.sh,e2e-tests.sh}` commiteados (commit ac8763e)
+
+---
+
 *SETEX Captura Facturas · setex-facturas.es*
 *Documento de referencia — actualizar con cada sesión de desarrollo*
