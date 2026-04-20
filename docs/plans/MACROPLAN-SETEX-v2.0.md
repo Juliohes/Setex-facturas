@@ -617,10 +617,23 @@ app/backend/src/
 | 3 | `lib/errors.js` (clases AppError) | Utils | Muy bajo | 1h | — | ✅ **2026-04-20 16:06** |
 | 4 | `lib/filename-generator.js` | Utils | Muy bajo | 30min | — | ✅ **2026-04-20 16:06** |
 | 5 | `lib/normalize-amount.js` | Utils | Muy bajo | 30min | — | ✅ **2026-04-20 16:06** |
-| ~~6~~ | ~~Arbitrator OCR~~ (reordenado) | — | — | — | — | ⏳ F2 |
-| 6 | Calculador totales factura (`domain/calculators/`) | Función pura | Bajo | 2h | 20 casos | ⏳ F1 |
-| 7 | Parser OpenAI response (`domain/parsers/ocr-response.js`) | Función pura | Bajo | 3h | 15 casos | ⏳ F1 |
-| 8 | Parser Azure response | Función pura | Bajo | 3h | 15 casos | ⏳ F1 |
+| 6 | `domain/calculators/invoice-totals.js` | Función pura | Bajo | 2h | 20 casos | ✅ **2026-04-20 16:31** |
+| 7 | `domain/parsers/ocr-response.js` | Función pura | Bajo | 3h | 15 casos | ✅ **2026-04-20 16:31** |
+| 8 | `middleware/request-id.js` | Middleware | Bajo | 1h | Manual | ✅ **2026-04-20 16:31** |
+| 9 | `middleware/rate-limit.js` | Middleware | Medio | 3h | Pruebas ligeras | ✅ **2026-04-20 16:31** |
+| 10 | `services/audit/audit.service.js` | Service | Medio | 4h | Verificar audit_logs | ✅ **2026-04-20 16:31** |
+| 11 | `repositories/base.repo.js` (withTransaction) | Utils | Bajo | 2h | — | ✅ **2026-04-20 16:33** |
+| 12 | `repositories/users.repo.js` | Acceso BD | Medio | 1 día | Integración | ✅ **2026-04-20 16:33** |
+| 13 | `repositories/uploads.repo.js` | Acceso BD | Medio | 1 día | Integración | ✅ **2026-04-20 16:33** |
+| 14 | `repositories/client-companies.repo.js` | Acceso BD | Medio | 1 día | Integración | ✅ **2026-04-20 16:33** |
+| 15 | `repositories/audit.repo.js` | Acceso BD | Bajo | 3h | Integración | ✅ **2026-04-20 16:33** |
+| 16 | `config/env.js` (validación env) | Config | Bajo | 2h | — | ✅ **2026-04-20 16:38** |
+| 17 | `config/secrets.js` (Docker Secrets + cache) | Config | Bajo | 2h | — | ✅ **2026-04-20 16:38** |
+| 18 | `services/auth/password.service.js` | Service | Bajo | 2h | Unit tests | ✅ **2026-04-20 16:38** |
+| 19 | `services/auth/jwt.service.js` | Service | Medio | 3h | Unit tests | ✅ **2026-04-20 16:38** |
+| 20 | `services/auth/csrf.service.js` | Service | Bajo | 2h | Unit + E2E | ✅ **2026-04-20 16:38** |
+| 21 | Cablear nuevos módulos en server.js | HTTP | Alto | 2 días | E2E completo | ⏳ F1 |
+| 22 | Eliminar shims + legacy/ + renombrar server.js → src/app.js | Limpieza | — | 1h | Verificación | ⏳ F2 final |
 | 6 | Arbitrator OCR formalizado | Clase + deps | Medio | 1 día | 25 casos + E2E | ⏳ F2 |
 | 7 | Lib crypto + helpers (`lib/crypto.js`, `lib/date.js`) | Utils | Bajo | 3h | 10 casos | ⏳ F2 |
 | 8 | Logger estructurado (`config/logger.js`) | Config | Bajo | 2h | Verificación manual | ⏳ F2 |
@@ -1164,16 +1177,25 @@ docker compose start backend
 - [ ] **P0-4** Endpoints RGPD `/api/me/export` + `/api/me/delete-account`
 - [ ] **P0-5** `docs/GUIA_USUARIO.md` para cliente
 - [ ] **P0-6** Monitorización externa BetterStack
-- [x] **P0-7** Refactor STAGING — Round 1 completado: pasos 1-5/22 (2026-04-20 16:09 UTC)
-  - ✓ `domain/validators/nif.js` (paso 1)
-  - ✓ `domain/validators/iva.js` (paso 2)
-  - ✓ `lib/errors.js` (paso 3)
-  - ✓ `lib/filename-generator.js` (paso 4)
-  - ✓ `lib/normalize-amount.js` (paso 5)
-  - ✓ Estructura carpetas completa con .gitkeep (domain/services/repositories/routes/controllers/middleware/schemas/lib/db)
-  - ✓ Shims retrocompatibles en ocr/validateCIF.js + ocr/validateIVA.js
-  - ✓ Validado en staging: HTTPS 200, smoke OCR OpenAI+Azure+2ªpasada OK
-  - PR #36 mergeado, deploy-staging success 1m04s
+- [x] **P0-7** Refactor STAGING — Rounds 1-4 completados: pasos 1-20/22 (2026-04-20)
+  - ✓ **Round 1** (PR #36): validators + lib — pasos 1-5
+    - `domain/validators/{nif,iva}.js` (movidos desde ocr/ con shims)
+    - `lib/{errors,filename-generator,normalize-amount}.js`
+    - Estructura carpetas completa con .gitkeep
+  - ✓ **Round 2** (PR #38): middleware + services/audit + domain — pasos 6-10
+    - `domain/calculators/invoice-totals.js`
+    - `domain/parsers/ocr-response.js`
+    - `middleware/{rate-limit,request-id}.js`
+    - `services/audit/audit.service.js`
+  - ✓ **Round 3** (PR #39): repositories — pasos 11-15
+    - `repositories/{base,users,uploads,client-companies,audit}.repo.js`
+    - 78 queries SQL extraídas a Repository pattern
+  - ✓ **Round 4** (PR #40): config + services/auth — pasos 16-20
+    - `config/{env,secrets}.js`
+    - `services/auth/{password,jwt,csrf}.service.js`
+  - ✓ Validado en staging: HTTPS 200, smoke OCR triple OK tras cada round
+  - ✓ server.js INTACTO durante TODOS los rounds (0 impacto comportamiento)
+  - **Pendiente**: pasos 21-22 (cableado server.js + cleanup shims) — requiere validación E2E exhaustiva F1
 - [ ] **P0-8** Smoke test manual exhaustivo prod
 - [ ] **P0-9** Backup completo pre-entrega + tag Git
 - [ ] **P0-10** Go/No-Go formal (matriz 11 checks)
