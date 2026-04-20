@@ -99,6 +99,65 @@ async function testOpenAI(apiKey, imageBuffer) {
   return true;
 }
 
+// ─── Test 2ª pasada receptor: extractReceptorCIFOnly equivalente ─────────────
+// Recorta el 60% inferior de la imagen y pide a GPT-4.1 los 9 caracteres del
+// CIF/NIF del CLIENTE. Mismo schema strict que la función de producción para
+// detectar regresiones.
+async function testReceptorPass(apiKey, imageBuffer) {
+  // Sharp no está disponible en el HOST sin instalarlo. Para que el smoke
+  // test no requiera dependencias, mandamos la imagen completa (sin recorte)
+  // — el objetivo aquí es validar que el schema strict + prompt sigue siendo
+  // aceptado por OpenAI. La función de producción sí recorta, pero la
+  // validación del contrato API es la misma.
+  const dataUrl = `data:image/jpeg;base64,${imageBuffer.toString('base64')}`;
+  const body = {
+    model: 'gpt-4.1',
+    messages: [
+      { role: 'system', content: 'Lee el CIF/NIF del CLIENTE/RECEPTOR. Si no lo ves, devuelve chars:null.' },
+      {
+        role: 'user',
+        content: [
+          { type: 'image_url', image_url: { url: dataUrl, detail: 'low' } },
+          { type: 'text', text: 'Devuelve chars con los 9 caracteres del CIF del cliente, o null si no lo encuentras.' }
+        ]
+      }
+    ],
+    max_tokens: 80,
+    temperature: 0,
+    response_format: {
+      type: 'json_schema',
+      json_schema: {
+        name: 'smoke_receptor_cif',
+        strict: true,
+        schema: {
+          type: 'object',
+          properties: {
+            chars: { type: ['array', 'null'], items: { type: 'string' } }
+          },
+          required: ['chars'],
+          additionalProperties: false
+        }
+      }
+    }
+  };
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(60000),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '');
+    throw new Error(`OpenAI HTTP ${res.status}: ${txt.substring(0, 300)}`);
+  }
+  // Sólo validamos que la respuesta es parseable y respeta el contrato.
+  // chars puede ser null (si la imagen no tiene CIF claro de receptor) — eso
+  // sigue siendo OK desde el punto de vista del smoke test (el schema funciona).
+  const data = await res.json();
+  if (!data.choices?.[0]?.message?.content) throw new Error('OpenAI sin contenido en respuesta');
+  return true;
+}
+
 // ─── Test Azure DI: prebuilt-invoice (sólo verifica que acepte el submit) ─────
 async function testAzure(apiKey, endpoint, imageBuffer) {
   const cleanEndpoint = endpoint.replace(/\/$/, '');
@@ -154,6 +213,15 @@ async function testAzure(apiKey, endpoint, imageBuffer) {
   } catch (e) {
     log('error', `Azure DI: FAIL — ${e.message}`);
     errors.push(`AZURE: ${e.message}`);
+  }
+
+  try {
+    const t0 = Date.now();
+    await testReceptorPass(openaiKey, img);
+    log('info', `OpenAI 2ª pasada receptor: OK (${Date.now() - t0}ms)`);
+  } catch (e) {
+    log('error', `OpenAI 2ª pasada receptor: FAIL — ${e.message}`);
+    errors.push(`OPENAI_RECEPTOR_PASS: ${e.message}`);
   }
 
   if (errors.length > 0) {
