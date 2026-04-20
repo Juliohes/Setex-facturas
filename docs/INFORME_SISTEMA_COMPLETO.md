@@ -2024,5 +2024,35 @@ Añade esta línea (backup cada día a las 3:00 AM):
 
 ---
 
+### 2026-04-20 — Lote 2026-04-19 commiteado + smoke test diario OCR + auditoría CIFs
+
+**Cierre del lote del 2026-04-19 (rama `fix/ux-captura-y-ocr-openai-schema-2026-04-19`):**
+- 5 commits temáticos sobre los 9 ficheros que llevaban días sin commitear (todos ya en producción vía `docker cp`):
+  - `fix(ocr)`: openai.js (schema OneOf → type-array nullable) + server.js (bypass /api/internal/* en auto-block) + security.json (max_requests 100→400 + IP whitelist)
+  - `feat(ux)`: app.js (history.pushState, repetirFoto cámara directa, empresa pre-rellenada, CIF propio sin mensaje rojo) + index.html (cache-buster v=20260419-003)
+  - `fix(admin/nginx)`: admin-facturas.{html,js} (CSP modal aprobación) + nginx.conf (error_page 429/5xx defensa en profundidad) + INFORME (5 entradas)
+  - `feat(ocr)` smoke test: scripts/smoke-test-ocr.js + scripts/samples/{.gitignore,README.md}
+  - `feat(scripts)` auditoría CIF: scripts/list-invalid-cifs.js
+- Push a `origin/fix/ux-captura-y-ocr-openai-schema-2026-04-19` y PR pendiente de creación a `develop`
+
+**Smoke test diario OCR (refuerzo crítico):**
+- Razón: el bug del schema OneOf en openai.js permaneció semanas sin detectar porque Azure DI tapaba. Una sola IA activa NO es aceptable.
+- `scripts/smoke-test-ocr.js`: lanza una petición real a OpenAI GPT-4.1 (response_format strict, detecta regresiones del schema) y un submit a Azure DI prebuilt-invoice. Lee secrets de `/opt/setex-captu-facture/secrets/`. Exit 1 si CUALQUIERA de los dos motores falla.
+- Validación AHORA: smoke test pasa — OpenAI 2.5s, Azure DI 368ms. Ambos motores OK tras el fix.
+- Cron instalado en root crontab del HOST: `30 4 * * * SETEX_OCR_LOG=/opt/setex-captu-facture/logs/smoke-ocr.log /usr/bin/node /opt/setex-captu-facture/scripts/smoke-test-ocr.js` (04:30 UTC = 06:30 Madrid verano / 05:30 invierno)
+- Factura muestra fija en `scripts/samples/factura-muestra.jpg` (HOST, gitignored — contiene datos fiscales reales)
+
+**Auditoría CIFs en BD (decisión #1=A — sólo informativo):**
+- `scripts/list-invalid-cifs.js`: consulta `users.company_nif` y aplica `checkDigitCIF` AEAT (algoritmo duplicado para autocontención).
+- Hallazgo en producción (5 cuentas con company_nif): **4 de 5 CIFs fallan AEAT**:
+  - id=19 `murimartinvesting@gmail.com` CIF=B02790388 (esperado control 4, real 8)
+  - id=20 `test@autoken.es` CIF=B42634044 (esperado 8, real 4)
+  - id=21 `test1@autoken.es` CIF=B42634044 (esperado 8, real 4)
+  - id=22 `info@murimarti.com` CIF=B42634044 (esperado 8, real 4)
+  - id=16 `xanfla95@gmail.com` CIF=B06400980 ✓ válido
+- Decisión: `validateCIF.js` mantiene política actual (no rechazo por dígito de control — algunos CIFs históricos legítimos no cumplen el algoritmo). Pendiente decidir si añadir warning visual en el perfil del usuario.
+
+---
+
 *SETEX Captura Facturas · setex-facturas.es*
 *Documento de referencia — actualizar con cada sesión de desarrollo*
