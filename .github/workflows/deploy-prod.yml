@@ -93,16 +93,10 @@ jobs:
               sleep 5
             done
 
-            echo "── Smoke test OCR (informativo, no aborta deploy) ──"
-            # El cron diario en HOST también lo ejecuta. Si falla aquí, log warning
-            # pero NO abortamos el deploy (containers ya healthy validan que el
-            # binario y la red funcionan; OCR depende de servicios externos cuya
-            # caída no debería revertir un deploy bueno).
-            if [ -f scripts/smoke-test-ocr.js ]; then
-              node scripts/smoke-test-ocr.js && echo "── Smoke OK ──" || echo "::warning::Smoke test OCR FALLÓ — revisar /opt/setex/prod/logs/smoke-ocr.log y status de OpenAI/Azure"
-            else
-              echo "::warning::scripts/smoke-test-ocr.js no presente — skip smoke"
-            fi
-
+            # Smoke test OCR ejecutado por cron diario 04:30 UTC en HOST.
+            # NO se incluye en el deploy porque depende de servicios externos
+            # (OpenAI/Azure) — su caída no debe revertir un deploy con
+            # containers healthy. Si quieres validar manualmente:
+            #   sudo -u deploy /opt/setex/prod/scripts/smoke-test-ocr.js
             echo "── Despliegue completado ──"
             docker ps --filter 'name=setex-prod-' --format 'table {{.Names}}\t{{.Status}}'
