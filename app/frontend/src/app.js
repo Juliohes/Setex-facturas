@@ -632,48 +632,13 @@ function processFile(file) {
 function validateTaxIdClient(taxId) {
     if (!taxId || typeof taxId !== 'string') return { result: 'incomplete', msg: '' };
     const clean = taxId.toUpperCase().replace(/[\s\-\.]/g, '');
-    if (clean.length < 9) return { result: 'incomplete', msg: '' };
-    if (clean.length > 9) return { result: 'invalid', msg: '✗ Demasiados caracteres (máx. 9)' };
+    if (clean.length < 9 || clean.length > 9) return { result: 'incomplete', msg: '' };
 
-    const NIF_LETTERS = 'TRWAGMYFPDXBNJZSQVHLCKE';
+    if (/^\d{8}[A-Z]$/.test(clean))         return { result: 'valid', msg: '✓ NIF personal' };
+    if (/^[XYZ]\d{7}[A-Z]$/.test(clean))    return { result: 'valid', msg: '✓ NIE' };
+    if (/^[A-Z]\d{7}[A-Z0-9]$/.test(clean)) return { result: 'valid', msg: '✓ CIF' };
 
-    if (/^\d{8}[A-Z]$/.test(clean)) {
-        const valid = clean[8] === NIF_LETTERS[parseInt(clean.slice(0, 8)) % 23];
-        return valid
-            ? { result: 'valid',   msg: '✓ NIF personal correcto' }
-            : { result: 'invalid', msg: '✗ Letra de NIF incorrecta — revisa el último carácter' };
-    }
-
-    if (/^[XYZ]\d{7}[A-Z]$/.test(clean)) {
-        const map = { X: 0, Y: 1, Z: 2 };
-        const num = parseInt(String(map[clean[0]]) + clean.slice(1, 8));
-        const valid = clean[8] === NIF_LETTERS[num % 23];
-        return valid
-            ? { result: 'valid',   msg: '✓ NIE correcto' }
-            : { result: 'invalid', msg: '✗ Letra de NIE incorrecta' };
-    }
-
-    if (/^[A-Z]\d{7}[A-Z0-9]$/.test(clean)) {
-        const digits = clean.slice(1, 8).split('').map(Number);
-        const control = clean[8];
-        let sumOdd = 0;
-        for (const i of [0, 2, 4, 6]) {
-            const d = digits[i] * 2;
-            sumOdd += d >= 10 ? Math.floor(d / 10) + (d % 10) : d;
-        }
-        const sumEven = digits[1] + digits[3] + digits[5];
-        const checkNum = (10 - ((sumOdd + sumEven) % 10)) % 10;
-        if ('KPQS'.includes(clean[0])) {
-            return control === 'JABCDEFGHI'[checkNum]
-                ? { result: 'valid',   msg: '✓ Dígito de control correcto' }
-                : { result: 'invalid', msg: '✗ Dígito de control incorrecto — revisa cada carácter' };
-        }
-        return control === String(checkNum)
-            ? { result: 'valid',   msg: '✓ Dígito de control correcto' }
-            : { result: 'invalid', msg: '✗ Dígito de control incorrecto — revisa cada carácter' };
-    }
-
-    return { result: 'unknown', msg: 'Formato no reconocido (NIF: 12345678Z · CIF: B12345678)' };
+    return { result: 'unknown', msg: '' };
 }
 
 function updateCIFStatus(nif) {
@@ -860,10 +825,6 @@ function showConfirmModal(previewId, campos, meta) {
             titleEl.textContent = 'Completa los datos que faltan';
             titleEl.style.color = '#c53030';
             descEl.textContent = 'La IA no pudo leer algún campo. Introduce los datos manualmente o cancela para repetir la foto.';
-        } else if (meta.nif_uncertain) {
-            titleEl.textContent = 'Verifica el CIF/NIF';
-            titleEl.style.color = '#d69e2e';
-            descEl.textContent = 'La IA detectó posibles variantes del CIF. Confirma que el valor mostrado es correcto.';
         } else {
             titleEl.textContent = 'Confirma los datos';
             titleEl.style.color = '#276749';
@@ -1095,37 +1056,12 @@ function showConfirmModal(previewId, campos, meta) {
     // Limpiar mensaje previo
     document.getElementById('confirm-message').innerHTML = '';
 
-    // Banner estado OCR dual
+    // Banner estado OCR — solo avisamos cuando NINGÚN motor leyó el NIF (input manual obligatorio)
     const ocrStatusEl = document.getElementById('confirm-ocr-status');
     if (ocrStatusEl) {
-        const dualConfirmed = meta.dual_confirmed;
-        const nifStatus     = meta.nif_status;
-        const disc          = meta.ocr_discrepancy;
-        if (dualConfirmed === true) {
-            ocrStatusEl.innerHTML = `<div style="background:#f0fff4;border:1px solid #9ae6b4;border-radius:8px;padding:10px 14px;font-size:13px;color:#276749;margin-bottom:0;">✓ <strong>Verificación IA correcta</strong> — Lectura de alta confianza.</div>`;
-            ocrStatusEl.style.display = 'block';
-        } else if (nifStatus === 'both_missing') {
-            // Ningún motor OCR pudo leer el CIF/NIF — confianza muy reducida
+        if (meta.nif_status === 'both_missing') {
             ocrStatusEl.innerHTML = `<div style="background:#fff5f5;border:1px solid #fc8181;border-radius:8px;padding:10px 14px;font-size:13px;color:#742a2a;margin-bottom:0;">⚠ <strong>CIF/NIF no detectado por ninguna IA</strong> — Verifica e introduce manualmente el CIF o NIF del proveedor antes de confirmar.</div>`;
             ocrStatusEl.style.display = 'block';
-        } else if (nifStatus === 'single_source') {
-            // Solo un motor leyó el NIF — conviene revisar
-            ocrStatusEl.innerHTML = `<div style="background:#fffbeb;border:1px solid #f6ad55;border-radius:8px;padding:10px 14px;font-size:13px;color:#744210;margin-bottom:0;">⚠ <strong>CIF/NIF leído por una sola IA</strong> — Confirma que el CIF/NIF mostrado es correcto antes de guardar.</div>`;
-            ocrStatusEl.style.display = 'block';
-        } else if (dualConfirmed === false && disc) {
-            const diffs = [];
-            if (disc.nif?.openai && disc.nif?.azure && disc.nif.openai !== disc.nif.azure)
-                diffs.push(`<li><strong>CIF/NIF:</strong> <code>${disc.nif.openai}</code> ó <code>${disc.nif.azure}</code></li>`);
-            if (disc.fecha?.openai && disc.fecha?.azure && disc.fecha.openai !== disc.fecha.azure)
-                diffs.push(`<li><strong>Fecha:</strong> <code>${disc.fecha.openai}</code> ó <code>${disc.fecha.azure}</code></li>`);
-            if (disc.total?.openai && disc.total?.azure && disc.total.openai !== disc.total.azure)
-                diffs.push(`<li><strong>Total:</strong> <code>${disc.total.openai}</code> ó <code>${disc.total.azure}</code></li>`);
-            if (diffs.length > 0) {
-                ocrStatusEl.innerHTML = `<div style="background:#fffbeb;border:1px solid #f6ad55;border-radius:8px;padding:10px 14px;font-size:13px;color:#744210;margin-bottom:0;">⚠ <strong>Revisa estos campos con atención</strong> — la IA detectó posibles variantes.<ul style="margin:6px 0 0 0;padding-left:18px;font-size:12px;line-height:1.7;">${diffs.join('')}</ul></div>`;
-                ocrStatusEl.style.display = 'block';
-            } else {
-                ocrStatusEl.style.display = 'none';
-            }
         } else {
             ocrStatusEl.style.display = 'none';
         }
