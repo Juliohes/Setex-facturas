@@ -17,6 +17,7 @@ const fs     = require('fs');
 const openai = require('./openai');
 const azure  = require('./azure');
 const { mergeLineasIva } = require('./validateIVA');
+const { validateSpanishTaxId } = require('./validateCIF');
 
 function getSecret(name) {
   try {
@@ -250,6 +251,7 @@ async function extractInvoiceOCR(filePath, mimeType, fileName, logger, context =
     const result = compareOCRResults(openaiRes, azureRes, logger);
     if (result) {
       logger.info(`[OCR] Resultado dual: dual_confirmed=${result.dual_confirmed} confidence=${result.confidence?.toFixed(2)} nif=${result.campos?.proveedor_nif} lineas_iva=${result.campos?.lineas_iva?.length || 0}`);
+      await _secondPassReceptorIfNeeded(result, filePath, mimeType, context, logger);
     } else {
       logger.warn('[OCR] Ambos motores fallaron — no hay resultado');
     }
@@ -268,11 +270,53 @@ async function extractInvoiceOCR(filePath, mimeType, fileName, logger, context =
       result = await tryOpenAI(filePath, mimeType, context);
     }
     logger.info(`[OCR] Motor ${mode}: tiempo=${result.processing_time_s}s valida=${result.es_factura_valida} total=${result.campos?.total}`);
-    return { ...result, dual_confirmed: false };
+    const wrapped = { ...result, dual_confirmed: false };
+    await _secondPassReceptorIfNeeded(wrapped, filePath, mimeType, context, logger);
+    return wrapped;
   } catch (err) {
     logger.error(`[OCR] Motor ${mode} falló: ${err.message}`);
     return null;
   }
+}
+
+// ─── 2ª pasada OCR enfocada al receptor en facturas EMITIDAS ─────────────────
+// Activa sólo cuando context.invoice_type === 'venta' y receptor_nif quedó null
+// tras la 1ª pasada. Recorta el bloque inferior y pide a GPT-4.1 el CIF del
+// cliente carácter a carácter. Si extrae un CIF/NIF con formato válido,
+// completa el campo. Mutación in-place del result. Coste: ~2s extra y ~$0.005.
+async function _secondPassReceptorIfNeeded(result, filePath, mimeType, context, logger) {
+  if (!result || !result.campos) return;
+  if (context?.invoice_type !== 'venta') return;
+  if (result.campos.receptor_nif) return; // ya hay NIF, no hace falta
+
+  const apiKey = getSecret('openai_api_key');
+  if (isPlaceholder(apiKey)) return;
+
+  logger.info('[OCR] 2ª pasada receptor — invoice_type=venta y receptor_nif=null');
+  const t0 = Date.now();
+  let cif;
+  try {
+    cif = await openai.extractReceptorCIFOnly(filePath, mimeType, apiKey);
+  } catch (err) {
+    logger.warn(`[OCR] 2ª pasada receptor falló: ${err.message}`);
+    return;
+  }
+  const elapsed = ((Date.now() - t0) / 1000).toFixed(2);
+
+  if (!cif) {
+    logger.info(`[OCR] 2ª pasada receptor: no encontró CIF (${elapsed}s)`);
+    return;
+  }
+
+  const check = validateSpanishTaxId(cif);
+  if (!check.valid) {
+    logger.warn(`[OCR] 2ª pasada receptor descartada — CIF "${cif}" inválido: ${check.reason}`);
+    return;
+  }
+
+  result.campos.receptor_nif = cif;
+  result.receptor_nif_source = 'second_pass_openai';
+  logger.info(`[OCR] 2ª pasada receptor OK: receptor_nif="${cif}" (${elapsed}s)`);
 }
 
 /**

@@ -297,15 +297,19 @@ Devuelve cada carácter en el array "chars", en orden estricto izquierda a derec
 Ejemplo: CIF B39793294 → chars: ["B","3","9","7","9","3","2","9","4"]
 Si no puedes leerlo con certeza → chars: null`;
 
-async function extractCIFOnly(filePath, mimeType, apiKey) {
+// ── Petición compartida a GPT-4.1 con recorte + schema chars[] ────────────────
+// Reutilizada por extractCIFOnly (emisor en cabecera) y extractReceptorCIFOnly
+// (cliente en bloque inferior de facturas emitidas).
+
+async function _extractCIFFromCrop(filePath, mimeType, apiKey, cropFn, systemPrompt, userPrompt, schemaName) {
   try {
     let buffer;
     if (mimeType.startsWith('image/')) {
       const img  = sharp(filePath);
       const meta = await img.metadata();
-      const cropH = Math.floor((meta.height || 2000) * 0.65);
+      const region = cropFn(meta);
       buffer = await img
-        .extract({ left: 0, top: 0, width: meta.width, height: cropH })
+        .extract(region)
         .resize({ width: 1536, height: 1536, fit: 'inside', withoutEnlargement: true })
         .sharpen({ sigma: 1.2, m1: 0.5, m2: 3 })
         .jpeg({ quality: 95 })
@@ -319,12 +323,12 @@ async function extractCIFOnly(filePath, mimeType, apiKey) {
     const body = {
       model: 'gpt-4.1',
       messages: [
-        { role: 'system', content: CIF_SYSTEM_PROMPT },
+        { role: 'system', content: systemPrompt },
         {
           role: 'user',
           content: [
             { type: 'image_url', image_url: { url: dataUrl, detail: 'high' } },
-            { type: 'text', text: CIF_USER_PROMPT }
+            { type: 'text', text: userPrompt }
           ]
         }
       ],
@@ -333,7 +337,7 @@ async function extractCIFOnly(filePath, mimeType, apiKey) {
       response_format: {
         type: 'json_schema',
         json_schema: {
-          name: 'cif_char_extraction',
+          name: schemaName,
           strict: true,
           schema: {
             type: 'object',
@@ -371,4 +375,60 @@ async function extractCIFOnly(filePath, mimeType, apiKey) {
   }
 }
 
-module.exports = { extractInvoice, extractCIFOnly };
+async function extractCIFOnly(filePath, mimeType, apiKey) {
+  // Recorta el 65% SUPERIOR — donde siempre va el emisor en cabecera.
+  return _extractCIFFromCrop(
+    filePath, mimeType, apiKey,
+    (meta) => ({ left: 0, top: 0, width: meta.width, height: Math.floor((meta.height || 2000) * 0.65) }),
+    CIF_SYSTEM_PROMPT, CIF_USER_PROMPT, 'cif_char_extraction'
+  );
+}
+
+// ── Extracción enfocada solo en CIF/NIF del CLIENTE/RECEPTOR ──────────────────
+// Para facturas EMITIDAS (invoice_type='venta'). Recorta el 60% INFERIOR donde
+// suele aparecer el bloque "Facturar a:" / "Cliente:" / "Datos del cliente:".
+//
+// Existe porque Azure DI a veces no extrae receptor_nif en plantillas atípicas
+// y en facturas de venta ese dato es esencial para la contabilidad del usuario.
+
+const RECEPTOR_CIF_SYSTEM_PROMPT = `Eres un especialista en lectura de identificadores fiscales españoles (CIF/NIF).
+Tu ÚNICA misión: encontrar y leer el CIF o NIF del CLIENTE/RECEPTOR en la imagen.
+
+PROCESO MENTAL OBLIGATORIO:
+1. Localiza el bloque "Facturar a:", "Cliente:", "Destinatario:", "Datos del cliente:" o similar.
+2. Dentro de ese bloque busca la etiqueta "CIF", "NIF", "N.I.F.", "C.I.F.", "VAT".
+3. Lee el PRIMER carácter (letra), luego el SEGUNDO, luego el TERCERO. Uno a uno.
+4. El formato es SIEMPRE: 1 letra + 7 dígitos + 1 carácter final = 9 caracteres.
+
+IMPORTANTE — NO confundas con el emisor:
+- El EMISOR está en la CABECERA SUPERIOR (logo, razón social del que factura).
+- El RECEPTOR está en un bloque secundario, a menudo enmarcado, con "Facturar a:" o "Cliente:".
+- Si sólo hay un único CIF visible y NO está en ningún bloque "Cliente:" → devuelve null.
+
+ERRORES CRÍTICOS A EVITAR:
+- NO intercambies el orden de dígitos adyacentes (el error más frecuente)
+- 3 vs 8: el 3 tiene apertura a la derecha, el 8 es completamente cerrado
+- 9 vs 3: el 9 es cerrado arriba con cola abajo, el 3 es abierto
+- 7 vs 1: el 7 tiene trazo diagonal superior, el 1 es vertical recto`;
+
+const RECEPTOR_CIF_USER_PROMPT = `Encuentra el CIF/NIF del CLIENTE/RECEPTOR (a quien va dirigida la factura — bloque "Facturar a:", "Cliente:", "Destinatario:").
+Devuelve cada carácter en el array "chars", en orden estricto izquierda a derecha.
+Ejemplo: CIF B39793294 → chars: ["B","3","9","7","9","3","2","9","4"]
+Si no encuentras un bloque claramente identificado como cliente/receptor → chars: null
+Si no puedes leerlo con certeza → chars: null`;
+
+async function extractReceptorCIFOnly(filePath, mimeType, apiKey) {
+  // Recorta el 60% INFERIOR — donde suele aparecer el bloque del cliente
+  // en facturas emitidas españolas.
+  return _extractCIFFromCrop(
+    filePath, mimeType, apiKey,
+    (meta) => {
+      const h = meta.height || 2000;
+      const top = Math.floor(h * 0.40); // empieza al 40% desde arriba
+      return { left: 0, top, width: meta.width, height: h - top };
+    },
+    RECEPTOR_CIF_SYSTEM_PROMPT, RECEPTOR_CIF_USER_PROMPT, 'receptor_cif_char_extraction'
+  );
+}
+
+module.exports = { extractInvoice, extractCIFOnly, extractReceptorCIFOnly };
