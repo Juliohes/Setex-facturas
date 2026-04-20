@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SETEX - Captura de Facturas</title>
     <link rel="icon" href="favicon-app.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles.css?v=20260420-001">
     <!-- PWA -->
     <link rel="manifest" href="/manifest.json">
     <meta name="theme-color" content="#667eea">
@@ -91,6 +91,7 @@
                 </div>
                 <div id="company-chip" class="company-chip">
                     <span id="company-name-chip" class="company-name-chip"></span>
+                    <span id="company-cif-warning" class="company-cif-warning" style="display:none;" title="Tu CIF no pasa el algoritmo de validación AEAT. Revisa que sea correcto en tu perfil.">⚠</span>
                 </div>
             </div>
             <div class="upload-area">
@@ -279,7 +280,7 @@
         </div>
     </div>
     <script src="auth.js?v=20260414-004"></script>
-    <script src="app.js?v=20260419-003"></script>
+    <script src="app.js?v=20260420-001"></script>
     <script>
         // ── Service Worker: registro + detección de actualizaciones ─────────
         if ('serviceWorker' in navigator) {
