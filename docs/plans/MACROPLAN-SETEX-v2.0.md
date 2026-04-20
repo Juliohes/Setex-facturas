@@ -612,11 +612,15 @@ app/backend/src/
 
 | # | Módulo | Tipo | Riesgo | Duración | Tests | Estado |
 |---|---|---|---|---|---|---|
-| 1 | Validador NIF/CIF (`domain/validators/nif.js`) | Función pura | Muy bajo | 2h | 30 casos | ⏳ F0/F1 |
-| 2 | Validador IVA (`domain/validators/iva.js`) | Función pura | Muy bajo | 1h | 10 casos | ⏳ F1 |
-| 3 | Calculador totales factura (`domain/calculators/`) | Función pura | Bajo | 2h | 20 casos | ⏳ F1 |
-| 4 | Parser OpenAI response (`domain/parsers/ocr-response.js`) | Función pura | Bajo | 3h | 15 casos | ⏳ F1 |
-| 5 | Parser Azure response | Función pura | Bajo | 3h | 15 casos | ⏳ F1 |
+| 1 | Validador NIF/CIF (`domain/validators/nif.js`) | Función pura | Muy bajo | 2h | 30 casos | ✅ **2026-04-20 16:06** |
+| 2 | Validador IVA (`domain/validators/iva.js`) | Función pura | Muy bajo | 1h | 10 casos | ✅ **2026-04-20 16:06** |
+| 3 | `lib/errors.js` (clases AppError) | Utils | Muy bajo | 1h | — | ✅ **2026-04-20 16:06** |
+| 4 | `lib/filename-generator.js` | Utils | Muy bajo | 30min | — | ✅ **2026-04-20 16:06** |
+| 5 | `lib/normalize-amount.js` | Utils | Muy bajo | 30min | — | ✅ **2026-04-20 16:06** |
+| ~~6~~ | ~~Arbitrator OCR~~ (reordenado) | — | — | — | — | ⏳ F2 |
+| 6 | Calculador totales factura (`domain/calculators/`) | Función pura | Bajo | 2h | 20 casos | ⏳ F1 |
+| 7 | Parser OpenAI response (`domain/parsers/ocr-response.js`) | Función pura | Bajo | 3h | 15 casos | ⏳ F1 |
+| 8 | Parser Azure response | Función pura | Bajo | 3h | 15 casos | ⏳ F1 |
 | 6 | Arbitrator OCR formalizado | Clase + deps | Medio | 1 día | 25 casos + E2E | ⏳ F2 |
 | 7 | Lib crypto + helpers (`lib/crypto.js`, `lib/date.js`) | Utils | Bajo | 3h | 10 casos | ⏳ F2 |
 | 8 | Logger estructurado (`config/logger.js`) | Config | Bajo | 2h | Verificación manual | ⏳ F2 |
@@ -1160,7 +1164,16 @@ docker compose start backend
 - [ ] **P0-4** Endpoints RGPD `/api/me/export` + `/api/me/delete-account`
 - [ ] **P0-5** `docs/GUIA_USUARIO.md` para cliente
 - [ ] **P0-6** Monitorización externa BetterStack
-- [ ] **P0-7** Refactor STAGING — primeras extracciones Strangler-Fig
+- [x] **P0-7** Refactor STAGING — Round 1 completado: pasos 1-5/22 (2026-04-20 16:09 UTC)
+  - ✓ `domain/validators/nif.js` (paso 1)
+  - ✓ `domain/validators/iva.js` (paso 2)
+  - ✓ `lib/errors.js` (paso 3)
+  - ✓ `lib/filename-generator.js` (paso 4)
+  - ✓ `lib/normalize-amount.js` (paso 5)
+  - ✓ Estructura carpetas completa con .gitkeep (domain/services/repositories/routes/controllers/middleware/schemas/lib/db)
+  - ✓ Shims retrocompatibles en ocr/validateCIF.js + ocr/validateIVA.js
+  - ✓ Validado en staging: HTTPS 200, smoke OCR OpenAI+Azure+2ªpasada OK
+  - PR #36 mergeado, deploy-staging success 1m04s
 - [ ] **P0-8** Smoke test manual exhaustivo prod
 - [ ] **P0-9** Backup completo pre-entrega + tag Git
 - [ ] **P0-10** Go/No-Go formal (matriz 11 checks)
