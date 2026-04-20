@@ -4,8 +4,8 @@
 # Registrado como servicio systemd: setex-startup.service
 
 set -uo pipefail
-LOG=/opt/setex-captu-facture/logs/startup.log
-BASE=/opt/setex-captu-facture
+LOG=/opt/setex/prod/logs/startup.log
+BASE=/opt/setex/prod
 
 mkdir -p "$BASE/logs" "$BASE/data/redis" "$BASE/data/postgres" "$BASE/data/uploads"
 

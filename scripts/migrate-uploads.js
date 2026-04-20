@@ -2,7 +2,7 @@
 // scripts/migrate-uploads.js
 // Reorganiza archivos históricos de /uploads/ a /uploads/{email_prefix}/{nif}/
 // Uso: docker exec setex-backend node /app/src/../../../scripts/migrate-uploads.js
-// O directamente en el host: node /opt/setex-captu-facture/scripts/migrate-uploads.js
+// O directamente en el host: node /opt/setex/prod/scripts/migrate-uploads.js
 'use strict';
 
 const { Pool } = require('pg');

@@ -5,8 +5,8 @@
 
 set -euo pipefail
 
-BASE=/opt/setex-captu-facture
-LOG=/opt/setex-captu-facture/logs/permissions.log
+BASE=/opt/setex/prod
+LOG=/opt/setex/prod/logs/permissions.log
 CHANGED=0
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG"; }

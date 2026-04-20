@@ -13,7 +13,7 @@
 // activa NO es aceptable: ambas deben funcionar siempre.
 //
 // Variables de entorno:
-//   SETEX_SECRETS_DIR  → directorio con secrets (default /opt/setex-captu-facture/secrets)
+//   SETEX_SECRETS_DIR  → directorio con secrets (default /opt/setex/prod/secrets)
 //   SETEX_OCR_SAMPLE   → ruta a factura muestra (default scripts/samples/factura-muestra.jpg)
 //   SETEX_OCR_LOG      → fichero log (default /var/log/setex/smoke-ocr.log)
 //
@@ -27,8 +27,8 @@
 const fs   = require('fs');
 const path = require('path');
 
-const SECRETS_DIR = process.env.SETEX_SECRETS_DIR || '/opt/setex-captu-facture/secrets';
-const SAMPLE_PATH = process.env.SETEX_OCR_SAMPLE  || '/opt/setex-captu-facture/scripts/samples/factura-muestra.jpg';
+const SECRETS_DIR = process.env.SETEX_SECRETS_DIR || '/opt/setex/prod/secrets';
+const SAMPLE_PATH = process.env.SETEX_OCR_SAMPLE  || '/opt/setex/prod/scripts/samples/factura-muestra.jpg';
 const LOG_PATH    = process.env.SETEX_OCR_LOG     || '/var/log/setex/smoke-ocr.log';
 
 function readSecret(name) {
