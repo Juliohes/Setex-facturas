@@ -917,7 +917,8 @@ function showConfirmModal(previewId, campos, meta) {
     const provEl = document.getElementById('confirm-proveedor');
     if (provEl) {
         if (isVenta) {
-            provEl.value = campos.proveedor_nombre || userCompanyName || '';
+            // Emisor = nosotros → SIEMPRE BD (ignora OCR salvo si BD vacía como red de seguridad)
+            provEl.value = userCompanyName || campos.proveedor_nombre || '';
         } else {
             provEl.value = campos.proveedor_nombre || '';
         }
@@ -979,31 +980,48 @@ function showConfirmModal(previewId, campos, meta) {
             receptorNombreEl.value = campos.receptor_nombre || '';
             receptorNifEl.value    = (campos.receptor_nif || '').toUpperCase().replace(/[\s\-\.]/g, '');
         } else {
-            // Para compra: el receptor somos nosotros — OCR debería haberlo detectado,
-            // pero si no, usamos los datos del perfil de empresa del usuario
-            receptorNombreEl.value = campos.receptor_nombre || userCompanyName || '';
-            receptorNifEl.value    = (campos.receptor_nif || userCompanyNif || '').toUpperCase().replace(/[\s\-\.]/g, '');
+            // Para compra: el receptor SOMOS NOSOTROS → SIEMPRE BD (la factura se asocia a
+            // nuestra empresa, no a lo que diga el OCR). OCR queda como red de seguridad si
+            // por algún motivo el perfil de empresa no se cargó.
+            receptorNombreEl.value = userCompanyName || campos.receptor_nombre || '';
+            receptorNifEl.value    = (userCompanyNif || campos.receptor_nif || '').toUpperCase().replace(/[\s\-\.]/g, '');
         }
     }
 
     // CIF editable del proveedor/emisor
     const nifInput = document.getElementById('confirm-nif');
-    // Para venta: proveedor = nosotros → pre-rellenar con nuestro NIF si OCR no lo tiene
+    // Para venta: emisor = NOSOTROS → SIEMPRE BD (mismo criterio que el nombre)
     nifInput.value = isVenta
-        ? (campos.proveedor_nif || userCompanyNif || '')
+        ? (userCompanyNif || campos.proveedor_nif || '')
         : (campos.proveedor_nif || '');
-    if (missing.includes('proveedor_nif')) {
-        nifInput.style.borderColor = '#e53e3e';
-        nifInput.style.background = '#fff5f5';
-        nifInput.placeholder = 'Introduce el CIF/NIF (obligatorio)';
-    } else if (!meta.cif_confident) {
-        nifInput.style.borderColor = '#d69e2e';
-        nifInput.style.background = '#fffff0';
-    } else {
+    // En factura emitida (venta), el CIF del campo `confirm-nif` somos NOSOTROS y se
+    // pre-rellena desde BD (userCompanyNif). En ese caso no marcamos rojo por "missing"
+    // ni validamos algorítmicamente (algunos CIFs reales ya guardados pueden no pasar el
+    // dígito de control estricto): mostramos un estado verde neutro "CIF de tu empresa".
+    // Si el usuario edita manualmente el campo, el listener input sí ejecuta validación.
+    const nifIsFromOwnCompany = isVenta && userCompanyNif &&
+                                 nifInput.value === userCompanyNif;
+
+    if (nifIsFromOwnCompany) {
         nifInput.style.borderColor = '#68d391';
         nifInput.style.background = '#f0fff4';
+        const statusEl = document.getElementById('confirm-cif-status');
+        statusEl.style.color = '#276749';
+        statusEl.textContent = '✓ CIF de tu empresa';
+    } else {
+        if (missing.includes('proveedor_nif')) {
+            nifInput.style.borderColor = '#e53e3e';
+            nifInput.style.background = '#fff5f5';
+            nifInput.placeholder = 'Introduce el CIF/NIF (obligatorio)';
+        } else if (!meta.cif_confident) {
+            nifInput.style.borderColor = '#d69e2e';
+            nifInput.style.background = '#fffff0';
+        } else {
+            nifInput.style.borderColor = '#68d391';
+            nifInput.style.background = '#f0fff4';
+        }
+        updateCIFStatus(nifInput.value);
     }
-    updateCIFStatus(nifInput.value);
 
     document.getElementById('confirm-vies-status').textContent = '';
 
@@ -1138,6 +1156,12 @@ function showConfirmModal(previewId, campos, meta) {
     // Mostrar modal
     document.getElementById('confirm-modal').style.display = 'block';
     document.getElementById('confirm-modal').scrollTop = 0;
+    // Sincronizar con history del navegador: el "atrás" del móvil/PC no debe sacar de la
+    // PWA, debe cerrar el modal y dejar al usuario en la pantalla principal de captura.
+    if (!_confirmHistoryActive) {
+        history.pushState({ setexModal: 'confirm' }, '');
+        _confirmHistoryActive = true;
+    }
 }
 
 // ── Toggle IRPF manual ────────────────────────────────────────────────────────
@@ -1166,11 +1190,51 @@ function hideIRPFSection() {
     updateIVACalc();
 }
 
-function closeConfirmModal() {
+// Flag: si abrimos el modal con history.pushState, lo dejamos consumir el "atrás".
+// Si lo cerramos por flujo normal (Confirmar / Repetir / éxito), retrocedemos manualmente
+// para limpiar la entrada extra del historial; el listener popstate ignora ese caso porque
+// el modal ya está oculto.
+let _confirmHistoryActive = false;
+
+function _hideConfirmModalUI() {
     document.getElementById('confirm-modal').style.display = 'none';
     currentPreviewId = null;
     document.getElementById('upload-btn').disabled = false;
 }
+
+function _resetCaptureUI() {
+    selectedFile = null;
+    document.getElementById('preview').innerHTML = '';
+    document.getElementById('file-input').value = '';
+    document.getElementById('camera-input').value = '';
+    document.getElementById('upload-btn').disabled = true;
+}
+
+function closeConfirmModal() {
+    _hideConfirmModalUI();
+    if (_confirmHistoryActive) {
+        _confirmHistoryActive = false;
+        history.back(); // limpia la entrada extra; popstate handler la ignora (modal oculto)
+    }
+}
+
+// "✗ Repetir foto": cierra modal, descarta preview/file y abre la cámara directamente.
+function repetirFoto() {
+    closeConfirmModal();
+    _resetCaptureUI();
+    capturePhoto();
+}
+
+// Botón "atrás" del navegador con el modal abierto → cerrar modal, descartar preview y
+// dejar al usuario en la pantalla principal de captura (NO abrir cámara — distinto de Repetir).
+window.addEventListener('popstate', function() {
+    const modal = document.getElementById('confirm-modal');
+    if (modal && modal.style.display === 'block') {
+        _confirmHistoryActive = false; // la entrada ya fue consumida por el navegador
+        _hideConfirmModalUI();
+        _resetCaptureUI();
+    }
+});
 
 async function confirmUpload() {
     if (!currentPreviewId) return;
@@ -1360,7 +1424,7 @@ if (elClientCompanySel) {
 const elConfirmBtn  = document.getElementById('btn-confirm-invoice');
 const elCancelBtn   = document.getElementById('btn-cancel-invoice');
 if (elConfirmBtn) elConfirmBtn.addEventListener('click', confirmUpload);
-if (elCancelBtn)  elCancelBtn.addEventListener('click', closeConfirmModal);
+if (elCancelBtn)  elCancelBtn.addEventListener('click', repetirFoto);
 
 // Validación en tiempo real del CIF
 const elConfirmNif = document.getElementById('confirm-nif');

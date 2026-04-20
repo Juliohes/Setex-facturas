@@ -1192,14 +1192,14 @@ function openReviewModal(companyId, detailData) {
     ? `<div style="margin-top:12px;">
         <strong style="font-size:13px;color:#2d3748;">Coincidencias detectadas:</strong>
         <div id="review-matching-list" style="margin-top:8px;display:flex;flex-direction:column;gap:6px;">
-          ${matching_suggestions.map((s, i) => `
+          ${matching_suggestions.map((s) => `
             <div style="background:#ebf8ff;border:1px solid #bee3f8;border-radius:8px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px;">
               <div>
                 <strong>${escHtml(s.nombre)}</strong> — <span style="font-family:monospace;">${escHtml(s.cif)}</span>
                 <span style="margin-left:8px;font-size:11px;color:#718096;background:#e2e8f0;padding:2px 6px;border-radius:4px;">${escHtml(s.match_type)}</span>
                 <span style="margin-left:6px;font-size:12px;color:#4299e1;">${Math.round(s.score * 100)}%</span>
               </div>
-              <button onclick="window._linkToCompany(${s.id}, '${escHtml(s.nombre)}')"
+              <button data-review-action="link" data-target-id="${s.id}" data-target-nombre="${escHtml(s.nombre)}"
                 style="background:#4299e1;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;">
                 Vincular
               </button>
@@ -1223,7 +1223,7 @@ function openReviewModal(companyId, detailData) {
     <div style="background:#fff;border-radius:16px;max-width:640px;width:100%;padding:28px;box-shadow:0 8px 40px rgba(0,0,0,0.2);">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;">
         <h2 style="color:#2d3748;font-size:18px;margin:0;">Revisar empresa pendiente</h2>
-        <button onclick="document.getElementById('review-company-modal').remove()" style="background:none;border:none;font-size:24px;cursor:pointer;color:#718096;">✕</button>
+        <button data-review-action="close" style="background:none;border:none;font-size:24px;cursor:pointer;color:#718096;">✕</button>
       </div>
 
       <table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:16px;">
@@ -1247,15 +1247,15 @@ function openReviewModal(companyId, detailData) {
       </details>
 
       <div style="margin-top:20px;border-top:1px solid #e2e8f0;padding-top:16px;display:flex;gap:10px;flex-wrap:wrap;">
-        <button onclick="window._empAprobar(${companyId}, '${escHtml(company.nombre)}')"
+        <button data-review-action="approve"
           style="flex:1;background:linear-gradient(135deg,#38a169,#2f855a);color:#fff;border:none;border-radius:8px;padding:10px;font-size:14px;font-weight:700;cursor:pointer;min-width:120px;">
           ✓ Aprobar
         </button>
-        <button onclick="window._empRechazar(${companyId}, '${escHtml(company.nombre)}')"
+        <button data-review-action="reject"
           style="flex:1;background:#e53e3e;color:#fff;border:none;border-radius:8px;padding:10px;font-size:14px;font-weight:700;cursor:pointer;min-width:120px;">
           ✗ Rechazar
         </button>
-        <button onclick="document.getElementById('review-company-modal').remove()"
+        <button data-review-action="close"
           style="background:#e2e8f0;color:#4a5568;border:none;border-radius:8px;padding:10px 20px;font-size:13px;cursor:pointer;">
           Cancelar
         </button>
@@ -1263,6 +1263,22 @@ function openReviewModal(companyId, detailData) {
     </div>
   `;
   modal.style.display = 'flex';
+
+  // Handlers CSP-safe (la CSP bloquea onclick inline con scriptSrc 'self')
+  const nombreCompany = company.nombre;
+  modal.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-review-action]');
+    if (!btn) return;
+    const action = btn.dataset.reviewAction;
+    if (action === 'close')   { modal.remove(); return; }
+    if (action === 'approve') { window._empAprobar(companyId, nombreCompany); return; }
+    if (action === 'reject')  { window._empRechazar(companyId, nombreCompany); return; }
+    if (action === 'link') {
+      const targetId = parseInt(btn.dataset.targetId, 10);
+      const targetNombre = btn.dataset.targetNombre || '';
+      window._linkToCompany(targetId, targetNombre);
+    }
+  });
 }
 
 function escHtml(str) {

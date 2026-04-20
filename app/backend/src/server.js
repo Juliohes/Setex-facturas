@@ -437,6 +437,12 @@ app.use((req, res, next) => {
 
 // Capa 2: auto-block por exceso de peticiones (usa Redis para persistir contadores)
 app.use((req, res, next) => {
+  // Las rutas /api/internal/* son subrequests de nginx (auth_request). auth_request sólo
+  // acepta 200/401/403; un 429 del auto-block hace que nginx devuelva 500 al cliente, dejando
+  // el sitio inutilizable hasta que el bloqueo caduque (60 min). Se exceptúan: son endpoints
+  // internos, idempotentes, sin BD ni coste relevante.
+  if (req.path.startsWith('/api/internal/')) return next();
+
   const cfg = loadSecurityConfig();
   if (!cfg?.auto_block?.enabled || !redisClient) return next();
   const ip = (req.ip || '').replace(/^::ffff:/, '');

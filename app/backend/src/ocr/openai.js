@@ -158,23 +158,20 @@ const INVOICE_SCHEMA = {
       iva_porcentaje:    { type: ['string', 'null'], description: 'Sin %. null si no visible.' },
       cuota_iva:         { type: ['string', 'null'], description: 'Formato español. null si no visible.' },
       lineas_iva: {
+        // OpenAI Structured Outputs (strict) NO admite oneOf/anyOf desde 2026-Q1.
+        // Usamos type-array `['array','null']` que sí es soportado para opcionales.
+        type: ['array', 'null'],
         description: 'Array de líneas de IVA si hay múltiples tipos. null si solo hay un tipo.',
-        oneOf: [
-          { type: 'null' },
-          {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                base:       { type: 'string', description: 'Base imponible de esta línea, formato español' },
-                porcentaje: { type: 'string', description: 'Tipo IVA sin %, ej: 21,0' },
-                cuota:      { type: 'string', description: 'Cuota IVA de esta línea, formato español' }
-              },
-              required: ['base', 'porcentaje', 'cuota'],
-              additionalProperties: false
-            }
-          }
-        ]
+        items: {
+          type: 'object',
+          properties: {
+            base:       { type: 'string', description: 'Base imponible de esta línea, formato español' },
+            porcentaje: { type: 'string', description: 'Tipo IVA sin %, ej: 21,0' },
+            cuota:      { type: 'string', description: 'Cuota IVA de esta línea, formato español' }
+          },
+          required: ['base', 'porcentaje', 'cuota'],
+          additionalProperties: false
+        }
       },
       irpf_porcentaje:   { type: ['string', 'null'], description: 'Sin %. 0,0 si no hay IRPF.' },
       cuota_irpf:        { type: ['string', 'null'], description: '0,00 si no hay IRPF.' },
@@ -342,11 +339,10 @@ async function extractCIFOnly(filePath, mimeType, apiKey) {
             type: 'object',
             properties: {
               chars: {
+                // strict mode: usar `type: ['array','null']` en vez de oneOf (no permitido)
+                type: ['array', 'null'],
                 description: 'Array con cada carácter del CIF en orden. null si no legible.',
-                oneOf: [
-                  { type: 'array', items: { type: 'string' }, minItems: 9, maxItems: 9 },
-                  { type: 'null' }
-                ]
+                items: { type: 'string' }
               }
             },
             required: ['chars'],
