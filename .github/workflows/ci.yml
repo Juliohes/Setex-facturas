@@ -43,9 +43,13 @@ jobs:
         working-directory: app/backend
         run: npm audit --omit=dev --audit-level=moderate
 
-      - name: Verificar que el frontend no tenga marcadores de conflicto
+      - name: Verificar que no hay marcadores de conflicto sin resolver
         run: |
-          if grep -rn '^<<<<<<<\|^=======\|^>>>>>>>' app/frontend/src/ docs/ 2>/dev/null; then
+          # Patrones EXACTOS que git mete en conflictos (no separadores markdown):
+          #   <<<<<<< <ref>          (siempre seguido de espacio + ref)
+          #   =======                (exactamente 7 = al inicio de línea, EOL inmediato)
+          #   >>>>>>> <ref>
+          if grep -rnE '^<<<<<<< |^=======$|^>>>>>>> ' app/ docs/ 2>/dev/null; then
             echo "::error::Marcadores de conflicto sin resolver en el repo"
             exit 1
           fi
