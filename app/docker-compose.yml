@@ -124,16 +124,35 @@ services:
       - "traefik.http.routers.${SETEX_ROUTER}-http.rule=Host(`${SETEX_DOMAIN}`)"
       - "traefik.http.routers.${SETEX_ROUTER}-http.entrypoints=web"
       - "traefik.http.routers.${SETEX_ROUTER}-http.middlewares=${SETEX_ROUTER}-redirect"
-      # HTTPS
+      # HTTPS — router principal (con BasicAuth si SETEX_HTTPS_MIDDLEWARES lo
+      # indica). Usa priority 10 para que el router -api de abajo gane cuando
+      # la ruta es /api/*.
       - "traefik.http.routers.${SETEX_ROUTER}.rule=Host(`${SETEX_DOMAIN}`)"
       - "traefik.http.routers.${SETEX_ROUTER}.entrypoints=websecure"
       - "traefik.http.routers.${SETEX_ROUTER}.tls=true"
       - "traefik.http.routers.${SETEX_ROUTER}.tls.certresolver=mytlschallenge"
       - "traefik.http.routers.${SETEX_ROUTER}.middlewares=${SETEX_HTTPS_MIDDLEWARES:-}"
+      - "traefik.http.routers.${SETEX_ROUTER}.priority=10"
+      # HTTPS — router para /api/* SIN BasicAuth. El backend ya autentica con
+      # JWT (Authorization: Bearer) + rate limits. Poner BasicAuth aquí chocaría
+      # con el header Authorization del cliente, dejando la API inutilizable.
+      # Priority 100 garantiza que este router matchea antes que el principal.
+      - "traefik.http.routers.${SETEX_ROUTER}-api.rule=Host(`${SETEX_DOMAIN}`) && PathPrefix(`/api/`)"
+      - "traefik.http.routers.${SETEX_ROUTER}-api.entrypoints=websecure"
+      - "traefik.http.routers.${SETEX_ROUTER}-api.tls=true"
+      - "traefik.http.routers.${SETEX_ROUTER}-api.tls.certresolver=mytlschallenge"
+      - "traefik.http.routers.${SETEX_ROUTER}-api.priority=100"
+      - "traefik.http.routers.${SETEX_ROUTER}-api.service=${SETEX_ROUTER}"
       # Middlewares
       - "traefik.http.middlewares.${SETEX_ROUTER}-redirect.redirectscheme.scheme=https"
       - "traefik.http.middlewares.${SETEX_ROUTER}-redirect.redirectscheme.permanent=true"
       - "traefik.http.middlewares.${SETEX_ROUTER}-auth.basicauth.users=${SETEX_BASICAUTH_USERS:-noop:noop}"
+      # Middleware IP allowlist (opt-in). Solo actúa si se lo incluye en
+      # SETEX_HTTPS_MIDDLEWARES, por ejemplo:
+      #   SETEX_HTTPS_MIDDLEWARES=setex-stg-auth,setex-stg-ipallow
+      # sourceRange puede ser uno o varios CIDR separados por coma.
+      # Default 0.0.0.0/0 = permite todo (inocuo si nadie añade el middleware).
+      - "traefik.http.middlewares.${SETEX_ROUTER}-ipallow.ipallowlist.sourcerange=${SETEX_ALLOWED_IPS:-0.0.0.0/0}"
       # Service
       - "traefik.http.services.${SETEX_ROUTER}.loadbalancer.server.port=80"
     logging:
