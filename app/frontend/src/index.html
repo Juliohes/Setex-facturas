@@ -104,14 +104,6 @@
                         📤 Factura Emitida
                     </button>
                 </div>
-                <!-- ── Selector empresa cliente (solo admins) ─────────────── -->
-                <div id="admin-client-selector" style="display:none; width:100%; margin-bottom:14px;">
-                    <label for="select-client-company" style="display:block; font-size:12px; font-weight:700; color:#2b6cb0; margin-bottom:6px; text-transform:uppercase; letter-spacing:0.5px;">Empresa cliente (receptor de la factura)</label>
-                    <select id="select-client-company" style="width:100%; padding:10px 12px; border:2px solid #4299e1; border-radius:8px; font-size:13px; color:#2d3748; background:#ebf8ff; cursor:pointer; appearance:none; -webkit-appearance:none;">
-                        <option value="">— Selecciona empresa cliente —</option>
-                    </select>
-                    <p style="font-size:11px; color:#718096; margin:4px 0 0 0;">Como administrador, indica qué empresa cliente es el receptor de esta factura.</p>
-                </div>
                 <!-- ── Botones de acción ───────────────────────────────────── -->
                 <button id="btn-capture-photo" class="btn-primary">📷 Capturar Foto</button>
                 <button id="btn-select-file" class="btn-secondary">📄 Subir Archivo</button>
@@ -280,7 +272,7 @@
         </div>
     </div>
     <script src="auth.js?v=20260414-004"></script>
-    <script src="app.js?v=20260420-001"></script>
+    <script src="app.js?v=20260420-002"></script>
     <script>
         // ── Service Worker: registro + detección de actualizaciones ─────────
         if ('serviceWorker' in navigator) {
