@@ -1,0 +1,103 @@
+name: Deploy a producción (manual)
+
+# Sólo dispara con click manual en GitHub Actions o tras release
+# para forzar control humano sobre cada despliegue a prod.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Escribe "DESPLEGAR" para confirmar'
+        required: true
+        type: string
+      skip_backup:
+        description: '¿Saltarse el backup pre-despliegue? (NO recomendado)'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validar input de confirmación
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirmar texto
+        run: |
+          if [ "${{ inputs.confirm }}" != "DESPLEGAR" ]; then
+            echo "::error::Confirmación incorrecta. Escribe exactamente DESPLEGAR."
+            exit 1
+          fi
+
+  deploy:
+    name: Backup + SSH al VPS y desplegar prod
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Despliegue remoto con backup pre
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: 22
+          script_stop: true
+          command_timeout: 10m
+          script: |
+            set -e
+            cd /opt/setex/prod
+
+            if [ "${{ inputs.skip_backup }}" != "true" ]; then
+              echo "── Backup pre-despliegue ──"
+              if [ -x scripts/backup-postgres.sh ]; then
+                scripts/backup-postgres.sh
+              else
+                echo "::warning::scripts/backup-postgres.sh no existe — continuamos SIN backup adicional (el cron diario sigue activo)"
+              fi
+            else
+              echo "::warning::Backup pre-despliegue SALTADO por input del usuario"
+            fi
+
+            echo "── Sincronizando con origin/main ──"
+            git fetch origin main
+            HEAD_BEFORE=$(git rev-parse HEAD)
+            git reset --hard origin/main
+            HEAD_AFTER=$(git rev-parse HEAD)
+            echo "  ${HEAD_BEFORE:0:8} → ${HEAD_AFTER:0:8}"
+
+            echo "── Reconstruyendo imágenes ──"
+            cd app
+            docker compose build backend frontend
+
+            echo "── Swap en caliente ──"
+            docker compose stop backend frontend
+            docker compose up -d backend frontend
+
+            echo "── Esperando healthchecks (90s máx) ──"
+            for i in $(seq 1 18); do
+              be_health=$(docker inspect setex-prod-backend --format '{{.State.Health.Status}}' 2>/dev/null || echo unknown)
+              fe_health=$(docker inspect setex-prod-frontend --format '{{.State.Health.Status}}' 2>/dev/null || echo unknown)
+              if [ "$be_health" = "healthy" ] && [ "$fe_health" = "healthy" ]; then
+                echo "── Healthchecks verdes en ${i}x5s ──"
+                break
+              fi
+              echo "  intento $i/18 — backend=$be_health frontend=$fe_health"
+              sleep 5
+            done
+
+            echo "── Smoke test OCR ──"
+            if [ -x scripts/smoke-test-ocr.js ]; then
+              node scripts/smoke-test-ocr.js || {
+                echo "::error::Smoke test OCR FALLÓ tras despliegue"
+                docker compose logs backend --tail 80
+                exit 1
+              }
+            else
+              echo "::warning::scripts/smoke-test-ocr.js no presente — skip smoke"
+            fi
+
+            echo "── Despliegue completado ──"
+            docker ps --filter 'name=setex-prod-' --format 'table {{.Names}}\t{{.Status}}'
