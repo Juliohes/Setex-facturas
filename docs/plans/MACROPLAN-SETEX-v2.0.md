@@ -1158,6 +1158,61 @@ docker compose start backend
 
 > **Actualizar esta sección después de cada tarea completada, con fecha.**
 
+---
+
+### 🔜 SIGUIENTE SESIÓN 2026-04-21 · Día entrega cliente
+
+**Estado al cerrar 2026-04-20 ~22:15 UTC:**
+- Tag `v1.0.0` en `origin/develop` → commit `0efed74` (incluye PRs #46, #47, #48)
+- `/opt/setex/prod` y `/opt/setex/staging` en `0efed74`, working tree limpio
+- Prod sirviendo UI nueva (cache-buster `v=20260420-003`)
+- Veredicto Fase 0: **GO** (9/11 verde, 2 amarillos documentados)
+
+**Orden exacto para mañana (15-20 min pre-entrega):**
+
+1. **[5 min] Smoke manual pre-entrega** — validar el camino completo que aún no se probó end-to-end hoy
+   - Login con user existente (ej. `xanfla95@gmail.com` que tiene CIF válido `B06400980`)
+   - Subir factura de prueba desde el móvil (cámara) y desde desktop (upload)
+   - Confirmar modal OCR → guardar → ver en dashboard
+   - Verificar en admin panel que aparece para el user
+   - Smoke OCR del cron ya habrá corrido a las 04:30 UTC → revisar `/opt/setex/prod/logs/smoke-ocr.log`
+
+2. **[5 min] Crear cuenta del cliente con CIF validado** (evita que se registre él con NIF erróneo)
+   - `POST /api/auth/register` con email y password temporal
+   - `UPDATE users SET company_nif = '<CIF>' WHERE email = '<email>'`
+   - Verificar que el CIF pasa `checkDigitCIF` AEAT antes (`scripts/list-invalid-cifs.js` para cross-check)
+   - Forzar cambio de contraseña en primer login (si no hay flag, avisar al cliente en el email)
+
+3. **[5 min] Envío al cliente** (lo hace el compañero de Julio)
+   - URL: `https://setex-facturas.es`
+   - Credenciales temporales
+   - `docs/GUIA_USUARIO.md` adjunta
+
+4. **[monitorizar primeras horas]** — tras primer upload real del cliente
+   - `docker compose logs -f backend frontend` en vivo
+   - Revisar `/opt/setex/prod/logs/watchdog-alerts.log` cada hora
+   - Si hay error → playbook emergencias `docs/PLAYBOOK_EMERGENCIAS.md`
+
+**Riesgos aceptados mañana (no tocar, están documentados):**
+- CSRF pospuesto a F1 → mitigado por SameSite=Strict + CSP
+- Sin BetterStack externo → mitigado por watchdog 5min + smoke diario
+- Sin tests E2E automatizados → mitigado por monitorización manual primer día
+
+**Si todo va bien durante el 21-27 abril, arrancar Fase 1 ordenada:**
+1. **P1.1** Instalar Playwright + 3 tests E2E verdes (`login`, `invoice-upload`, `admin`) — sec. 5 día 2-3
+2. **P1.2** Cableado CSRF `services/auth/csrf.service.js` en rutas mutantes + tests E2E que lo validen
+3. **P1.3** Strangler-Fig paso 21b: cablear `services/auth` + `repositories` en rutas existentes (sec. 8)
+4. **P1.4** ADR-0001/0002/0003 escritos (Git+ESLint+Husky, Strangler-Fig, TypeScript gradual)
+5. **P1.5** OpenAPI 3.1 yaml canónico + conventional commits + commitlint hook
+
+**Loose ends que NO bloquean entrega pero conviene cerrar F1:**
+- PaddleOCR: 3 GB instalados sin uso en `/opt/setex-captu-facture/ocr-service/` — integrar o desinstalar
+- Directorio archivado `/opt/setex-captu-facture.OLD-2026-04-20` con `kk.txt` residual — limpiar
+- BetterStack: cuando Julio cree cuenta externa, activar monitoring + alertas email/SMS
+- 4 cuentas con CIFs que fallan AEAT (ver `scripts/list-invalid-cifs.js`) — decisión sobre política
+
+---
+
 ### Fase 0 — Hoy 2026-04-20
 
 #### Ya hechos hoy (antes del macroplan)

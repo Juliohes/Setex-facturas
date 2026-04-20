@@ -2088,14 +2088,26 @@ Añade esta línea (backup cada día a las 3:00 AM):
 - **Veredicto: GO**.
 
 **Tag Git v1.0.0:**
-- Commit base: cierre Fase 0 con macroplan completo + backup hardening.
-- Push a origin/develop con tag anotado.
+- Colocado sobre commit `0efed74` en `origin/develop` (incluye PRs #46, #47, #48).
+- Tag anotado con changelog completo pusheado.
 
-**Ficheros afectados:**
-- `scripts/backup-postgres.sh` — endurecido
-- `scripts/samples/factura-muestra.jpg` — añadido en prod (gitignored)
-- `docs/plans/MACROPLAN-SETEX-v2.0.md` — sec. 4.6 rellenada + sec. 17 P0-7/8/9/10 cerrados
-- Repo staging: `scripts/{seed-staging.js,seed-staging.sh,e2e-tests.sh}` commiteados (commit ac8763e)
+**PRs mergeados esta sesión (los 3 via rama protegida):**
+- #46 `chore(fase-0)`: backup hardening + macroplan + Go/No-Go GO
+- #47 `chore(staging)`: scripts seed + suite E2E idempotentes
+- #48 `refactor(ui)`: UI sin falsos positivos NIF/OCR (desde sesión paralela Julio)
+
+**Ficheros afectados en prod:**
+- `scripts/backup-postgres.sh` — endurecido (PIPESTATUS + MIN_BYTES + validación header)
+- `scripts/samples/factura-muestra.jpg` — añadido (gitignored, datos reales)
+- `docs/plans/MACROPLAN-SETEX-v2.0.md` — sec. 4.6 Go/No-Go rellenada + sec. 17 P0-7/8/9/10 cerrados + bloque "🔜 SIGUIENTE SESIÓN 2026-04-21"
+- `app/frontend/src/{app.js,index.html}` — UI sin falsos positivos NIF, cache-buster `v=20260420-003`
+
+**Estado al cerrar sesión (para retomar mañana):**
+- Prod HEAD = tag v1.0.0 = `0efed74`, working trees limpios
+- Container `setex-prod-frontend` sirviendo UI nueva (verificado via curl)
+- Container `setex-prod-backend` en `setex-prod-backend:latest` (rebuild 19:02 UTC)
+- Cron 03:00 UTC usará script hardened en su próxima corrida
+- Plan detallado para mañana en MACROPLAN sec. 17 bloque "SIGUIENTE SESIÓN 2026-04-21"
 
 ---
 
