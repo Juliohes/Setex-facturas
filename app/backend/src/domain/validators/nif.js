@@ -1,0 +1,116 @@
+// src/ocr/validateCIF.js
+// Validación de CIF/NIF españoles: lista negra + formato.
+// Defensa contra alucinaciones de GPT-4o que inventa CIFs falsos.
+// IMPORTANTE: Solo rechaza por LISTA NEGRA o formato inválido.
+// El dígito de control NO rechaza — solo genera warning (muchos CIFs
+// reales, antiguos o de ejemplo no pasan el algoritmo).
+'use strict';
+
+const CIF_ENTITY_LETTERS = 'ABCDEFGHJNPQRSUVW';
+
+// CIFs/NIFs placeholder que GPT-4o tiende a inventar (secuencias obvias)
+const BLACKLIST = new Set([
+  'A12345678', 'B12345678', 'C12345678', 'D12345678',
+  'A00000000', 'B00000000', 'A11111111', 'B11111111',
+  'A99999999', 'B99999999', 'A12345679', 'B12345679',
+  'A22222222', 'A33333333', 'A44444444', 'A55555555',
+  'A66666666', 'A77777777', 'A88888888',
+  'B22222222', 'B33333333', 'B44444444', 'B55555555',
+  'B66666666', 'B77777777', 'B88888888',
+  'A23456789', 'B23456789', 'A87654321', 'B87654321',
+  'A98765432', 'B98765432', 'B00000001', 'A00000001',
+  '00000000T', '11111111H', '12345678Z', '99999999R',
+  '00000001R', '22222222J', '33333333P', '44444444A',
+  '55555555K', '66666666Q', '77777777B', '88888888Y',
+  '98765432M', '87654321X',
+]);
+
+/**
+ * Valida un identificador fiscal español (NIF, NIE o CIF).
+ *
+ * Retorna:
+ *   { valid: true }                          → formato OK, no está en blacklist
+ *   { valid: false, reason, severity }       → rechazado
+ *     severity: 'blacklisted' → DEBE rechazarse (alucinación segura)
+ *     severity: 'bad_format'  → formato incorrecto (no es CIF/NIF válido)
+ */
+function validateSpanishTaxId(taxId) {
+  if (!taxId || typeof taxId !== 'string') {
+    return { type: 'unknown', valid: false, severity: 'bad_format', reason: 'Valor vacío' };
+  }
+  const clean = taxId.toUpperCase().replace(/[\s\-\.]/g, '');
+
+  // Comprobar lista negra PRIMERO (alucinaciones conocidas)
+  if (BLACKLIST.has(clean)) {
+    return { type: 'blacklisted', valid: false, severity: 'blacklisted', reason: 'CIF/NIF en lista negra (placeholder/inventado por IA)' };
+  }
+
+  // NIF: 8 dígitos + letra
+  if (/^\d{8}[A-Z]$/.test(clean)) {
+    return { type: 'NIF', valid: true };
+  }
+
+  // NIE: X/Y/Z + 7 dígitos + letra
+  if (/^[XYZ]\d{7}[A-Z]$/.test(clean)) {
+    return { type: 'NIE', valid: true };
+  }
+
+  // CIF: letra entidad + 7 dígitos + control (letra o dígito)
+  if (/^[A-Z]\d{7}[A-Z0-9]$/.test(clean)) {
+    // Solo verificar que la letra de entidad sea válida
+    if (!CIF_ENTITY_LETTERS.includes(clean[0])) {
+      return { type: 'CIF', valid: false, severity: 'bad_format', reason: `Letra '${clean[0]}' no válida para CIF` };
+    }
+    return { type: 'CIF', valid: true };
+  }
+
+  // No coincide con ningún formato conocido
+  return { type: 'unknown', valid: false, severity: 'bad_format', reason: 'No coincide con formato NIF, NIE ni CIF' };
+}
+
+/**
+ * Valida el dígito de control de un CIF español (algoritmo AEAT).
+ * Solo aplica a CIFs (letra entidad + 7 dígitos + control).
+ *
+ * Retorna:
+ *   true  → dígito de control correcto
+ *   false → dígito de control incorrecto (probable error OCR)
+ *   null  → no se puede determinar (NIF, NIE u otro formato)
+ *
+ * IMPORTANTE: Usar solo como señal de confianza, NO como rechazo duro.
+ * Algunos CIFs históricos o especiales pueden no seguir el algoritmo estrictamente.
+ */
+function checkDigitCIF(taxId) {
+  if (!taxId || typeof taxId !== 'string') return null;
+  const clean = taxId.toUpperCase().replace(/[\s\-\.]/g, '');
+
+  // Solo aplica a formato CIF: letra + 7 dígitos + control
+  if (!/^[A-Z]\d{7}[A-Z0-9]$/.test(clean)) return null;
+
+  const digits = clean.slice(1, 8).split('').map(Number);
+  const control = clean[8];
+
+  // Posiciones IMPARES (1,3,5,7 → índices 0,2,4,6): DOBLAR, si resultado ≥10 sumar sus dígitos
+  let sumOdd = 0;
+  for (const i of [0, 2, 4, 6]) {
+    const d = digits[i] * 2;
+    sumOdd += d >= 10 ? Math.floor(d / 10) + (d % 10) : d;
+  }
+
+  // Posiciones PARES (2,4,6 → índices 1,3,5): SUMAR directamente
+  const sumEven = digits[1] + digits[3] + digits[5];
+
+  const unit = (sumOdd + sumEven) % 10;
+  const checkNum = (10 - unit) % 10;
+  const checkLetters = 'JABCDEFGHI';
+
+  // K, P, Q, S → control es siempre letra
+  if ('KPQS'.includes(clean[0])) {
+    return control === checkLetters[checkNum];
+  }
+
+  // Resto de entidades → control es dígito
+  return control === String(checkNum);
+}
+
+module.exports = { validateSpanishTaxId, checkDigitCIF };
