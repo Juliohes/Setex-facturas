@@ -49,7 +49,7 @@ jobs:
           #   <<<<<<< <ref>          (siempre seguido de espacio + ref)
           #   =======                (exactamente 7 = al inicio de línea, EOL inmediato)
           #   >>>>>>> <ref>
-          if grep -rnE '^<<<<<<< |^=======$|^>>>>>>> ' app/ docs/ 2>/dev/null; then
+          if grep -rnE --exclude-dir=node_modules '^<<<<<<< |^=======$|^>>>>>>> ' app/ docs/ 2>/dev/null; then
             echo "::error::Marcadores de conflicto sin resolver en el repo"
             exit 1
           fi
