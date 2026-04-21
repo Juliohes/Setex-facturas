@@ -16,10 +16,10 @@
 | Mantenedor | Julio |
 | Versión del plan | 2.0 (plan híbrido — combina lo mejor del Plan A externo y del Plan B interno basado en estado real) |
 | Fecha creación | 2026-04-20 |
-| Última actualización | **2026-04-21 17:40 UTC** (post-v1.0.2 + arranque Fase 1 + super-tarea cliente entrando) |
-| Estado global | 🟢 **Entregado v1.0.2 al cliente SETEX (aprobado en reunión)** · Fase 1 arrancada con PR #56 · pausa para super-tarea cliente ultra importante |
-| Release activo | **v1.0.2** en `main @ 0b15200` (deploy-prod.yml 2026-04-21 16:52 UTC, success 1m9s) |
-| Tags publicados | v1.0.0 (entrega inicial), v1.0.1 (fix watchdog + IRPF + Excel), v1.0.2 (fix modales + sync histórico + deploy formal) |
+| Última actualización | **2026-04-21 19:00 UTC** (post-v1.1.0 · super-tarea multi-IVA completa + deploy prod) |
+| Estado global | 🟢 **v1.1.0 desplegado · super-tarea multi-IVA entregada en 7 partes · pendiente validación manual cliente con factura real (2026-04-22)** |
+| Release activo | **v1.1.0** en `main @ 628a230` (deploy-prod.yml 2026-04-21 18:54 UTC, success 1m10s) |
+| Tags publicados | v1.0.0 (entrega inicial), v1.0.1 (fix watchdog + IRPF + Excel), v1.0.2 (fix modales + sync histórico), **v1.1.0 (desglose multi-IVA coherente en 5 capas)** |
 
 ### Reglas del documento
 
@@ -1196,19 +1196,25 @@ docker compose start backend
 
 ---
 
-### 🛑 PAUSADO PARA SUPER-TAREA CLIENTE ULTRA IMPORTANTE (2026-04-21 17:40 UTC)
+### ✅ SUPER-TAREA CLIENTE COMPLETADA (2026-04-21 19:00 UTC) — v1.1.0
 
-Julio pausa Fase 1 para introducir una **super-tarea** que el cliente SETEX pidió en la reunión de hoy. La tarea se describirá en detalle a continuación y se añadirá en esta sección cuando Julio la comunique.
+Cliente SETEX pidió en la reunión 2026-04-21 PM: **desglose por tramos de IVA coherente en todas las capas del sistema** (OCR, pantalla comprobación, BD, admin, Excel). Entregada en 7 partes + deploy a prod.
 
-> **🆕 SUPER-TAREA (placeholder — Julio dictará descripción/alcance/deadline)**
->
-> **Estado:** pendiente de especificación por parte de Julio.
->
-> **Planificación esperada:**
-> - Julio describirá la tarea con detalle (objetivo, alcance, criterios de aceptación)
-> - Al recibirla, se añadirá un bloque estructurado debajo de esta línea con: qué, por qué, cómo, estimación, riesgos, plan de ejecución
-> - Se prioriza antes que cualquier otro item de Fase 1
-> - Se commitea su ejecución contra una rama `feat/super-tarea-<titulo>-2026-04-21` y se promociona por el flujo estándar (PR → develop → main → deploy-prod.yml)
+**Resumen ejecutivo:**
+
+| # | Parte | Entregable | Tiempo |
+|---|---|---|---|
+| 1/7 | OCR backend | Prompt early-branch + schema `productos:[{desc, importe}]` + Azure Items→tramo + merger con dedup | ~35 min |
+| 2/7 | Endpoint confirm | Helper `normalizeConfirmedLineasIva` + `/api/upload-confirm` acepta array editado + sincroniza agregados | ~20 min |
+| 3/7 | Modal comprobación | Vista mono/multi conmutable + `renderLineasIvaMulti` + productos editables + resumen tiempo real | ~35 min |
+| 4/7 | Panel admin | Columna "Desglose" con badge + modal editable + `PUT` admin recalcula | ~55 min |
+| 5/7 | Excel export | Hoja secundaria "Desglose IVA" con fila por tramo + productos concatenados | ~15 min |
+| 6/7 | Testing | 25 tests unitarios Node (0 fallos) + spec Playwright + doc smoke manual | ~25 min |
+| 7/7 | Deploy + tag | PR #59 → develop → sync → main → deploy-prod.yml success 1m10s → tag v1.1.0 | ~35 min |
+
+**Total:** ~3h 35min. PR #59 en GitHub: `feat/multi-iva-ocr-backend-parte1-2026-04-21` → develop → main.
+
+**Pendiente validación manual por cliente (2026-04-22):** Julio probará flujo completo end-to-end con factura real multi-IVA (hostelería/ferretería). Si regresión detectada → parche v1.1.1 en caliente o revert según gravedad.
 
 ---
 
