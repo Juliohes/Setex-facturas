@@ -10,8 +10,12 @@
 
 set -euo pipefail
 
-BACKUP_DIR="/opt/setex/shared/backups/postgres"
-PASSPHRASE_FILE="/opt/setex/prod/secrets/backup_passphrase.txt"
+# ── Fuente única de rutas, contenedores y dominio ────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/paths.sh
+source "${SCRIPT_DIR}/lib/paths.sh"
+
+PASSPHRASE_FILE="${SECRETS_DIR}/backup_passphrase.txt"
 MIN_BYTES=1024
 DATE=$(date +%Y%m%d_%H%M%S)
 FILENAME="setex_db_${DATE}.sql.gz.gpg"
@@ -27,7 +31,7 @@ log "Iniciando backup cifrado → $FILENAME"
 [ -f "$PASSPHRASE_FILE" ] || fail "passphrase no encontrada en $PASSPHRASE_FILE"
 
 # Pipeline sin intermedio en claro
-docker exec setex-prod-postgres pg_dump -U setex_user setex_db \
+docker exec "${CONTAINER_PG}" pg_dump -U "${PG_USER}" "${PG_DB}" \
   | gzip -9 \
   | gpg --batch --yes --symmetric --cipher-algo AES256 \
         --passphrase-file "$PASSPHRASE_FILE" \

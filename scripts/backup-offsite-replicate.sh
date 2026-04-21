@@ -12,11 +12,16 @@
 
 set -euo pipefail
 
-LOCAL_DIR="/opt/setex/shared/backups/postgres"
-REMOTE_HOST="72.62.189.27"
+# ── Fuente única de rutas, contenedores y dominio ────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/paths.sh
+source "${SCRIPT_DIR}/lib/paths.sh"
+
+LOCAL_DIR="${BACKUP_DIR}"
+REMOTE_HOST="${OFFSITE_HOST}"
 REMOTE_USER="root"
-REMOTE_DIR="/opt/setex-backups-offsite/postgres"
-LOG_FILE="/opt/setex/prod/logs/backup-offsite.log"
+REMOTE_DIR="${OFFSITE_DIR}"
+LOG_FILE="${LOGS_DIR}/backup-offsite.log"
 
 mkdir -p "$(dirname "$LOG_FILE")"
 

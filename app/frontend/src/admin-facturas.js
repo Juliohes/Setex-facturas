@@ -7,6 +7,7 @@ let currentFilters = {};
 let currentCompanyFilter = null; // { cif, nombre } cuando se filtra desde tab Empresas
 let editingRow = null;
 let editingField = null;
+let deleteModeFacturas = false; // toggle: muestra botón ✕ en cada fila para borrar factura
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 // Delegamos toda la gestión de autenticación a window.Auth (auth.js).
@@ -324,9 +325,48 @@ function initTable() {
         }
       },
       { title: 'Subido',           field: 'uploaded_at',     width: 130, sorter: 'datetime', formatter: formatFechaHora },
+      { title: 'Acciones',         field: 'id',              width: 110, hozAlign: 'center', headerSort: false,
+        formatter: (cell) => {
+          if (!deleteModeFacturas) return '<span style="color:#cbd5e0;font-size:11px;">—</span>';
+          const row = cell.getData();
+          const num = row.numero_factura || `#${row.id}`;
+          return `<button class="btn-tbl-del fac-delete" data-id="${row.id}" data-num="${escAttr(num)}">✕ Eliminar</button>`;
+        } },
     ],
     initialSort: [{ column: 'uploaded_at', dir: 'desc' }],
   });
+
+  // Event delegation para botón eliminar (CSP-safe: sin onclick inline)
+  document.getElementById('facturas-table').addEventListener('click', (e) => {
+    const btn = e.target.closest('.fac-delete');
+    if (!btn) return;
+    e.stopPropagation();
+    const id  = parseInt(btn.dataset.id, 10);
+    const num = btn.dataset.num || `#${id}`;
+    eliminarFactura(id, num);
+  });
+}
+
+// Eliminación de factura con confirmación y DELETE al backend
+async function eliminarFactura(id, num) {
+  if (!confirm(`¿Eliminar definitivamente la factura ${num}?\n\nEsta acción no se puede deshacer. Se borrarán los datos y el fichero de imagen asociado.`)) return;
+  try {
+    const res = await authFetch(`${API_URL}/admin/facturas/${id}`, { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    // Quitar la fila del Tabulator sin recargar toda la tabla
+    const row = table.getRow(id);
+    if (row) row.delete();
+    // Actualizar contador
+    const totalEl = document.getElementById('total-label');
+    const m = (totalEl.textContent || '').match(/^([\d.]+)/);
+    if (m) {
+      const n = parseInt(m[1].replace(/\./g, ''), 10) - 1;
+      totalEl.innerHTML = `<strong>${n.toLocaleString('es-ES')}</strong> factura${n !== 1 ? 's' : ''}`;
+    }
+  } catch (err) {
+    alert(`No se pudo eliminar la factura: ${err.message}`);
+  }
 }
 
 async function loadData(filters = {}) {
@@ -1156,6 +1196,21 @@ function launchApp(authData) {
   document.getElementById('btn-company-filter-clear').addEventListener('click', () => {
     currentCompanyFilter = null;
     loadData(currentFilters);
+  });
+  // Toggle modo eliminar facturas (análogo al de empresas)
+  document.getElementById('btn-modo-eliminar-fac').addEventListener('click', () => {
+    deleteModeFacturas = !deleteModeFacturas;
+    const btn = document.getElementById('btn-modo-eliminar-fac');
+    if (deleteModeFacturas) {
+      btn.textContent = '✕ Cancelar';
+      btn.style.background = 'linear-gradient(135deg,#e53e3e,#c53030)';
+      btn.style.color = '#fff';
+    } else {
+      btn.textContent = '🗑 Eliminar';
+      btn.style.background = '';
+      btn.style.color = '';
+    }
+    if (table) table.redraw(true);
   });
   document.getElementById('btn-logout').addEventListener('click', async () => {
     // Borrar cookie httpOnly admin en el servidor (JS no puede borrarla directamente)

@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // scripts/migrate-uploads.js
 // Reorganiza archivos históricos de /uploads/ a /uploads/{email_prefix}/{nif}/
-// Uso: docker exec setex-backend node /app/src/../../../scripts/migrate-uploads.js
+// Uso: docker exec setex-prod-backend node /app/scripts/migrate-uploads.js
 // O directamente en el host: node /opt/setex/prod/scripts/migrate-uploads.js
+// Desde staging: docker exec setex-staging-backend node /app/scripts/migrate-uploads.js
 'use strict';
 
 const { Pool } = require('pg');
@@ -28,7 +29,7 @@ async function run() {
   }
 
   const pool = new Pool({
-    host: process.env.POSTGRES_HOST || 'setex-postgres',
+    host: process.env.POSTGRES_HOST || 'setex-prod-postgres',
     port: 5432,
     database: 'setex_db',
     user: 'setex_user',
