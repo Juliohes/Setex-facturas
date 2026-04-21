@@ -578,6 +578,66 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-04-21 — Backend: `client_company_id` en approve/reject + limpieza repo (post-presentación)
+
+**Contexto:** tras la presentación al cliente (v1.0.0 GO), completar la Opción 2 que quedó pendiente del fix anterior: dejar el backend consistente a nivel de FK cuando se aprueba/rechaza una empresa pendiente.
+
+**Cambios backend (`app/backend/src/server.js`):**
+- `POST /api/admin/companies/:id/approve` — el UPDATE de uploads ahora asigna además `client_company_id = :id` al pasar de `pending` a `active`. Antes quedaba NULL y la asociación se deducía por JOIN contra `users.company_nif` — frágil y rompible si un usuario cambia de CIF. Con el FK asignado, las facturas aprobadas quedan indexadas igual que las de cualquier empresa registrada manualmente
+- `POST /api/admin/companies/:id/reject` — mismo ajuste por coherencia: uploads en `quarantine` conservan `client_company_id` para trazabilidad y revinculación futura. Las queries filtran por `activa=true` → no aparecen en listados normales
+- Respuesta de `/approve` ahora incluye `company_id` (útil si el frontend quiere filtrar facturas por esa empresa inmediatamente tras aprobar)
+
+**Cambios repo (`app/backend/src/repositories/client-companies.repo.js`):**
+- `approve(id, reviewedByUserId)` — antes usaba columnas inexistentes (`approved_at`, `approved_by_email`, `deactivation_reason`) — cualquier invocación habría fallado. Ahora usa las columnas reales del esquema (`reviewed_by`, `reviewed_at`) y coincide 1:1 con el endpoint del server.js
+- Método `deactivate()` eliminado: duplicaba funcionalidad del endpoint PUT `/api/admin/client-companies/:id` genérico
+- Añadido `reject(id, reviewedByUserId, reason)` para completar el par approve/reject coherente con los endpoints
+
+**Despliegue:**
+- Imagen anterior etiquetada como `setex-prod-backend:rollback-20260421-pre-approve-fix` antes del build (rollback instantáneo disponible)
+- `docker compose build backend` → OK; `stop` + `up -d` → ~15s de downtime real
+- Verificación: container `healthy`, logs limpios ("Server running on port 3000"), `https://setex-facturas.es/health` → 200, endpoint admin protegido devuelve 401 sin token como debe
+- No hay empresas pendientes ahora mismo — el cambio afecta solo a futuras aprobaciones
+
+**Pendiente (ROADMAP, no bloqueante):**
+- Smoke test E2E automático del flujo aprobar empresa (Playwright) para que este tipo de bug no resucite
+- Considerar migración de datos que asigne `client_company_id` retroactivamente a uploads activos sin FK cuyo `user.company_nif` matchee el CIF de una empresa registrada (consistencia histórica)
+
+### 2026-04-21 — Fix botones Aprobar/Rechazar empresa pendiente (modal no se cerraba)
+
+**Contexto:** Julio reporta *"el botón de aceptar o rechazar la petición no hacía nada"* en el panel admin, tab Empresas. La única aprobación histórica (id=61 Murimarti Digital, 2026-04-19) se hizo por SQL a mano con nota en `company_audit_log` *"Aprobada vía DB tras fix CSP del modal. Empresa de prueba; retirar en unos días."* → el flujo UI nunca funcionó realmente en producción.
+
+**Diagnóstico:**
+- Backend OK: `POST /api/admin/companies/:id/{approve,reject}` (server.js:3759-3856) ejecutan transacción atómica, activan empresa, cambian `upload_status: 'pending' → 'active'`, registran audit log
+- `authFetch` (admin-facturas.js:19) delega en `Auth.apiFetch` que sí añade `X-Requested-With` — `requireXHR` del backend pasa correctamente
+- Bug real: `_empAprobar` y `_empRechazar` (admin-facturas.js:739-769) **no cerraban el modal `review-company-modal` tras éxito**. Usuario veía la misma pantalla, toast oculto detrás → impresión de "no hace nada". `_linkToCompany` sí lo cerraba (línea 1356) — era selectivo
+
+**Fix aplicado (solo frontend, sin rebuild — despliegue en caliente):**
+- `app/frontend/src/admin-facturas.js`: en `_empAprobar` y `_empRechazar` tras `res.ok`, añadido `document.getElementById('review-company-modal')?.remove()` y `if (table) loadData(currentFilters)` para refrescar también la tabla de facturas (los uploads recién activados ya aparecen en el listado general)
+- `app/frontend/src/admin-facturas.html`: cache-buster `admin-facturas.js?v=20260421-001` → `?v=20260421-002`
+- `node --check` OK; despliegue vía `docker cp` al container `setex-prod-frontend` (zero downtime, nginx continuó sirviendo); checksums disco vs container idénticos; `curl` contra el JS servido devuelve 200 y contiene el código nuevo
+
+**Pendiente para siguiente ventana (Opción 2, no ejecutada hoy):**
+- Backend `/approve` UPDATE de uploads **no asigna `client_company_id`** — las facturas quedan con FK null y se muestran solo por JOIN frágil contra `company_nif`. Mejora de consistencia para que las facturas aprobadas queden indexadas igual que las de empresas registradas normales
+- Repo `client-companies.repo.js:53-68` tiene `approve()` y `deactivate()` que usan columnas inexistentes (`approved_at`, `deactivation_reason`). Código muerto; limpiar para evitar uso futuro accidental
+- Decisión pospuesta: no aplicado hoy por ser día de entrega v1.0.0 y requerir rebuild de backend (~30-40s downtime). Ventana segura: post-presentación
+
+### 2026-04-21 — Alta admin producción `setex@gmail.com` (contraseña temporal)
+
+**Contexto:** Julio solicita alta de una tercera cuenta admin en producción para operación/demo post-entrega v1.0.0.
+
+**Operación ejecutada (sobre `setex-prod-postgres`):**
+- `INSERT INTO users (email, password_hash, company_name, is_admin, auto_confirm_enabled)` con `email='setex@gmail.com'`, `company_name='Setex'`, `company_nif=NULL`, `is_admin=TRUE`, `auto_confirm_enabled=TRUE`
+- `password_hash` generado con `bcrypt` cost 12 dentro de `setex-prod-backend` (igual que `services/auth/password.service.js`). Hash `$2b$12$…` de 60 caracteres
+- Resultado: `user id=23`
+- Registro en `audit_logs` (id 255) con `action='admin_created'` y `details` JSONB (operador, motivo, flag `password temporal pendiente rotacion`)
+- Verificación: `bcrypt.compare('setex1234', hash)` → OK; `bcrypt.compare('wrongpassword', hash)` → rechazado correctamente
+- Estado admins en prod: `id=2` juliohesuni@gmail.com (Autoken), `id=3` albertomurimarti@gmail.com (Autoken), `id=23` setex@gmail.com (Setex) — tres admins activos
+
+**Advertencia de seguridad registrada (para próxima sesión):**
+- Contraseña `setex1234` es **temporal y débil** (diccionario + nombre de cuenta). Pasa la validación de longitud de `password.service.js` (≥8 chars) pero es vulnerable a brute-force de diccionario en el primer intento. El rate-limit de auth (10/15min) no es defensa suficiente contra una contraseña adivinable
+- Pendiente: rotar a contraseña fuerte (≥12 chars, mayús+minús+dígitos+símbolo) vía `/api/me/change-password` en cuanto termine la demo de entrega. Añadir recordatorio de rotación cada 90 días en ROADMAP
+- Pendiente (ROADMAP Q2): MFA/TOTP obligatorio para cualquier cuenta con `is_admin=TRUE`. Hoy no hay segundo factor — una sola credencial concede acceso total a `/admin-facturas.html`, export Excel, borrado de facturas y empresas
+
 ### 2026-04-19 — Fix crítico OCR OpenAI roto + mensaje rojo falso en CIF propio
 
 **Bug crítico OCR (problema raíz, llevaba semanas sin detectar):**
