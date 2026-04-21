@@ -13,7 +13,8 @@
 // Uso:
 //   node scripts/list-invalid-cifs.js
 //
-// Requiere `docker` disponible y el contenedor `setex-postgres` en ejecución.
+// Requiere `docker` disponible y el contenedor `setex-prod-postgres` en ejecución.
+// Override con variable de entorno SETEX_PG_CONTAINER si se invoca desde staging.
 'use strict';
 
 const { execSync } = require('child_process');
@@ -57,10 +58,12 @@ const sql = `
   ORDER BY id;
 `.trim();
 
+const PG_CONTAINER = process.env.SETEX_PG_CONTAINER || 'setex-prod-postgres';
+
 let rows;
 try {
   const raw = execSync(
-    `docker exec setex-postgres psql -U setex_user -d setex_db -t -A -F '|' -c "${sql.replace(/"/g, '\\"')}"`,
+    `docker exec ${PG_CONTAINER} psql -U setex_user -d setex_db -t -A -F '|' -c "${sql.replace(/"/g, '\\"')}"`,
     { encoding: 'utf8' }
   );
   rows = raw.split('\n').filter(l => l.trim().length > 0).map(line => {

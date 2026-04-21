@@ -1,11 +1,20 @@
-# Cron jobs para setex-captu-facture
-# Instalar con: sudo -u setex crontab /opt/setex-captu-facture/config/crontab.txt
+# Cron jobs para SETEX prod
+# Instalado en root crontab del HOST (no en contenedor setex).
+# Reinstalar con: sudo crontab /opt/setex/prod/config/crontab.txt
+# Última actualización: 2026-04-21 (post-cutover Fase 4 + fix watchdog)
 
-# Backup diario de PostgreSQL a las 2:00 AM
-0 2 * * * /opt/setex-captu-facture/scripts/backup-db.sh >> /opt/setex-captu-facture/logs/cron/backup.log 2>&1
+# SETEX watchdog — cada 5 minutos (auto-healing servicios setex-prod-*)
+*/5 * * * * /opt/setex/prod/scripts/watchdog.sh >> /opt/setex/prod/logs/watchdog.log 2>&1
 
-# Health check cada 15 minutos
-*/15 * * * * /opt/setex-captu-facture/scripts/health-check.sh >> /opt/setex-captu-facture/logs/cron/health.log 2>&1
+# SETEX fix-permissions — cada hora (red de seguridad)
+0 * * * * /opt/setex/prod/scripts/fix-permissions.sh >> /opt/setex/prod/logs/permissions.log 2>&1
 
-# Limpieza de uploads antiguos (>7 días) cada día a las 4:00 AM
-0 4 * * * find /opt/setex-captu-facture/data/uploads -type f -mtime +7 -delete >> /opt/setex-captu-facture/logs/cron/cleanup.log 2>&1
+# Backup diario de PostgreSQL cifrado GPG a las 03:00 UTC
+0 3 * * * /opt/setex/prod/scripts/backup-postgres.sh >> /opt/setex/prod/logs/backup.log 2>&1
+
+# Smoke test OCR — 04:30 UTC diario (06:30 Madrid verano / 05:30 invierno)
+# Detecta regresiones de OpenAI schema strict y caídas de Azure DI
+30 4 * * * SETEX_OCR_LOG=/opt/setex/prod/logs/smoke-ocr.log /usr/bin/node /opt/setex/prod/scripts/smoke-test-ocr.js
+
+# Replicación offsite de backups a VPS secundario (72.62.189.27) — 05:00 UTC
+0 5 * * * /opt/setex/prod/scripts/backup-offsite-replicate.sh >> /opt/setex/prod/logs/backup-offsite.log 2>&1

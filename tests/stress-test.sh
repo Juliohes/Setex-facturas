@@ -13,7 +13,13 @@
 #
 set -euo pipefail
 
-API_URL="https://xanflatest.com/api"
+# ── Fuente única de rutas, contenedores y dominio ────────────────────────────
+# (tests/ es paralelo a scripts/; paths.sh vive en scripts/lib)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../scripts/lib/paths.sh
+source "${SCRIPT_DIR}/../scripts/lib/paths.sh"
+
+API_URL="${SETEX_API_URL:-${API_URL}}"
 EMAIL="${1:?Uso: $0 <email> <password> [concurrencia] [total]}"
 PASSWORD="${2:?Falta password}"
 CONCURRENCY="${3:-1}"

@@ -1,87 +1,113 @@
 # CLAUDE.md — SETEX Captura de Facturas
-## setex-facturas.es · Estado real del proyecto · Abril 2026
+## setex-facturas.es · Abril 2026
 
 ## ⚠️ REGLA OBLIGATORIA — INFORME DEL SISTEMA
 Al finalizar CUALQUIER sesión de desarrollo que introduzca cambios, DEBES actualizar:
-`/opt/setex-captu-facture/docs/INFORME_SISTEMA_COMPLETO.md`
-Añadir entrada en la sección 18 (Historial de Cambios) con fecha y descripción de cada cambio.
+`docs/INFORME_SISTEMA_COMPLETO.md` del entorno en el que estés trabajando.
+Añadir entrada en la sección "Historial de Cambios" con fecha y descripción.
 Este documento es la fuente de verdad del producto completo.
 
 ---
 
-## 📍 ESTADO ACTUAL DEL PROYECTO (2026-04-16)
+## 📍 ESTADO ACTUAL DEL PROYECTO (2026-04-21)
 
-La aplicación está construida y funcionando en producción. El OCR ya está integrado.
-**NO es un proyecto OCR en construcción. ES un producto en producción.**
-**Google Drive, Google Sheets y n8n han sido completamente eliminados del proyecto (2026-04-16).**
+La aplicación está construida y funcionando en producción. OCR integrado, tag **v1.0.0** entregado al cliente 2026-04-21. **NO es un proyecto OCR en construcción. ES un producto en producción.**
+**Google Drive, Google Sheets y n8n completamente eliminados (2026-04-16).**
+
+### Dos entornos paralelos (post-cutover Fase 4 · 2026-04-20)
+
+| Entorno | Ruta | Dominio | Containers |
+|---|---|---|---|
+| Producción | `/opt/setex/prod/`  | `setex-facturas.es` | `setex-prod-{backend,frontend,postgres,redis}` |
+| Staging    | `/opt/setex/staging/` | `staging.setex-facturas.es` | `setex-staging-{backend,frontend,postgres,redis}` |
+
+Traefik reverse-proxy compartido (`n8n-traefik-1`) con Let's Encrypt para ambos.
+
+**Contexto de entorno en scripts:** todos los scripts bash sourcean `scripts/lib/paths.sh`, que **autodetecta prod/staging** a partir del directorio de instalación (basename del `BASE_DIR`). Un mismo fichero paths.sh sirve para ambos entornos.
 
 ### Lo que YA FUNCIONA ✅
-- Frontend vanilla JS — cámara, subida, preview, auth
+- Frontend vanilla JS — cámara, subida, preview, auth (ambos entornos)
 - Backend Node.js — Express, multer, JWT, bcrypt
 - Autenticación completa — registro, login, recuperación de contraseña por email
-- OCR multi-motor — GPT-4.1 + Azure DI dual mode
-- Procesamiento síncrono — OCR → confirmación → PostgreSQL (sin cola async)
+- OCR multi-motor dual — GPT-4.1 + Azure DI
+- Procesamiento síncrono — OCR → confirmación → PostgreSQL
 - Redis — cache de seguridad (rate limiting, bloqueos, previews OCR)
 - Validación anti-alucinación — validateCIF.js + lista negra de CIFs falsos
-- Detección de duplicados — unique constraint (user_id, nif, fecha, total)
-- Panel admin OCR — cambio de motor en caliente sin rebuild
-- Rate limiting — auth 10/15min, uploads 30/15min (configurable)
+- Detección duplicados — unique(user_id, nif, fecha, total)
+- Panel admin en `/admin-facturas.html` — listado con Tabulator v6.3.0, edición inline, eliminar filas facturas/empresas, exportación Excel
+- Rate limiting — auth 10/15min, uploads 30/15min
 - Auditoría completa — tabla audit_logs con JSONB
-- HTTPS — Traefik + Let's Encrypt (xanflatest.com)
-- Optimización de imagen — sharp resize 1536px, JPEG 85% (~300KB vs 6MB)
-
-### Infraestructura Docker activa
-```
-setex-postgres   postgres:15-alpine   (healthy)
-setex-backend    app-backend          (healthy)
-setex-redis      redis:7-alpine       (healthy)
-setex-frontend   app-frontend         (healthy)
-traefik          traefik:latest       (reverse proxy HTTPS)
-```
+- HTTPS — Traefik + Let's Encrypt (certificado a 3 meses renovación auto)
+- Optimización imagen — sharp 1536px, JPEG 85% (~300KB vs 6MB)
+- Endpoints RGPD — GET /api/me/export (art. 15+20) · DELETE /api/me/account (art. 17)
+- Watchdog 5min + fix-permissions 1h + backup cifrado 03:00 + smoke OCR 04:30 + offsite 05:00 (prod; staging sin crons por defecto)
 
 ---
 
 ## ⚠️ PROBLEMAS CONOCIDOS ACTIVOS
 
-### MEDIO — PaddleOCR instalado pero sin usar
-- Venv en `/opt/setex-captu-facture/ocr-service/` (~3 GB en disco)
-- `paddleocr.js` existe pero `ocr/index.js` NO lo llama
-- Consume espacio sin beneficio
-- Decisión pendiente: integrarlo o desinstalarlo
+### MEDIO — PaddleOCR instalado pero sin usar (~3 GB)
+`paddleocr.js` existe pero `ocr/index.js` NO lo llama. Decisión pendiente: integrarlo o desinstalar. ROADMAP Q3.
+
+### BAJO — Symlink legacy activo
+`/opt/setex-captu-facture → /opt/setex-captu-facture.OLD-2026-04-20`. Pendiente de borrar tras 1 semana de gracia (ROADMAP Q2). Ningún script/cron activo depende del symlink desde 2026-04-21.
 
 ---
 
-## 🗂️ MAPA DE ARCHIVOS CRÍTICOS
+## 🗂️ MAPA DE ARCHIVOS CRÍTICOS (idéntico en ambos entornos)
 
 ```
-/opt/setex-captu-facture/
+{BASE_DIR}/
 ├── app/
 │   ├── backend/src/
-│   │   ├── server.js                    ← CORE (803 líneas, toda la lógica)
+│   │   ├── server.js                    ← CORE (toda la lógica HTTP)
 │   │   ├── config/
 │   │   │   ├── features.json            ← TOGGLES EN CALIENTE (sin rebuild)
 │   │   │   └── index.js                 ← loader con defaults seguros
 │   │   ├── ocr/
-│   │   │   ├── index.js                 ← orquestador multi-motor (166 líneas)
-│   │   │   ├── openai.js                ← GPT-4.1 ACTIVO (182 líneas)
-│   │   │   ├── azure.js                 ← Azure DI listo (234 líneas)
-│   │   │   ├── gemini.js                ← DESACTIVADO (266 líneas)
-│   │   │   ├── paddleocr.js             ← local, NO integrado (39 líneas)
-│   │   │   └── validateCIF.js           ← validador anti-alucinaciones (72 líneas)
-│   │   ├── services/
-│   │   │   └── viesValidator.js         ← validación VIES (NIF europeo)
-│   │   └── queue/
-│   │       └── index.js                 ← conexión Redis (seguridad + previews)
+│   │   │   ├── index.js                 ← orquestador multi-motor + salvaguarda aritmética IRPF
+│   │   │   ├── openai.js                ← GPT-4.1 ACTIVO (prompt con regla IRPF reforzada 2026-04-21)
+│   │   │   ├── azure.js                 ← Azure DI ACTIVO (dual)
+│   │   │   ├── gemini.js                ← DESACTIVADO
+│   │   │   ├── paddleocr.js             ← NO integrado (ver problemas)
+│   │   │   └── validateCIF.js           ← anti-alucinaciones
+│   │   ├── services/{audit,auth}/       ← Strangler-Fig Rounds 1-4
+│   │   ├── repositories/                ← Repository pattern (R3)
+│   │   ├── domain/{validators,calculators,parsers}/
+│   │   ├── middleware/{rate-limit,request-id}.js
+│   │   └── lib/{errors,filename-generator,normalize-amount}.js
 │   ├── frontend/src/
-│   │   ├── app.js                       ← TODO el JS frontend (351 líneas)
-│   │   └── index.html                   ← HTML + cache-buster version
-│   └── docker-compose.yml               ← 143 líneas, 4 servicios + traefik
-├── secrets/                             ← JWT, postgres, openai, azure, redis, smtp, backup
+│   │   ├── app.js                       ← JS usuario (cache-buster v=AAAAMMDD-NNN)
+│   │   ├── index.html                   ← UI captura
+│   │   ├── admin-facturas.{html,js,css} ← panel admin (Tabulator)
+│   │   └── auth.js                      ← wrapper apiFetch + refresh JWT
+│   └── docker-compose.yml               ← NO TOCAR sin OK de Julio
+├── scripts/
+│   ├── lib/paths.sh                     ← FUENTE ÚNICA (autodetect prod/staging)
+│   ├── watchdog.sh                      ← cron 5min (idéntico en ambos entornos)
+│   ├── fix-permissions.sh               ← cron :00
+│   ├── backup-postgres.sh               ← cron 03:00 (GPG + PIPESTATUS + MIN_BYTES)
+│   ├── backup-offsite-replicate.sh      ← cron 05:00 (VPS 72.62.189.27)
+│   ├── smoke-test-ocr.js                ← cron 04:30 (OpenAI + Azure DI)
+│   ├── health-check.sh                  ← manual
+│   ├── manage-whitelist.sh              ← manual (allowed_emails)
+│   ├── list-invalid-cifs.js             ← auditoría CIFs AEAT
+│   ├── migrate-uploads.js               ← migración puntual
+│   ├── seed-staging.{sh,js}             ← alta datos de prueba en staging
+│   └── backup-db.sh                     ← ⚠️ DEPRECATED (usar backup-postgres.sh)
+├── secrets/                             ← JWT, postgres, openai, azure, redis, smtp, backup, offsite
+├── config/crontab.txt                   ← template cron del entorno
 ├── docs/
-│   ├── INFORME_SEGURIDAD.md             ← auditoría (11 KB)
-│   ├── INFORME_CAPACIDAD_Y_RENDIMIENTO.md ← stress test (11 KB)
-│   └── INFORME_VERIFACTU.md             ← regulatorio España (66 KB)
-└── ocr-service/                         ← PaddleOCR Python (sin usar)
+│   ├── INFORME_SISTEMA_COMPLETO.md      ← fuente de verdad + historial de cambios
+│   ├── plans/MACROPLAN-SETEX-v2.0.md    ← plan maestro fases F0-F4
+│   ├── ROADMAP.md                       ← Q2/Q3/Q4 2026
+│   ├── PLAYBOOK_EMERGENCIAS.md
+│   ├── GUIA_USUARIO.md                  ← manual cliente (RGPD, ventana 00-06, soporte)
+│   ├── DECISIONS.md                     ← ADRs
+│   └── audits/AUDIT-YYYY-MM-DD.md       ← auditorías forenses trimestrales
+└── tests/
+    ├── stress-test.sh                   ← sourcea ../scripts/lib/paths.sh
+    └── e2e-tests.sh
 ```
 
 ---
@@ -114,49 +140,21 @@ traefik          traefik:latest       (reverse proxy HTTPS)
 7. POST /api/upload-confirm → validación campos → CIF/NIF + fecha + total
 8. Detección duplicados → unique(user_id, nif, fecha, total)
 9. INSERT uploads table → PostgreSQL (procesado_en = NOW())
-10. Respuesta al usuario → success/duplicate/missing_fields
+10. Respuesta → success | duplicate | missing_fields
 ```
-
----
-
-## 🚀 PRÓXIMOS PASOS (ordenados por prioridad)
-
-### P1 — Mejoras de seguridad pendientes
-1. **CSRF protection**: middleware csrf-csrf (pendiente del informe de seguridad)
-2. **httpOnly cookies**: migrar JWT de localStorage a httpOnly (más seguro)
-
-### P2 — Funcionalidades nuevas
-3. **Multi-empresa**: soporte para múltiples empresas con facturación separada
-4. **Notificaciones**: email cuando se procesa una factura
-
-### P3 — Optimización y limpieza
-5. **Remover PaddleOCR o integrarlo**: decisión pendiente (3 GB en disco, sin uso)
-6. **Backup offsite**: replicar backups cifrados a cloud storage externo
-
----
-
-## 📊 RENDIMIENTO (stress test 2026-03-02)
-
-| Concurrencia | Éxito | Facturas/min | Nota |
-|:---:|:---:|:---:|:---|
-| x1 | 100% | 15 | Referencia |
-| x3 | **100%** | **58** | **ÓPTIMO** |
-| x5 | 73% | 83 | Acceptable |
-| x10 | 40% | 122 | Inestable |
-| x15+ | 0% | — | Sharp CPU exhaustion |
-
-**Bottleneck**: Sharp (0.5 CPU limit). Subir a 1.0 CPU → concurrencia óptima x5-x7.
 
 ---
 
 ## 🛠️ COMANDOS OPERATIVOS
 
+Todos los comandos asumen `cd /opt/setex/prod` o `cd /opt/setex/staging` previo. Los scripts resuelven containers y rutas automáticamente vía `scripts/lib/paths.sh`.
+
 ```bash
-# Estado general
-docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+# Estado general del entorno activo
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep "setex-$(basename $PWD)-"
 
 # Rebuild y redeploy backend (cuando cambia código fuente)
-cd /opt/setex-captu-facture/app
+cd app
 docker compose build backend && docker compose stop backend && docker compose up -d backend
 
 # Solo restart (cuando cambian features.json o secrets)
@@ -166,15 +164,18 @@ docker compose restart backend
 docker compose logs -f backend
 docker compose logs -f frontend
 
-# Redis debug
-docker exec setex-redis redis-cli -a "$(docker exec setex-redis grep -m1 requirepass /etc/redis/redis.conf | awk '{print $2}')" INFO memory
+# Health check rápido (detecta entorno automáticamente)
+./scripts/health-check.sh
+
+# Redis debug (usa paths.sh para el nombre de container)
+source scripts/lib/paths.sh && docker exec "$CONTAINER_REDIS" redis-cli -a "$(docker exec "$CONTAINER_REDIS" grep -m1 requirepass /etc/redis/redis.conf | awk '{print $2}')" INFO memory
 
 # PostgreSQL — facturas procesadas
-docker exec setex-postgres psql -U setex_user -d setex_db \
+source scripts/lib/paths.sh && docker exec "$CONTAINER_PG" psql -U "$PG_USER" -d "$PG_DB" \
   -c "SELECT COUNT(*), COUNT(procesado_en) AS procesadas FROM uploads;"
 
 # Backup manual cifrado
-/opt/setex-captu-facture/scripts/backup-postgres.sh
+./scripts/backup-postgres.sh
 ```
 
 ---
@@ -186,10 +187,12 @@ docker exec setex-postgres psql -U setex_user -d setex_db \
 3. **SIEMPRE** rebuild antes de restart cuando cambias código en `src/`
 4. **features.json** cambia en caliente → NO rebuild necesario
 5. **Secretos** en `/run/secrets/` SIEMPRE, nunca hardcoded ni en `.env`
-6. **Cache-buster** en `index.html` → actualizar `?v=YYYYMMDD-NNN` al cambiar JS/CSS
+6. **Cache-buster** en `index.html` + `admin-facturas.html` → actualizar `?v=YYYYMMDD-NNN` al cambiar JS/CSS
 7. `docker compose restart` NO recarga env vars → usar `stop` + `up -d`
 8. **Google Drive, Sheets y n8n eliminados** — no añadir código relacionado
+9. **Scripts bash NUEVOS** deben `source "${SCRIPT_DIR}/lib/paths.sh"` para contenedores/dominio/rutas; NO hardcodear `setex-prod-*`, `setex-staging-*` ni dominios. El fichero paths.sh autodetecta el entorno.
+10. **Auditorías firmadas** (`INFORME_SEGURIDAD.md`, `AUDIT-*.md`, `REVISION_*`, `DECISIONS.md`) son documentos históricos — no reescribir contenido antiguo, solo añadir entradas nuevas al historial
 
 ---
 
-*SETEX Captura Facturas · setex-facturas.es · Actualizado 2026-04-16*
+*SETEX Captura Facturas · setex-facturas.es · Actualizado 2026-04-21 (watchdog fix + paths.sh autodetect + IRPF hardening + Excel rework + admin delete)*

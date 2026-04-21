@@ -6,10 +6,13 @@
 
 set -uo pipefail
 
-BASE=/opt/setex/prod
-COMPOSE="docker compose -f $BASE/app/docker-compose.yml"
-LOG="$BASE/logs/watchdog.log"
-ALERT_LOG="$BASE/logs/watchdog-alerts.log"
+# ── Fuente única de rutas, contenedores y dominio ────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/paths.sh
+source "${SCRIPT_DIR}/lib/paths.sh"
+
+LOG="${LOGS_DIR}/watchdog.log"
+ALERT_LOG="${LOGS_DIR}/watchdog-alerts.log"
 MAX_LOG_MB=10
 
 # Truncar log si supera 10 MB
@@ -42,25 +45,25 @@ check_perm() {
   fi
 }
 
-check_perm "$BASE/data/redis"    "999"  "Redis data"
-check_perm "$BASE/data/postgres" "70"   "PostgreSQL data"
-check_perm "$BASE/data/uploads"  "1001" "Backend uploads"
-check_perm "$BASE/logs"          "1001" "Logs dir"
+check_perm "${DATA_DIR}/redis"    "999"  "Redis data"
+check_perm "${DATA_DIR}/postgres" "70"   "PostgreSQL data"
+check_perm "${DATA_DIR}/uploads"  "1001" "Backend uploads"
+check_perm "${LOGS_DIR}"          "1001" "Logs dir"
 
 # ── 2. REDIS: test de escritura real ─────────────────────────────────────────
-if ! docker exec setex-redis redis-cli SET watchdog_check "ok" > /dev/null 2>&1; then
+if ! docker exec "${CONTAINER_REDIS}" redis-cli SET watchdog_check "ok" > /dev/null 2>&1; then
   alert "Redis NO puede escribir — MISCONF o caído"
   ISSUES=$((ISSUES + 1))
   # Intentar restart
   $COMPOSE restart redis >> "$LOG" 2>&1 && sleep 5
   fix "Redis reiniciado"
 else
-  docker exec setex-redis redis-cli DEL watchdog_check > /dev/null 2>&1
+  docker exec "${CONTAINER_REDIS}" redis-cli DEL watchdog_check > /dev/null 2>&1
   ok "Redis escribe correctamente"
 fi
 
 # ── 3. POSTGRES: query real ───────────────────────────────────────────────────
-if ! docker exec setex-postgres psql -U setex_user -d setex_db -c "SELECT 1;" > /dev/null 2>&1; then
+if ! docker exec "${CONTAINER_PG}" psql -U "${PG_USER}" -d "${PG_DB}" -c "SELECT 1;" > /dev/null 2>&1; then
   alert "PostgreSQL NO responde a queries — posible problema de permisos o crash"
   ISSUES=$((ISSUES + 1))
   $COMPOSE restart postgres >> "$LOG" 2>&1 && sleep 10
@@ -70,7 +73,7 @@ else
 fi
 
 # ── 4. BACKEND: health check real ────────────────────────────────────────────
-BACKEND_STATUS=$(docker inspect --format='{{.State.Health.Status}}' setex-backend 2>/dev/null || echo "unknown")
+BACKEND_STATUS=$(docker inspect --format='{{.State.Health.Status}}' "${CONTAINER_BE}" 2>/dev/null || echo "unknown")
 if [ "$BACKEND_STATUS" != "healthy" ]; then
   alert "Backend status: $BACKEND_STATUS — reiniciando"
   ISSUES=$((ISSUES + 1))
@@ -84,10 +87,10 @@ else
 fi
 
 # ── 5. FRONTEND: acceso real ─────────────────────────────────────────────────
-FRONTEND_STATUS=$(docker inspect --format='{{.State.Health.Status}}' setex-frontend 2>/dev/null || echo "unknown")
+FRONTEND_STATUS=$(docker inspect --format='{{.State.Health.Status}}' "${CONTAINER_FE}" 2>/dev/null || echo "unknown")
 if [ "$FRONTEND_STATUS" != "healthy" ]; then
   # Verificar si nginx realmente sirve (puede ser falso positivo IPv6)
-  if ! docker exec setex-frontend wget -qO- http://127.0.0.1/health > /dev/null 2>&1; then
+  if ! docker exec "${CONTAINER_FE}" wget -qO- http://127.0.0.1/health > /dev/null 2>&1; then
     alert "Frontend no responde — reiniciando"
     ISSUES=$((ISSUES + 1))
     $COMPOSE restart frontend >> "$LOG" 2>&1
@@ -100,15 +103,15 @@ else
 fi
 
 # ── 6. TRAEFIK: acceso HTTPS externo ─────────────────────────────────────────
-HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" https://xanflatest.com/ --max-time 10 2>/dev/null || echo "000")
+HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" "${BASE_URL}/" --max-time 10 2>/dev/null || echo "000")
 if [ "$HTTP_CODE" = "000" ]; then
-  alert "xanflatest.com no responde (timeout) — revisar Traefik"
+  alert "${DOMAIN} no responde (timeout) — revisar Traefik"
   ISSUES=$((ISSUES + 1))
 elif [ "$HTTP_CODE" -ge 500 ] 2>/dev/null; then
-  alert "xanflatest.com devuelve HTTP $HTTP_CODE"
+  alert "${DOMAIN} devuelve HTTP $HTTP_CODE"
   ISSUES=$((ISSUES + 1))
 else
-  ok "xanflatest.com responde HTTP $HTTP_CODE"
+  ok "${DOMAIN} responde HTTP $HTTP_CODE"
 fi
 
 # ── 7. DISCO: alerta si > 80% ────────────────────────────────────────────────
@@ -121,9 +124,9 @@ else
 fi
 
 # ── 8. GOOGLE AUTH: detectar invalid_grant en logs recientes ────────────────
-if docker compose -f "$BASE/app/docker-compose.yml" logs --tail=50 backend 2>/dev/null | grep -q "invalid_grant"; then
+if $COMPOSE logs --tail=50 backend 2>/dev/null | grep -q "invalid_grant"; then
   alert "GOOGLE AUTH: invalid_grant detectado — token OAuth2 expirado o revocado"
-  alert "ACCIÓN REQUERIDA: docker exec -it setex-backend node /app/renew-oauth2-interactive.js"
+  alert "ACCIÓN REQUERIDA: docker exec -it ${CONTAINER_BE} node /app/renew-oauth2-interactive.js"
   ISSUES=$((ISSUES + 1))
 else
   ok "Google Auth: sin errores invalid_grant"
