@@ -193,20 +193,79 @@ function validateIVACoherencia(campos) {
 /**
  * Fusiona dos arrays de lineas_iva (OpenAI y Azure) tomando el más completo.
  * Prioridad: el que tenga más líneas (Azure si tiene TaxDetails; OpenAI si detectó más).
+ *
+ * 2026-04-21 super-tarea multi-IVA: el nuevo schema incluye `productos: []`
+ * dentro de cada línea. Al fusionar, si un lado tiene productos y el otro no,
+ * preservamos los productos. Si ambos tienen, priorizamos OpenAI (mejor lectura
+ * de descripciones en español). Dedupe por "descripcion+importe" exacto para
+ * evitar líneas repetidas cuando ambos OCR detectan los mismos productos.
  */
 function mergeLineasIva(openaiLineas, azureLineas) {
   const o = Array.isArray(openaiLineas) ? openaiLineas : [];
   const a = Array.isArray(azureLineas)  ? azureLineas  : [];
 
   if (o.length === 0 && a.length === 0) return null;
-  if (o.length === 0) return a;
-  if (a.length === 0) return o;
+  if (o.length === 0) return normalizeProductos(a);
+  if (a.length === 0) return normalizeProductos(o);
 
-  // Si coinciden en número de líneas, preferir Azure (sin alucinaciones)
-  if (o.length === a.length) return a;
+  // Construir índice por porcentaje para cruzar tramos entre motores.
+  const byPct = new Map();
+  for (const l of a) {
+    const pct = String(l.porcentaje || '').trim();
+    if (pct) byPct.set(pct, { ...l, productos: Array.isArray(l.productos) ? l.productos : [] });
+  }
 
-  // Tomar el que tiene más líneas (más detalle)
-  return a.length > o.length ? a : o;
+  for (const l of o) {
+    const pct = String(l.porcentaje || '').trim();
+    if (!pct) continue;
+    const existing = byPct.get(pct);
+    const oProds = Array.isArray(l.productos) ? l.productos : [];
+    if (!existing) {
+      // Tramo solo visto por OpenAI
+      byPct.set(pct, { ...l, productos: oProds });
+      continue;
+    }
+    // Tramo visto por ambos: preferir base/cuota de Azure (más exacto) y
+    // productos fusionados con OpenAI prioritario en descripciones.
+    const mergedProds = mergeProductos(oProds, existing.productos);
+    byPct.set(pct, {
+      base:       existing.base       || l.base,
+      porcentaje: pct,
+      cuota:      existing.cuota      || l.cuota,
+      productos:  mergedProds
+    });
+  }
+
+  const merged = Array.from(byPct.values());
+  return merged.length > 0 ? merged : null;
+}
+
+/** Normaliza productos: asegura que cada línea tiene array productos (aunque vacío). */
+function normalizeProductos(lineas) {
+  return lineas.map(l => ({
+    ...l,
+    productos: Array.isArray(l.productos) ? l.productos : []
+  }));
+}
+
+/** Fusiona dos arrays de productos dedupeando por descripcion+importe. */
+function mergeProductos(prodsA, prodsB) {
+  const seen = new Set();
+  const out = [];
+  const push = (p) => {
+    if (!p || !p.descripcion) return;
+    const key = `${String(p.descripcion).trim().toLowerCase()}|${p.importe || ''}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({
+      descripcion: String(p.descripcion).substring(0, 120),
+      importe:     p.importe || null
+    });
+  };
+  // OpenAI prioritario (mejor descripciones españolas)
+  for (const p of (prodsA || [])) push(p);
+  for (const p of (prodsB || [])) push(p);
+  return out;
 }
 
 module.exports = { validateIVACoherencia, mergeLineasIva, parseSpanishAmount, parsePercent };
