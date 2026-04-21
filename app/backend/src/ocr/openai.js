@@ -90,18 +90,30 @@ CASO 2 — MÚLTIPLES TIPOS DE IVA (hostelería, mixtos, etc.):
   - lineas_iva: una entrada POR CADA TIPO → [{base, porcentaje, cuota}, ...]
 
 ━━━ IRPF — RETENCIÓN DE AUTÓNOMOS Y PROFESIONALES ━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CUÁNDO APARECE: SOLO en facturas de AUTÓNOMOS o PROFESIONALES INDEPENDIENTES.
-  Pista: si proveedor_nif tiene formato NIF (8 dígitos + letra) o NIE → casi seguro que hay IRPF.
-  Si proveedor_nif es CIF (letra + 7 dígitos) → empresa, normalmente NO hay IRPF.
+CUÁNDO APARECE: en facturas de AUTÓNOMOS, PROFESIONALES INDEPENDIENTES y TAMBIÉN
+  en facturas B2B de empresas (SL/SA) que facturan servicios profesionales
+  (agencias, consultoras, despachos, estudios, inmobiliarias, alquileres, etc.).
+  ⚠️ NO descartes IRPF por el formato del NIF del emisor — hay CIF (empresas)
+     que SÍ emiten con retención. La presencia de IRPF depende del TIPO DE
+     SERVICIO facturado y del ACUERDO con el cliente, no del tipo de emisor.
 
-CÓMO LOCALIZARLO EN LA FACTURA — busca estas etiquetas:
+REGLA ARITMÉTICA CRÍTICA — detección por balance:
+  Si Total < Base imponible + Cuota IVA  →  HAY IRPF obligatoriamente.
+  La diferencia exacta es la Cuota IRPF. Ejemplo:
+    Base 1.000 + IVA 210 = 1.210. Si el total es 1.060 → IRPF = 150 (15%).
+  Cuando veas esta discrepancia, BUSCA el IRPF en la factura. Si no localizas
+  la etiqueta pero el balance lo exige, RELLENA los campos usando el cálculo:
+    cuota_irpf = (base + cuota_iva) − total
+    irpf_porcentaje = round(cuota_irpf / base × 100, 1) en formato "15,0"
+
+CÓMO LOCALIZARLO VISUALMENTE — busca estas etiquetas:
   "Retención IRPF", "Ret. IRPF", "R.I.R.P.F.", "IRPF", "Retención", "Rte. IRPF"
   "% Retención", "% Ret.", "I.R.P.F.", "-IRPF", "(−15%)", "Ret. a cuenta"
   Aparece como DEDUCCIÓN con signo negativo o en columna de descuentos/retenciones.
   SIEMPRE se RESTA del subtotal para calcular el total a pagar.
 
 TIPOS DE IRPF MÁS COMUNES EN FACTURAS ESPAÑOLAS:
-  - 15,0% → autónomo general (el más habitual)
+  - 15,0% → autónomo general / profesional (el más habitual)
   - 7,0%  → autónomo nuevo (primeros 3 años desde alta en Hacienda)
   - 2,0%  → actividades agrícolas, ganaderas o forestales
   - 19,0% → alquiler de inmuebles a empresas / capital mobiliario
@@ -112,10 +124,11 @@ FÓRMULA CON IRPF:
   Ejemplo práctico:
     Base: 1.000,00€  |  IVA 21%: 210,00€  |  IRPF 15%: −150,00€  |  TOTAL: 1.060,00€
 
-CAMPOS A RELLENAR SI HAY IRPF:
+CAMPOS A RELLENAR SI HAY IRPF (sea por etiqueta o por balance aritmético):
   - irpf_porcentaje: solo el número sin % (ej: "15,0", "7,0", "2,0")
   - cuota_irpf: importe retenido en formato español (ej: "150,00")
-  - Si NO hay IRPF en la factura → irpf_porcentaje: "0,0", cuota_irpf: "0,00"
+  - Si NO hay IRPF en la factura Y el balance Total = Base + IVA cuadra exacto
+    (±0,05€ tolerancia) → irpf_porcentaje: "0,0", cuota_irpf: "0,00"
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Devuelve un JSON con EXACTAMENTE estos campos:
