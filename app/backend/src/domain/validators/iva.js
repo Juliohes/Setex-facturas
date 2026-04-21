@@ -268,4 +268,106 @@ function mergeProductos(prodsA, prodsB) {
   return out;
 }
 
-module.exports = { validateIVACoherencia, mergeLineasIva, parseSpanishAmount, parsePercent };
+/**
+ * Normaliza un array de lineas_iva recibido del usuario (modal de comprobación o
+ * panel admin) y devuelve un objeto con el array saneado + agregados recalculados.
+ *
+ * Super-tarea multi-IVA 2026-04-21 parte 2/7: el usuario puede editar líneas
+ * individuales en la UI de comprobación. Esta función:
+ *   1. Valida que cada línea tiene base/porcentaje/cuota como strings no vacíos.
+ *   2. Normaliza productos a [] (nunca null) y trimea descripciones a 120 chars.
+ *   3. Recalcula base_imponible = SUMA de bases, cuota_iva = SUMA de cuotas.
+ *   4. Elige iva_porcentaje = porcentaje del tramo con mayor cuota (consistencia
+ *      con lo que muestra el panel admin como "tipo dominante").
+ *
+ * Devuelve { lineas, base, cuota, porcentaje, errors }.
+ *   - lineas: array normalizado listo para JSON.stringify a BD
+ *   - base/cuota/porcentaje: strings en formato español listos para columnas
+ *     agregadas (base_imponible/cuota_iva/iva_porcentaje)
+ *   - errors: array de strings con problemas detectados (no bloqueantes —
+ *     decide el llamante si aceptar o rechazar el payload)
+ *
+ * Si el array es null/vacío o todas las líneas son inválidas, devuelve
+ * { lineas: null, base: null, cuota: null, porcentaje: null, errors: [...] }
+ * para que el llamante caiga al flujo mono-IVA.
+ */
+function normalizeConfirmedLineasIva(rawLineas) {
+  const errors = [];
+  if (!Array.isArray(rawLineas) || rawLineas.length === 0) {
+    return { lineas: null, base: null, cuota: null, porcentaje: null, errors };
+  }
+
+  const fmtAmount = (n) => Number.isFinite(n)
+    ? n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : null;
+  const fmtPct = (n) => Number.isFinite(n)
+    ? (Math.round(n * 10) / 10).toFixed(1).replace('.', ',')
+    : null;
+
+  const cleanLineas = [];
+  let sumBase = 0;
+  let sumCuota = 0;
+  let dominantRate = null;
+  let dominantCuota = -1;
+
+  // Parse porcentaje directo al entero visible (21, 10, 4) — NO al decimal 0.21
+  // parsePercent() del módulo convierte para cálculo matemático, no para display.
+  const parseRateEntero = (raw) => {
+    if (raw == null) return null;
+    const clean = String(raw).replace(',', '.').replace('%', '').trim();
+    const n = parseFloat(clean);
+    if (!Number.isFinite(n)) return null;
+    return n < 1 ? n * 100 : n;   // 0.21 → 21; 21 → 21
+  };
+
+  for (let i = 0; i < rawLineas.length; i++) {
+    const l = rawLineas[i] || {};
+    const baseNum = parseSpanishAmount(l.base);
+    const cuotaNum = parseSpanishAmount(l.cuota);
+    const pctNum = parseRateEntero(l.porcentaje);
+
+    if (baseNum == null || cuotaNum == null || pctNum == null) {
+      errors.push(`línea ${i}: base/porcentaje/cuota vacíos o no parseables`);
+      continue; // línea inválida — fuera del desglose
+    }
+
+    const productos = Array.isArray(l.productos) ? l.productos : [];
+    const cleanProductos = [];
+    for (const p of productos) {
+      if (!p || !p.descripcion) continue;
+      const desc = String(p.descripcion).trim().substring(0, 120);
+      if (!desc) continue;
+      const imp = p.importe != null ? String(p.importe).trim() : null;
+      cleanProductos.push({ descripcion: desc, importe: imp || null });
+    }
+
+    cleanLineas.push({
+      base:       fmtAmount(baseNum),
+      porcentaje: fmtPct(pctNum),
+      cuota:      fmtAmount(cuotaNum),
+      productos:  cleanProductos,
+    });
+
+    sumBase += baseNum;
+    sumCuota += cuotaNum;
+    if (cuotaNum > dominantCuota) {
+      dominantCuota = cuotaNum;
+      dominantRate = pctNum;
+    }
+  }
+
+  if (cleanLineas.length === 0) {
+    errors.push('ninguna línea válida — no se puede reconstruir desglose');
+    return { lineas: null, base: null, cuota: null, porcentaje: null, errors };
+  }
+
+  return {
+    lineas: cleanLineas,
+    base:   fmtAmount(sumBase),
+    cuota:  fmtAmount(sumCuota),
+    porcentaje: fmtPct(dominantRate),
+    errors,
+  };
+}
+
+module.exports = { validateIVACoherencia, mergeLineasIva, parseSpanishAmount, parsePercent, normalizeConfirmedLineasIva };

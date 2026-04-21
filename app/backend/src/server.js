@@ -23,7 +23,7 @@ const { extractInvoiceOCR, extractCIFOnlyOCR } = require('./ocr/index');
 // Los requires desde ./ocr/validateCIF e ./ocr/validateIVA siguen funcionando por
 // shims retrocompatibles, pero ahora importamos directamente desde domain/.
 const { validateSpanishTaxId, checkDigitCIF } = require('./domain/validators/nif');
-const { validateIVACoherencia } = require('./domain/validators/iva');
+const { validateIVACoherencia, normalizeConfirmedLineasIva } = require('./domain/validators/iva');
 const { connection: redisClient } = require('./queue/index');
 const { validateVIES } = require('./services/viesValidator');
 
@@ -1970,6 +1970,11 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
       confirmed_cuota_iva,
       confirmed_irpf_porcentaje,
       confirmed_cuota_irpf,
+      // Multi-IVA 2026-04-21 parte 2/7: array editable de tramos con productos
+      // Estructura: [{base, porcentaje, cuota, productos:[{descripcion, importe}]}]
+      // Si viene → overrides base/porcentaje/cuota agregados como sumas
+      // Si no viene → backward compat con campos.lineas_iva original del OCR
+      confirmed_lineas_iva,
     } = req.body || {};
 
     // client_company_id viene del preview almacenado en Redis (no del body — evita tampering)
@@ -2128,13 +2133,40 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
       azure: preview.ocr_dual_full?.azure || null,
     });
 
-    // Resolver campos IVA: usar valores corregidos por el usuario o los del OCR
-    const finalBaseImponible  = cleanStr(confirmed_base_imponible  || campos.base_imponible  || ocrFull.base_imponible);
-    const finalIvaPorcentaje  = cleanStr(confirmed_iva_porcentaje  || campos.iva_porcentaje  || ocrFull.iva_porcentaje);
-    const finalCuotaIva       = cleanStr(confirmed_cuota_iva       || campos.cuota_iva       || ocrFull.cuota_iva);
+    // Resolver campos IVA con prioridad: usuario > OCR-preview > OCR-full.
+    // Multi-IVA (parte 2/7): si el usuario envía `confirmed_lineas_iva` editadas,
+    // el helper normalizeConfirmedLineasIva valida cada tramo y recalcula los
+    // agregados (base/cuota suma de tramos, porcentaje = tipo dominante).
+    // Esto garantiza coherencia entre columnas agregadas y JSONB `lineas_iva`
+    // (antes del fix se guardaban desincronizados).
+    let finalLineasIva = campos.lineas_iva || ocrFull.lineas_iva || null;
+    let aggregatedFromLines = { base: null, cuota: null, porcentaje: null };
+    if (Array.isArray(confirmed_lineas_iva) && confirmed_lineas_iva.length > 0) {
+      const norm = normalizeConfirmedLineasIva(confirmed_lineas_iva);
+      if (norm.lineas && norm.lineas.length > 0) {
+        finalLineasIva = norm.lineas;
+        aggregatedFromLines = { base: norm.base, cuota: norm.cuota, porcentaje: norm.porcentaje };
+        if (norm.errors.length > 0) {
+          logger.warn(`[Confirm] lineas_iva con warnings (líneas descartadas): ${norm.errors.join('; ')}`);
+        }
+      } else {
+        logger.warn(`[Confirm] lineas_iva rechazadas por normalizeConfirmedLineasIva: ${norm.errors.join('; ')}`);
+      }
+    }
+
+    // Orden de prioridad para agregados:
+    //   1. Sumas recalculadas de lineas_iva (si hay multi-tramo válido)
+    //   2. Valor confirmado por el usuario en el input agregado (flujo mono-IVA)
+    //   3. Valor del preview OCR
+    //   4. Valor del OCR full
+    const finalBaseImponible  = aggregatedFromLines.base
+      || cleanStr(confirmed_base_imponible  || campos.base_imponible  || ocrFull.base_imponible);
+    const finalIvaPorcentaje  = aggregatedFromLines.porcentaje
+      || cleanStr(confirmed_iva_porcentaje  || campos.iva_porcentaje  || ocrFull.iva_porcentaje);
+    const finalCuotaIva       = aggregatedFromLines.cuota
+      || cleanStr(confirmed_cuota_iva       || campos.cuota_iva       || ocrFull.cuota_iva);
     const finalIrpfPorcentaje = cleanStr(confirmed_irpf_porcentaje || campos.irpf_porcentaje || ocrFull.irpf_porcentaje) || '0,0';
     const finalCuotaIrpf      = cleanStr(confirmed_cuota_irpf      || campos.cuota_irpf      || ocrFull.cuota_irpf)      || '0,00';
-    const finalLineasIva      = campos.lineas_iva || ocrFull.lineas_iva || null;
     // Número de factura: prioridad al valor confirmado/editado por el usuario en el modal
     const finalNumeroFactura  = cleanStr(confirmed_numero_factura || campos.numero_factura || ocrFull.numero_factura);
 
