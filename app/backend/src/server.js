@@ -3229,6 +3229,7 @@ app.get('/api/admin/facturas/export.xlsx', authenticateToken, requireAdmin, asyn
                 u.numero_factura,
                 u.fecha_emision, u.base_imponible, u.total_factura, u.iva_porcentaje, u.cuota_iva,
                 u.irpf_porcentaje, u.cuota_irpf, u.moneda, u.confidence_level,
+                u.lineas_iva,
                 u.invoice_type, u.uploaded_at
          FROM uploads u
          LEFT JOIN users us ON u.user_id = us.id
@@ -3326,6 +3327,85 @@ app.get('/api/admin/facturas/export.xlsx', authenticateToken, requireAdmin, asyn
         if (rowNum > 1 && typeof cell.value === 'number') cell.numFmt = numFmt;
       });
     });
+
+    // ── Multi-IVA 2026-04-21 parte 5/7 — Hoja secundaria "Desglose IVA" ──────
+    // Para cada factura con lineas_iva no-null, una fila por tramo.
+    // Facturas mono-IVA NO aparecen aquí (la hoja principal "Facturas" ya las cubre).
+    const parseNumES = (s) => {
+      if (s == null || s === '') return null;
+      const clean = String(s).replace(/\./g, '').replace(',', '.').replace(/[€$\s]/g, '');
+      const n = parseFloat(clean);
+      return Number.isFinite(n) ? n : null;
+    };
+    const wsDesg = wb.addWorksheet('Desglose IVA');
+    wsDesg.columns = [
+      { header: 'ID',                key: 'codigo_cliente',       width: 12 },
+      { header: 'Empresa',           key: 'display_empresa',      width: 30 },
+      { header: 'CIF Empresa',       key: 'display_empresa_nif',  width: 16 },
+      { header: 'Cliente / Proveedor', key: 'display_contraparte',width: 30 },
+      { header: 'CIF Cl/Prov',       key: 'display_contraparte_nif', width: 16 },
+      { header: 'Nº Factura',        key: 'numero_factura',       width: 18 },
+      { header: 'Fecha',             key: 'fecha_emision',        width: 14 },
+      { header: 'IVA %',             key: 'iva_pct_tramo',        width: 10 },
+      { header: 'Base tramo (€)',    key: 'base_tramo',           width: 15 },
+      { header: 'Cuota tramo (€)',   key: 'cuota_tramo',          width: 15 },
+      { header: 'Total tramo (€)',   key: 'total_tramo',          width: 15 },
+      { header: 'Productos del tramo', key: 'productos_str',      width: 60 },
+    ];
+    // Cabecera mismo estilo corporativo
+    wsDesg.getRow(1).eachCell(cell => {
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2D6A4F' } };
+      cell.alignment = { vertical: 'middle', horizontal: 'center' };
+    });
+    wsDesg.getRow(1).height = 20;
+    wsDesg.views = [{ state: 'frozen', ySplit: 1 }];
+
+    for (const r of result.rows) {
+      const lineas = Array.isArray(r.lineas_iva) ? r.lineas_iva : null;
+      if (!lineas || lineas.length === 0) continue;
+      const disp = computeDisplayCompanies(r);
+      let codigoCliente = r.codigo_cliente;
+      if (!codigoCliente && disp.display_empresa_nif) {
+        const cleanNif = disp.display_empresa_nif.toUpperCase().replace(/[^A-Z0-9]/g, '');
+        codigoCliente = ccMap.get(cleanNif) || null;
+      }
+      for (const tramo of lineas) {
+        const baseN  = parseNumES(tramo.base);
+        const cuotaN = parseNumES(tramo.cuota);
+        const pctN   = parseNumES(tramo.porcentaje);
+        const productos = Array.isArray(tramo.productos) ? tramo.productos : [];
+        const productosStr = productos.length > 0
+          ? productos.map(p => {
+              const imp = p.importe ? ` (${p.importe} €)` : '';
+              return `${p.descripcion || ''}${imp}`.trim();
+            }).filter(Boolean).join(' · ')
+          : '';
+        wsDesg.addRow({
+          codigo_cliente:          codigoCliente || '',
+          display_empresa:         disp.display_empresa         || '',
+          display_empresa_nif:     disp.display_empresa_nif     || '',
+          display_contraparte:     disp.display_contraparte     || '',
+          display_contraparte_nif: disp.display_contraparte_nif || '',
+          numero_factura:          r.numero_factura   || '',
+          fecha_emision:           r.fecha_emision    || '',
+          iva_pct_tramo:           pctN   != null ? pctN   : '',
+          base_tramo:              baseN  != null ? baseN  : '',
+          cuota_tramo:             cuotaN != null ? cuotaN : '',
+          total_tramo:             (baseN != null && cuotaN != null) ? (baseN + cuotaN) : '',
+          productos_str:           productosStr,
+        });
+      }
+    }
+    // Formato numérico para columnas monetarias de la hoja Desglose
+    ['base_tramo', 'cuota_tramo', 'total_tramo', 'iva_pct_tramo'].forEach(key => {
+      const col = wsDesg.getColumn(key);
+      col.eachCell({ includeEmpty: false }, (cell, rowNum) => {
+        if (rowNum > 1 && typeof cell.value === 'number') cell.numFmt = numFmt;
+      });
+    });
+    // Wrap text para la columna de productos largos
+    wsDesg.getColumn('productos_str').alignment = { wrapText: true, vertical: 'top' };
 
     // Nombre de fichero: setex_facturas_FECHADESDE_FECHAHASTA_EMPRESA.xlsx
     // Fechas = rango de factura (filtros desde/hasta). Si no hay filtro → hoy_hoy.
