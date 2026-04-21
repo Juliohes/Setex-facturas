@@ -2111,5 +2111,50 @@ Añade esta línea (backup cada día a las 3:00 AM):
 
 ---
 
+### 2026-04-21 — Sesión v1.0.1: fix watchdog post-cutover + paths.sh autodetect + IRPF + Excel rework + admin delete
+
+**Contexto:** día de entrega al cliente (v1.0.0 pusheado 2026-04-20). Tras el smoke manual Julio reporta 3 incidencias. Cliente concede +7h de margen.
+
+**Incidencia crítica detectada en logs matinales:**
+- Watchdog prod reiniciaba cada 5 min los 4 containers healthy (bucle vivo 07:10→08:06 UTC).
+- Causa raíz: `scripts/watchdog.sh` invocaba `setex-backend|redis|postgres|frontend` (nombres pre-cutover). Los containers reales son `setex-prod-*`. Cada `docker exec` fallaba → alerta MISCONF → `$COMPOSE restart` reiniciaba el servicio sano.
+- Auditoría `rg` encontró residuos del mismo patrón en 10 scripts + 5 docs + 1 fichero de código.
+
+**Ficheros modificados (6 commits en rama `fix/watchdog-paths-ocr-excel-admin-2026-04-21`, PR #50 → develop):**
+
+- `scripts/lib/paths.sh` (nuevo, 70 líneas): fuente única de rutas, contenedores, dominio. Autodetecta prod/staging por `basename(BASE_DIR)`. Un mismo fichero sirve a ambos entornos.
+- `scripts/{watchdog,fix-permissions,backup-postgres,backup-offsite-replicate,health-check,manage-whitelist,backup-db}.sh` + `tests/stress-test.sh`: refactor para sourcear `paths.sh`; cero residuos hardcoded.
+- `scripts/{list-invalid-cifs,migrate-uploads}.js`: default + override `SETEX_PG_CONTAINER` env var.
+- `config/crontab.txt`: template actualizado con rutas `/opt/setex/prod` y cron real en root.
+- `.claude/CLAUDE.md`: reescrito en modo neutral (ambos entornos), referencia paths.sh y convención scripts/lib.
+- `app/backend/src/ocr/openai.js`: prompt IRPF reforzado. Eliminada regla engañosa "CIF → no IRPF". Añadida regla aritmética: `Total < Base + IVA ⇒ HAY IRPF obligatoriamente`.
+- `app/backend/src/ocr/index.js`: salvaguarda aritmética post-merge. Si IRPF=0 pero Total < Base + Cuota_IVA con diferencia ≥ 0,05€ y % plausible [0,5%, 30%], rellena IRPF por cálculo y loguea warning.
+- `app/backend/src/server.js`:
+  - `GET /api/admin/facturas/export.xlsx`: filename `setex_facturas_{desde}_{hasta}_{empresa}.xlsx` (antes: solo fecha). Columna ID ahora usa `codigo_cliente` con mismo JOIN + mapa fallback del panel. Quitadas 3 columnas: email, confidence_level, uploaded_at.
+  - `PUT /api/admin/facturas/:id`: EDITABLE ampliado con `invoice_type`.
+  - `DELETE /api/admin/facturas/:id` (nuevo): audit snapshot + hard delete + borrado best-effort del fichero físico.
+- `app/frontend/src/admin-facturas.{html,js}`: botón toolbar "🗑 Eliminar" + columna Acciones por fila + `eliminarFactura()` con confirm + `row.delete()` sin recargar tabla. Cache-buster `v=20260421-001`.
+
+**Despliegue y validación 2026-04-21:**
+- `docker compose build backend frontend` + swap en ambos entornos (staging 10:11, prod 10:12 UTC).
+- Watchdog 9/9 verde dry-run + cron 08:45 UTC primer ciclo automático sin incidencias.
+- Smoke OCR triple verde (OpenAI 4.4s + Azure DI 417ms + 2ª pasada 1.6s).
+- Backup manual post-fix: `setex_db_20260421_085047.sql.gz.gpg` (28K, integridad pg_dump OK) + offsite 14 remotos (25440 bytes).
+- Tag anotado `v1.0.1` creado sobre `b15d493` (develop) y pusheado.
+
+**Estado al cerrar sesión:**
+- PR #50 `fix/...` → `develop` mergeado (squash) como commit `b15d493`.
+- PR #51 `develop` → `main` abierto, **pendiente de merge + trigger de `deploy-prod.yml` con DESPLEGAR** para promocionar a producción formal.
+- Tag `v1.0.1` en `origin/develop@b15d493`.
+- Backup GPG verificado (local 7 + offsite 14) como punto de rollback.
+- Working tree prod en rama `fix/watchdog-paths-ocr-excel-admin-2026-04-21`; el workflow prod hará `git reset --hard origin/main` (idempotente) cuando se dispare.
+
+**Pendiente próxima sesión:**
+- D3 limpieza residuos legacy: `/opt/setex-captu-facture.OLD-2026-04-20/kk.txt` (12B, contenido aparenta credencial — requiere rotación preventiva antes de borrar), eliminación del symlink tras 1 semana de gracia (~2026-04-27).
+- E1 Fase 1 MACROPLAN (si hay margen): Playwright E2E + CSRF cableado + ADR-0001/0002/0003 + OpenAPI + commitlint.
+- C2/C3: creación de cuenta cliente con CIF validado + verificación flujo recuperación pw (requiere email+CIF del cliente).
+
+---
+
 *SETEX Captura Facturas · setex-facturas.es*
 *Documento de referencia — actualizar con cada sesión de desarrollo*
