@@ -2276,5 +2276,45 @@ Añade esta línea (backup cada día a las 3:00 AM):
 
 ---
 
+### 2026-04-21 (noche) — v1.1.0: super-tarea SETEX multi-IVA completa en 7 partes
+
+**Contexto:** cliente SETEX pidió en reunión 2026-04-21 PM que el desglose por tramos de IVA sea coherente en todas las capas del sistema. Sesión nocturna: 7 partes entregadas en ~3h35min + deploy y tag.
+
+**Patrón early-branch:** OCR decide primero si la factura es mono-IVA (90% casos, flujo simple) o multi-IVA (flujo nuevo con productos agrupados por tramo). Ambiguo → campos null, usuario rellena manual.
+
+**Capas cubiertas (PR #59, rama `feat/multi-iva-ocr-backend-parte1-2026-04-21`):**
+
+1. **OCR backend (parte 1/7)** — `ocr/openai.js` prompt con bloque `DECISIÓN PREVIA` + schema strict con `productos:[{descripcion, importe}]`. `ocr/azure.js` nueva `extractProductosFromItems()` asocia Items a tramos por TaxRate normalizado. `domain/validators/iva.js` `mergeLineasIva()` fusión por porcentaje + dedup productos.
+2. **Endpoint confirm (parte 2/7)** — helper `normalizeConfirmedLineasIva()` valida + recalcula agregados (Σ bases, Σ cuotas, pct dominante). `/api/upload-confirm` acepta `confirmed_lineas_iva` y sincroniza columnas agregadas con sumas. Backward compat total.
+3. **Modal comprobación (parte 3/7)** — `index.html` dos vistas conmutables `#confirm-iva-mono` / `-multi`. `app.js` `renderLineasIvaMulti()` con bloques editables + productos (add/remove/add-tramo). Resumen auto-calculado en tiempo real. Cache-buster `app.js?v=20260421-004`.
+4. **Panel admin (parte 4/7)** — `GET /api/admin/facturas` incluye `lineas_iva`. `PUT` acepta `lineas_iva` y recalcula agregados. Columna "Desglose" con badge `🧾 N tramos` clickable. Modal `#desglose-modal` con bloques editables + `row.update()` sin recargar. Cache-buster `admin-facturas.js?v=20260421-003`.
+5. **Excel export (parte 5/7)** — hoja secundaria "Desglose IVA" en workbook xlsx. Una fila por tramo (solo multi-IVA). Columnas: ID, Empresa, CIF, Cliente/Prov, CIF, Nº Factura, Fecha, IVA%, Base tramo, Cuota tramo, Total tramo, Productos del tramo.
+6. **Testing (parte 6/7)** — `tests/multi-iva/test-helper-unit.js` (25 tests unitarios Node puros, 0 fallos). `tests/e2e/specs/04-admin-desglose.spec.js` (3 tests Playwright). `tests/multi-iva/README.md` documentación smoke manual.
+7. **Deploy + tag (parte 7/7)** — PR #59 squash a develop (commit `e7c8f31`). PR #61 sync main→develop absorbido (merge commit `befda3b`). PR #60 squash a main (commit `628a230`). `deploy-prod.yml` con DESPLEGAR: success en 1m10s. Tag anotado `v1.1.0` sobre `befda3b` pusheado.
+
+**Incidencias durante el deploy:**
+- `deploy-staging.yml` falló en primer intento por `Permission denied` en `tests/multi-iva/*` — mismo patrón del 2026-04-21 AM (ficheros creados como root, workflow SSH usa user deploy). Resuelto con `chown -R deploy:deploy`.
+- PR #60 salió CONFLICTING por squash de PR #51 en main — resuelto con reverse merge PR #61 (HEAD=develop en 5 ficheros afectados, develop es superset funcional).
+
+**Estado final prod (2026-04-21 ~19:00 UTC):**
+- `main @ 628a230` (Release v1.1.0 — Desglose multi-IVA coherente en 5 capas)
+- containers `setex-prod-{backend,frontend,postgres,redis}` healthy tras swap
+- `https://setex-facturas.es/health` → HTTP 200
+- Tag anotado `v1.1.0` publicado en GitHub
+- 25/25 tests unitarios del helper pasan
+- Watchdog 9/9 verde
+
+**Pendiente validación manual por Julio (mañana):**
+- Smoke con factura real multi-IVA (hostelería / ferretería / servicios mixtos).
+  Julio no tenía foto disponible al cerrar release. Validará el flujo completo
+  end-to-end mañana: subir factura → modal bloques → admin panel → Excel → BD.
+- Si regresión visual/funcional detectada: parche v1.1.1 en caliente o revert.
+
+**Pendientes generales (retomar tras validación cliente):**
+- Fase 1 MACROPLAN pausada (P1.2 CSRF, P1.3 Strangler-Fig, P1.5b lint-staged + OpenAPI, P1.1b CI e2e workflow).
+- Item loose ends: eliminar symlink legacy `/opt/setex-captu-facture` tras semana de gracia (~2026-04-27), desinstalar PaddleOCR 3GB sin uso, activar BetterStack externo.
+
+---
+
 *SETEX Captura Facturas · setex-facturas.es*
 *Documento de referencia — actualizar con cada sesión de desarrollo*
