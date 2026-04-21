@@ -16,8 +16,10 @@
 | Mantenedor | Julio |
 | Versión del plan | 2.0 (plan híbrido — combina lo mejor del Plan A externo y del Plan B interno basado en estado real) |
 | Fecha creación | 2026-04-20 |
-| Última actualización | 2026-04-20 |
-| Estado global | 🟡 **En ejecución** — Fase 0 hoy, Fases 1-4 en las próximas 4-12 semanas |
+| Última actualización | **2026-04-21 17:40 UTC** (post-v1.0.2 + arranque Fase 1 + super-tarea cliente entrando) |
+| Estado global | 🟢 **Entregado v1.0.2 al cliente SETEX (aprobado en reunión)** · Fase 1 arrancada con PR #56 · pausa para super-tarea cliente ultra importante |
+| Release activo | **v1.0.2** en `main @ 0b15200` (deploy-prod.yml 2026-04-21 16:52 UTC, success 1m9s) |
+| Tags publicados | v1.0.0 (entrega inicial), v1.0.1 (fix watchdog + IRPF + Excel), v1.0.2 (fix modales + sync histórico + deploy formal) |
 
 ### Reglas del documento
 
@@ -1160,56 +1162,98 @@ docker compose start backend
 
 ---
 
-### 🔜 SIGUIENTE SESIÓN 2026-04-21 · Día entrega cliente
+### ✅ SESIÓN 2026-04-21 completada — v1.0.2 entregado al cliente
 
-**Estado al cerrar 2026-04-20 ~22:15 UTC:**
-- Tag `v1.0.0` en `origin/develop` → commit `0efed74` (incluye PRs #46, #47, #48)
-- `/opt/setex/prod` y `/opt/setex/staging` en `0efed74`, working tree limpio
-- Prod sirviendo UI nueva (cache-buster `v=20260420-003`)
-- Veredicto Fase 0: **GO** (9/11 verde, 2 amarillos documentados)
+**Arranque AM:** día de entrega al cliente. Smoke manual descubre 3 incidencias críticas → cliente concede +7h de margen → 2 releases patch y arranque Fase 1.
 
-**Orden exacto para mañana (15-20 min pre-entrega):**
+**Timeline resumido:**
 
-1. **[5 min] Smoke manual pre-entrega** — validar el camino completo que aún no se probó end-to-end hoy
-   - Login con user existente (ej. `xanfla95@gmail.com` que tiene CIF válido `B06400980`)
-   - Subir factura de prueba desde el móvil (cámara) y desde desktop (upload)
-   - Confirmar modal OCR → guardar → ver en dashboard
-   - Verificar en admin panel que aparece para el user
-   - Smoke OCR del cron ya habrá corrido a las 04:30 UTC → revisar `/opt/setex/prod/logs/smoke-ocr.log`
+| Hora UTC | Evento | Resultado |
+|---|---|---|
+| 07:40 | Arranque sesión, cliente aún no validó | — |
+| 08:06 | 🚨 Detectado bucle watchdog cada 5 min reiniciando 4 containers sanos | Pausado cron |
+| 08:40 | Fix watchdog + `scripts/lib/paths.sh` autodetect + 10 scripts refactor | Watchdog 9/9 verde |
+| 10:12 | Fix IRPF OCR + Excel rework + DELETE facturas admin + UI modo eliminar | Rebuild backend+frontend prod+staging |
+| 14:46 | Julio crea cuenta `setex@gmail.com` admin id=23 | — |
+| ~15:00 | Reunión cliente SETEX — producto APROBADO 🎉 | — |
+| 16:22 | Fix modales admin aprobar/rechazar (bug "botón no hace nada") en rama separada | — |
+| 16:52 | Merge reverse main→develop (sync PRs #32/#34/#44) + merge develop→main + disparado `deploy-prod.yml` con DESPLEGAR | ✅ **v1.0.2 en prod** (1m9s success) |
+| 17:10 | ADRs 0001/0002/0003 + Playwright 3 specs + commitlint + husky (PR #56) | Fase 1 arrancada |
+| 17:24 | C2 cerrado: CIF inventado `B87654323` (válido AEAT) en `setex@gmail.com` | — |
+| 17:28 | C3 cerrado: flujo email recovery verificado end-to-end (Julio confirmó recepción + cambio pw) | — |
+| 17:32 | D3 cerrado: `kk.txt` borrado tras backup defensivo en `/tmp/` | — |
+| 17:35 | Julio pausa Fase 1 — super-tarea ultra importante entrando | — |
 
-2. **[5 min] Crear cuenta del cliente con CIF validado** (evita que se registre él con NIF erróneo)
-   - `POST /api/auth/register` con email y password temporal
-   - `UPDATE users SET company_nif = '<CIF>' WHERE email = '<email>'`
-   - Verificar que el CIF pasa `checkDigitCIF` AEAT antes (`scripts/list-invalid-cifs.js` para cross-check)
-   - Forzar cambio de contraseña en primer login (si no hay flag, avisar al cliente en el email)
+**PRs cerrados hoy:** #50 · #51 · #52 (cerrado duplicado) · #53 · #54 · #55 · #56 · #57. **Todos mergeados.**
 
-3. **[5 min] Envío al cliente** (lo hace el compañero de Julio)
-   - URL: `https://setex-facturas.es`
-   - Credenciales temporales
-   - `docs/GUIA_USUARIO.md` adjunta
+**Estado final prod (2026-04-21 17:35 UTC):**
+- `https://setex-facturas.es/health` → HTTP 200
+- Containers `setex-prod-{backend,frontend,postgres,redis}` → healthy
+- Watchdog automático 5 min → pasa verde desde el fix
+- Backups: 7 locales GPG + 14 offsite en VPS `72.62.189.27` (último 2026-04-21 08:50)
+- Smoke OCR triple verde en último cron 04:30 UTC
+- Tag `v1.0.2` en `origin/develop@01279ab` + `main@0b15200`
 
-4. **[monitorizar primeras horas]** — tras primer upload real del cliente
-   - `docker compose logs -f backend frontend` en vivo
-   - Revisar `/opt/setex/prod/logs/watchdog-alerts.log` cada hora
-   - Si hay error → playbook emergencias `docs/PLAYBOOK_EMERGENCIAS.md`
+---
 
-**Riesgos aceptados mañana (no tocar, están documentados):**
-- CSRF pospuesto a F1 → mitigado por SameSite=Strict + CSP
-- Sin BetterStack externo → mitigado por watchdog 5min + smoke diario
-- Sin tests E2E automatizados → mitigado por monitorización manual primer día
+### 🛑 PAUSADO PARA SUPER-TAREA CLIENTE ULTRA IMPORTANTE (2026-04-21 17:40 UTC)
 
-**Si todo va bien durante el 21-27 abril, arrancar Fase 1 ordenada:**
-1. **P1.1** Instalar Playwright + 3 tests E2E verdes (`login`, `invoice-upload`, `admin`) — sec. 5 día 2-3
-2. **P1.2** Cableado CSRF `services/auth/csrf.service.js` en rutas mutantes + tests E2E que lo validen
-3. **P1.3** Strangler-Fig paso 21b: cablear `services/auth` + `repositories` en rutas existentes (sec. 8)
-4. **P1.4** ADR-0001/0002/0003 escritos (Git+ESLint+Husky, Strangler-Fig, TypeScript gradual)
-5. **P1.5** OpenAPI 3.1 yaml canónico + conventional commits + commitlint hook
+Julio pausa Fase 1 para introducir una **super-tarea** que el cliente SETEX pidió en la reunión de hoy. La tarea se describirá en detalle a continuación y se añadirá en esta sección cuando Julio la comunique.
 
-**Loose ends que NO bloquean entrega pero conviene cerrar F1:**
-- PaddleOCR: 3 GB instalados sin uso en `/opt/setex-captu-facture/ocr-service/` — integrar o desinstalar
-- Directorio archivado `/opt/setex-captu-facture.OLD-2026-04-20` con `kk.txt` residual — limpiar
-- BetterStack: cuando Julio cree cuenta externa, activar monitoring + alertas email/SMS
-- 4 cuentas con CIFs que fallan AEAT (ver `scripts/list-invalid-cifs.js`) — decisión sobre política
+> **🆕 SUPER-TAREA (placeholder — Julio dictará descripción/alcance/deadline)**
+>
+> **Estado:** pendiente de especificación por parte de Julio.
+>
+> **Planificación esperada:**
+> - Julio describirá la tarea con detalle (objetivo, alcance, criterios de aceptación)
+> - Al recibirla, se añadirá un bloque estructurado debajo de esta línea con: qué, por qué, cómo, estimación, riesgos, plan de ejecución
+> - Se prioriza antes que cualquier otro item de Fase 1
+> - Se commitea su ejecución contra una rama `feat/super-tarea-<titulo>-2026-04-21` y se promociona por el flujo estándar (PR → develop → main → deploy-prod.yml)
+
+---
+
+### 🔜 TRAS LA SUPER-TAREA — Retomar Fase 1 pendiente
+
+**Memoria permanente guardada en:** `/root/.claude/projects/-opt-setex/memory/next_immediate_steps.md`.
+
+**Items de Fase 1 pendientes (priorizados):**
+
+#### Opción A · quick wins (2h total) — recomendada para sesiones cortas
+
+1. **P1.5 bis A — OpenAPI 3.1 yaml** (~30 min)
+   - Generar `docs/openapi.yaml` cubriendo todos los endpoints existentes
+   - Opcional: Swagger UI montado en `/admin/api-docs` (ruta protegida)
+   - Cero riesgo de regresión en runtime
+
+2. **P1.1 bis — CI workflow `.github/workflows/e2e.yml`** (~25 min)
+   - Disparar Playwright contra staging tras cada merge a develop
+   - **Requiere input de Julio:** `SETEX_E2E_HTTP_BASIC_PASSWORD` (password clara del user `setex` middleware Traefik `setex-stg-auth`)
+
+3. **P1.2 — CSRF double-submit cableado** (~60 min)
+   - `services/auth/csrf.service.js` ya existe (Round 4 Strangler-Fig)
+   - Cablear en rutas mutantes POST/PUT/DELETE admin + subida
+   - Cierra item amarillo del Go/No-Go Fase 0
+
+#### Opción B · alto impacto (3-4h) — recomendada para sesión con tiempo
+
+4. **P1.3 — Strangler-Fig cierre (paso 21b + paso 22)**
+   - **Paso 21b:** reemplazar queries SQL inline de `server.js` por llamadas a repositorios ya extraídos (`repositories/users.repo.js`, `uploads.repo.js`, etc.)
+   - **Paso 22:** renombrar `server.js` a `src/app.js` reducido a <100 líneas (solo bootstrap + mount de routers)
+   - **Máximo ROI de todo Fase 1:** desbloquea quitar la exención ESLint de server.js (hoy 4081 líneas) + abre puerta a TypeScript gradual (ADR-0003)
+   - **Riesgo:** toca código en prod. Dividir en 2 PRs recomendado.
+
+#### Post-P1.3 — activación diferida
+
+- **P1.5 bis B — `.husky/pre-commit` + lint-staged**: DEPENDENCIA de P1.3. Hoy bloquearía commits que toquen `server.js` (viola `max-lines: 500`). Activar JUSTO después del paso 22 cuando server.js sea `app.js` <100 líneas.
+
+---
+
+### Loose ends (no bloquean nada; cerrar cuando toque)
+
+- **PaddleOCR:** 3 GB sin uso en `/opt/setex-captu-facture/ocr-service/` — integrar o desinstalar (decisión pendiente para Q3 según ROADMAP).
+- **Symlink legacy `/opt/setex-captu-facture`:** eliminar tras semana de gracia (~2026-04-27). Ya sin dependientes activos tras fix del 2026-04-21.
+- **BetterStack externo:** activar cuando Julio cree la cuenta. Mitigación actual: watchdog 5 min + smoke diario + backup diario + offsite diario.
+- **CIFs inválidos AEAT en BD (4 cuentas):** `scripts/list-invalid-cifs.js` los lista. Decisión sobre política de rechazo/warning pendiente.
 
 ---
 
