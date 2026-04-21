@@ -3181,22 +3181,37 @@ app.get('/api/admin/facturas/export.xlsx', authenticateToken, requireAdmin, asyn
 
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
-    const result = await pool.query(
-      `SELECT u.id, us.email AS usuario_email,
-              COALESCE(us.company_name, us.email) AS empresa_nombre,
-              us.company_nif AS empresa_nif,
-              u.proveedor_nombre, u.proveedor_nif,
-              u.receptor_nombre, u.receptor_nif,
-              u.numero_factura,
-              u.fecha_emision, u.base_imponible, u.total_factura, u.iva_porcentaje, u.cuota_iva,
-              u.irpf_porcentaje, u.cuota_irpf, u.moneda, u.confidence_level,
-              u.invoice_type, u.uploaded_at
-       FROM uploads u
-       LEFT JOIN users us ON u.user_id = us.id
-       ${where}
-       ORDER BY u.uploaded_at DESC LIMIT 10000`,
-      params
-    );
+    // JOIN con client_companies para obtener el mismo codigo_cliente que muestra el
+    // panel admin como "ID". Además, consultar el mapa global CIF → codigo_cliente
+    // para poder resolver por fallback cuando el user subidor no pertenece a una
+    // empresa registrada pero la empresa detectada en la factura sí está en la BD.
+    const [result, ccResult] = await Promise.all([
+      pool.query(
+        `SELECT u.id, us.email AS usuario_email,
+                COALESCE(us.company_name, us.email) AS empresa_nombre,
+                us.company_nif AS empresa_nif,
+                cc.codigo_cliente,
+                u.proveedor_nombre, u.proveedor_nif,
+                u.receptor_nombre, u.receptor_nif,
+                u.numero_factura,
+                u.fecha_emision, u.base_imponible, u.total_factura, u.iva_porcentaje, u.cuota_iva,
+                u.irpf_porcentaje, u.cuota_irpf, u.moneda, u.confidence_level,
+                u.invoice_type, u.uploaded_at
+         FROM uploads u
+         LEFT JOIN users us ON u.user_id = us.id
+         LEFT JOIN client_companies cc ON UPPER(REPLACE(us.company_nif, ' ', '')) = UPPER(REPLACE(cc.cif, ' ', ''))
+         ${where}
+         ORDER BY u.uploaded_at DESC LIMIT 10000`,
+        params
+      ),
+      pool.query('SELECT cif, codigo_cliente FROM client_companies WHERE codigo_cliente IS NOT NULL'),
+    ]);
+
+    // Mapa CIF → codigo_cliente (fallback idéntico al de GET /api/admin/facturas)
+    const ccMap = new Map();
+    ccResult.rows.forEach(row => {
+      if (row.cif) ccMap.set(row.cif.toUpperCase().replace(/[^A-Z0-9]/g, ''), row.codigo_cliente);
+    });
 
     const ExcelJS = require('exceljs');
     const wb = new ExcelJS.Workbook();
@@ -3205,12 +3220,11 @@ app.get('/api/admin/facturas/export.xlsx', authenticateToken, requireAdmin, asyn
     const ws = wb.addWorksheet('Facturas');
 
     ws.columns = [
-      { header: 'ID',                   key: 'id',                   width: 8  },
+      { header: 'ID',                   key: 'codigo_cliente',       width: 12 },
       { header: 'Empresa',              key: 'display_empresa',      width: 30 },
       { header: 'CIF Empresa',          key: 'display_empresa_nif',  width: 16 },
       { header: 'Cliente / Proveedor',  key: 'display_contraparte',  width: 30 },
       { header: 'CIF Cl/Prov',          key: 'display_contraparte_nif', width: 16 },
-      { header: 'Email',                key: 'usuario_email',        width: 28 },
       { header: 'Nº Factura',           key: 'numero_factura',       width: 18 },
       { header: 'Fecha',                key: 'fecha_emision',        width: 14 },
       { header: 'Base Imponible',       key: 'base_imponible',       width: 16 },
@@ -3220,8 +3234,6 @@ app.get('/api/admin/facturas/export.xlsx', authenticateToken, requireAdmin, asyn
       { header: 'IRPF %',               key: 'irpf_porcentaje',      width: 10 },
       { header: 'Cuota IRPF',           key: 'cuota_irpf',           width: 13 },
       { header: 'Moneda',               key: 'moneda',               width: 10 },
-      { header: 'Confianza',            key: 'confidence_level',     width: 12 },
-      { header: 'Subido el',            key: 'uploaded_at',          width: 20 },
     ];
 
     // Cabecera en negrita con fondo verde corporativo
@@ -3234,15 +3246,27 @@ app.get('/api/admin/facturas/export.xlsx', authenticateToken, requireAdmin, asyn
     ws.views = [{ state: 'frozen', ySplit: 1 }];
 
     const numFmt = '#,##0.00';
+    // Nombre empresa "dominante" en el export (para filename y metadata).
+    // Prioridad: filtro company_nif activo → nombre de la empresa con más filas.
+    let dominantCompanyName = null;
+    const companyCount = new Map();
     for (const r of result.rows) {
       const disp = computeDisplayCompanies(r);
+      // Resolver codigo_cliente idéntico al panel: columna directa → fallback por NIF de la factura
+      let codigoCliente = r.codigo_cliente;
+      if (!codigoCliente && disp.display_empresa_nif) {
+        const cleanNif = disp.display_empresa_nif.toUpperCase().replace(/[^A-Z0-9]/g, '');
+        codigoCliente = ccMap.get(cleanNif) || null;
+      }
+      if (disp.display_empresa) {
+        companyCount.set(disp.display_empresa, (companyCount.get(disp.display_empresa) || 0) + 1);
+      }
       ws.addRow({
-        id:                      r.id,
+        codigo_cliente:          codigoCliente || '',
         display_empresa:         disp.display_empresa         || '',
         display_empresa_nif:     disp.display_empresa_nif     || '',
         display_contraparte:     disp.display_contraparte     || '',
         display_contraparte_nif: disp.display_contraparte_nif || '',
-        usuario_email:           r.usuario_email    || '',
         numero_factura:          r.numero_factura   || '',
         fecha_emision:           r.fecha_emision    || '',
         base_imponible:          r.base_imponible   != null ? parseFloat(r.base_imponible)   : '',
@@ -3252,9 +3276,13 @@ app.get('/api/admin/facturas/export.xlsx', authenticateToken, requireAdmin, asyn
         irpf_porcentaje:         r.irpf_porcentaje  != null ? parseFloat(r.irpf_porcentaje)  : '',
         cuota_irpf:              r.cuota_irpf       != null ? parseFloat(r.cuota_irpf)       : '',
         moneda:                  r.moneda           || 'EUR',
-        confidence_level:        r.confidence_level  || '',
-        uploaded_at:             r.uploaded_at ? new Date(r.uploaded_at).toLocaleString('es-ES') : '',
       });
+    }
+    // Empresa dominante para el filename
+    if (companyCount.size === 1) {
+      dominantCompanyName = companyCount.keys().next().value;
+    } else if (companyCount.size > 1) {
+      dominantCompanyName = [...companyCount.entries()].sort((a, b) => b[1] - a[1])[0][0];
     }
 
     // Formato numérico en columnas monetarias/porcentaje
@@ -3266,7 +3294,22 @@ app.get('/api/admin/facturas/export.xlsx', authenticateToken, requireAdmin, asyn
       });
     });
 
-    const filename = `setex_facturas_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    // Nombre de fichero: setex_facturas_FECHADESDE_FECHAHASTA_EMPRESA.xlsx
+    // Fechas = rango de factura (filtros desde/hasta). Si no hay filtro → hoy_hoy.
+    // Empresa = filtro proveedor o empresa dominante en el export o "todas".
+    const hoyISO = new Date().toISOString().slice(0, 10);
+    const desdeISO = desde || hoyISO;
+    const hastaISO = hasta || hoyISO;
+    const slugify = (s) => String(s || '')
+      .normalize('NFD').replace(/[̀-ͯ]/g, '')  // quitar acentos
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .substring(0, 40) || 'empresa';
+    const empresaSlug = proveedor
+      ? slugify(proveedor)
+      : (dominantCompanyName ? slugify(dominantCompanyName) : 'todas');
+    const filename = `setex_facturas_${desdeISO}_${hastaISO}_${empresaSlug}.xlsx`;
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     await wb.xlsx.write(res);
@@ -3284,7 +3327,7 @@ app.put('/api/admin/facturas/:id', authenticateToken, requireAdmin, requireXHR, 
 
   const EDITABLE = ['proveedor_nombre', 'proveedor_nif', 'receptor_nombre', 'receptor_nif',
     'numero_factura', 'fecha_emision', 'total_factura', 'base_imponible', 'iva_porcentaje',
-    'cuota_iva', 'irpf_porcentaje', 'cuota_irpf', 'moneda'];
+    'cuota_iva', 'irpf_porcentaje', 'cuota_irpf', 'moneda', 'invoice_type'];
 
   const updates = {};
   for (const field of EDITABLE) {
@@ -3307,6 +3350,48 @@ app.put('/api/admin/facturas/:id', authenticateToken, requireAdmin, requireXHR, 
   } catch (err) {
     logger.error('Admin edit factura error:', err);
     res.status(500).json({ error: 'Error al actualizar la factura' });
+  }
+});
+
+// ─── DELETE /api/admin/facturas/:id — eliminar factura (solo admin) ───────────
+// Borrado hard: elimina la fila de uploads y el fichero físico si existe.
+// Auditoría completa: ADMIN_DELETE_FACTURA con snapshot del registro previo.
+app.delete('/api/admin/facturas/:id', authenticateToken, requireAdmin, requireXHR, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'ID inválido' });
+
+  try {
+    // Snapshot previo para auditoría
+    const prev = await pool.query(
+      `SELECT id, user_id, filename, file_path, proveedor_nombre, proveedor_nif,
+              receptor_nombre, receptor_nif, numero_factura, fecha_emision,
+              total_factura, base_imponible, uploaded_at
+       FROM uploads WHERE id = $1`,
+      [id]
+    );
+    if (prev.rows.length === 0) return res.status(404).json({ error: 'Factura no encontrada' });
+    const snapshot = prev.rows[0];
+
+    const r = await pool.query('DELETE FROM uploads WHERE id = $1 RETURNING id', [id]);
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Factura no encontrada' });
+
+    // Intentar borrar el fichero físico (best-effort, no bloquea la respuesta)
+    if (snapshot.file_path) {
+      try {
+        const fsp = require('fs').promises;
+        const abs = snapshot.file_path.startsWith('/') ? snapshot.file_path : `/app/${snapshot.file_path}`;
+        await fsp.unlink(abs);
+      } catch (e) {
+        logger.warn(`[Admin] No se pudo borrar fichero físico id=${id}: ${e.message}`);
+      }
+    }
+
+    auditLog('ADMIN_DELETE_FACTURA', { upload_id: id, snapshot }, req.user.userId, req.ip);
+    logger.info(`[Admin] Factura ${id} eliminada por ${req.user.email}`);
+    res.json({ success: true });
+  } catch (err) {
+    logger.error('Admin delete factura error:', err);
+    res.status(500).json({ error: 'Error al eliminar la factura' });
   }
 });
 
