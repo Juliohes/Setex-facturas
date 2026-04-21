@@ -52,7 +52,7 @@ async function tryAzure(filePath, mimeType, context) {
   const apiKey   = getSecret('azure_di_key');
   const endpoint = getSecret('azure_di_endpoint');
   if (isPlaceholder(apiKey) || isPlaceholder(endpoint)) {
-    throw new Error('Azure DI: secrets no configurados — añade azure_di_key y azure_di_endpoint en /opt/setex-captu-facture/secrets/');
+    throw new Error('Azure DI: secrets no configurados — añade azure_di_key y azure_di_endpoint en secrets/ del entorno activo');
   }
   return await azure.extractInvoice(filePath, mimeType, apiKey, endpoint, context);
 }
@@ -165,6 +165,34 @@ function compareOCRResults(openaiRes, azureRes, logger) {
     moneda: oF.moneda || aF.moneda || 'EUR',
     es_factura_valida: openaiRes.es_factura_valida !== false || azureRes.es_factura_valida !== false,
   };
+
+  // ── Salvaguarda aritmética IRPF ──────────────────────────────────────────────
+  // Si el OCR no detectó IRPF pero Total < Base + Cuota_IVA (con tolerancia 0,05€),
+  // la diferencia debe ser IRPF: rellenamos por cálculo. Cubre facturas donde el
+  // prompt falla en detectar la etiqueta pero la aritmética lo demuestra.
+  const _num = (s) => {
+    if (s == null || s === '') return null;
+    const n = parseFloat(String(s).replace(/\./g, '').replace(',', '.'));
+    return Number.isFinite(n) ? n : null;
+  };
+  const _fmt = (n) => n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const _irpfActual = _num(merged.irpf_porcentaje);
+  const _baseN = _num(merged.base_imponible);
+  const _ivaN  = _num(merged.cuota_iva);
+  const _totN  = _num(merged.total);
+  if ((_irpfActual === null || _irpfActual === 0) && _baseN !== null && _ivaN !== null && _totN !== null) {
+    const implicitIrpf = _baseN + _ivaN - _totN;
+    // Solo activamos si la diferencia es claramente positiva (>0,05€) y razonable (<= base)
+    if (implicitIrpf > 0.05 && implicitIrpf <= _baseN) {
+      const pct = (implicitIrpf / _baseN) * 100;
+      // Filtro: % plausible (0,5–30%) para evitar falsos positivos por base/iva mal leídos
+      if (pct >= 0.5 && pct <= 30) {
+        merged.irpf_porcentaje = _fmt(Math.round(pct * 10) / 10).replace(/,00$/, ',0');
+        merged.cuota_irpf = _fmt(Math.round(implicitIrpf * 100) / 100);
+        logger.warn(`[DualOCR] IRPF rellenado por cálculo aritmético: ${merged.irpf_porcentaje}% = ${merged.cuota_irpf}€ (base=${_baseN} iva=${_ivaN} total=${_totN})`);
+      }
+    }
+  }
 
   const baseConf = Math.max(openaiRes.confidence || 0, azureRes.confidence || 0);
   // Q5: penalizar confianza según calidad del acuerdo de NIF:

@@ -5,8 +5,12 @@
 
 set -euo pipefail
 
-BASE=/opt/setex/prod
-LOG=/opt/setex/prod/logs/permissions.log
+# ── Fuente única de rutas, contenedores y dominio ────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/paths.sh
+source "${SCRIPT_DIR}/lib/paths.sh"
+
+LOG="${LOGS_DIR}/permissions.log"
 CHANGED=0
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG"; }
@@ -32,10 +36,10 @@ check_and_fix() {
 
 log "=== Verificación de permisos SETEX ==="
 
-check_and_fix "$BASE/data/redis"    "999"  "Redis data"
-check_and_fix "$BASE/data/postgres" "70"   "PostgreSQL data"
-check_and_fix "$BASE/data/uploads"  "1001" "Backend uploads"
-check_and_fix "$BASE/logs"          "1001" "Backend logs"
+check_and_fix "${DATA_DIR}/redis"    "999"  "Redis data"
+check_and_fix "${DATA_DIR}/postgres" "70"   "PostgreSQL data"
+check_and_fix "${DATA_DIR}/uploads"  "1001" "Backend uploads"
+check_and_fix "${LOGS_DIR}"          "1001" "Backend logs"
 
 if [ "$CHANGED" -eq 0 ]; then
   log "OK: todos los permisos correctos — sin cambios"

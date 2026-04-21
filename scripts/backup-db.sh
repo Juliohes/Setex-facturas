@@ -1,14 +1,22 @@
 #!/bin/bash
+# ⚠️  DEPRECATED — este script NO está en cron activo.
+# El cron de prod usa `backup-postgres.sh` (hardened: PIPESTATUS + MIN_BYTES + GPG + integridad header).
+# Se mantiene sólo por si hay invocaciones ad-hoc manuales heredadas.
+# Para nuevas invocaciones usar: /opt/setex/prod/scripts/backup-postgres.sh
 set -euo pipefail
 
-BACKUP_DIR="/opt/setex/shared/backups/postgres"
+# ── Fuente única de rutas, contenedores y dominio ────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/paths.sh
+source "${SCRIPT_DIR}/lib/paths.sh"
+
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-BACKUP_FILE="$BACKUP_DIR/setex_db_$TIMESTAMP.sql.gz"
+BACKUP_FILE="${BACKUP_DIR}/setex_db_${TIMESTAMP}.sql.gz"
 
 echo "[$(date)] Iniciando backup de PostgreSQL..."
 
 # Crear backup
-docker exec setex-postgres pg_dump -U setex_user setex_db | gzip > "$BACKUP_FILE"
+docker exec "${CONTAINER_PG}" pg_dump -U "${PG_USER}" "${PG_DB}" | gzip > "$BACKUP_FILE"
 
 # Verificar
 if [ -f "$BACKUP_FILE" ]; then

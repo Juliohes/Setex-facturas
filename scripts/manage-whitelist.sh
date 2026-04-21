@@ -12,9 +12,14 @@ set -euo pipefail
 #   ./manage-whitelist.sh import-existing
 # ============================================
 
-CONTAINER="setex-postgres"
-DB="setex_db"
-USER="setex_user"
+# ── Fuente única de rutas, contenedores y dominio ────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/paths.sh
+source "${SCRIPT_DIR}/lib/paths.sh"
+
+CONTAINER="${CONTAINER_PG}"
+DB="${PG_DB}"
+USER="${PG_USER}"
 
 run_sql() {
     docker exec "$CONTAINER" psql -U "$USER" -d "$DB" -t -c "$1"
