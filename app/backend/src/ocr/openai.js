@@ -77,17 +77,48 @@ DESGLOSE DE IVA — LEE CON MÁXIMA ATENCIÓN:
 Una factura española puede tener UNO o VARIOS tipos de IVA (21%, 10%, 4%, 0%).
 Busca la tabla/sección "IVA", "TIPO IMPOSITIVO", "BASE IMPONIBLE" en la factura.
 
-CASO 1 — UN SOLO TIPO DE IVA:
+━━━ DECISIÓN PREVIA (siempre primero) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Antes de rellenar nada, DECIDE si la factura tiene UN SOLO tipo de IVA o VARIOS.
+- Mismo % de IVA en todas las líneas/productos → CASO 1 (tramo único)
+- Distintos % en diferentes líneas/productos → CASO 2 (multi-tramo)
+- Si NO puedes determinarlo con claridad → deja iva_porcentaje y cuota_iva en null
+  y lineas_iva en null. NO inventes. El usuario rellenará a mano.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+CASO 1 — UN SOLO TIPO DE IVA (la mayoría de facturas):
   - base_imponible: subtotal antes de IVA (ej: "1.000,00")
   - iva_porcentaje: tipo aplicado SIN % (ej: "21,0")
   - cuota_iva: importe del IVA (ej: "210,00")
-  - lineas_iva: null
+  - lineas_iva: null  (NO rellenar array con 1 elemento — usar null directamente)
 
-CASO 2 — MÚLTIPLES TIPOS DE IVA (hostelería, mixtos, etc.):
+CASO 2 — MÚLTIPLES TIPOS DE IVA (hostelería, ferretería, servicios mixtos):
   - base_imponible: SUMA de todas las bases
-  - iva_porcentaje: tipo del tramo de mayor importe
+  - iva_porcentaje: tipo del tramo de mayor importe (referencia; el desglose real en lineas_iva)
   - cuota_iva: SUMA de todas las cuotas
-  - lineas_iva: una entrada POR CADA TIPO → [{base, porcentaje, cuota}, ...]
+  - lineas_iva: una entrada POR CADA TIPO detectado. Para cada tramo:
+      {
+        "base":       "suma de bases de productos de ese tramo (ej: '100,00')",
+        "porcentaje": "tipo sin % (ej: '10,0')",
+        "cuota":      "suma de cuotas del tramo (ej: '10,00')",
+        "productos":  [
+          {"descripcion": "texto literal del producto o línea tal como aparece",
+           "importe":     "importe del producto (base antes de IVA, formato español)"},
+          ...
+        ]
+      }
+
+    REGLAS para el array "productos" dentro de cada tramo:
+    - Asocia cada línea/producto visible en la factura al tramo cuyo % de IVA
+      coincide con el del producto. Mira columnas/tags tipo "21%", "10%", "IVA".
+    - "descripcion": el texto literal (ej: "Cerveza 33cl x4", "Menú del día", "Tornillo M6").
+      Recorta a máximo 120 caracteres, sin inventar contenido.
+    - "importe": la base antes de IVA de ese producto, en formato español "1.234,56".
+      Si la factura solo muestra precio con IVA incluido, NO intentes despejar
+      → deja "importe": null y sigue. El sumatorio del tramo se apoyará en "base".
+    - Si un producto tiene IVA ambiguo (no visible el %), NO lo incluyas en ningún
+      tramo. Deja lineas_iva con solo los tramos claros y el usuario completará.
+    - Array "productos" puede estar vacío [] si no distingues productos pero sí
+      ves la tabla resumen de tramos. En ese caso sigue rellenando base/%/cuota.
 
 ━━━ IRPF — RETENCIÓN DE AUTÓNOMOS Y PROFESIONALES ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CUÁNDO APARECE: en facturas de AUTÓNOMOS, PROFESIONALES INDEPENDIENTES y TAMBIÉN
@@ -142,7 +173,7 @@ Devuelve un JSON con EXACTAMENTE estos campos:
  7. base_imponible    — Formato español "1.000,00". null si no visible.
  8. iva_porcentaje    — Sin %, formato "21,0". null si no visible.
  9. cuota_iva         — Formato español. null si no visible.
-10. lineas_iva        — Array [{base, porcentaje, cuota}] si hay múltiples tipos. null si solo uno.
+10. lineas_iva        — Solo si MÚLTIPLES tipos de IVA. Array [{base, porcentaje, cuota, productos:[{descripcion, importe}]}]. null si tramo único.
 11. irpf_porcentaje   — Sin %. "0,0" si no hay IRPF.
 12. cuota_irpf        — Formato español. "0,00" si no hay IRPF.
 13. total             — Total final con IVA incluido. null si no visible.
@@ -173,16 +204,31 @@ const INVOICE_SCHEMA = {
       lineas_iva: {
         // OpenAI Structured Outputs (strict) NO admite oneOf/anyOf desde 2026-Q1.
         // Usamos type-array `['array','null']` que sí es soportado para opcionales.
+        // Early-branch: null cuando la factura tiene UN SOLO tipo de IVA (tramo único).
+        // Array solo cuando hay MÚLTIPLES tramos IVA detectados con claridad.
         type: ['array', 'null'],
-        description: 'Array de líneas de IVA si hay múltiples tipos. null si solo hay un tipo.',
+        description: 'Solo en facturas multi-IVA. Un elemento por cada tramo detectado con sus productos asociados. null si la factura tiene un único tipo de IVA.',
         items: {
           type: 'object',
           properties: {
-            base:       { type: 'string', description: 'Base imponible de esta línea, formato español' },
+            base:       { type: 'string', description: 'Base imponible del tramo (suma de bases de productos con este %), formato español' },
             porcentaje: { type: 'string', description: 'Tipo IVA sin %, ej: 21,0' },
-            cuota:      { type: 'string', description: 'Cuota IVA de esta línea, formato español' }
+            cuota:      { type: 'string', description: 'Cuota IVA del tramo (suma de cuotas de productos con este %), formato español' },
+            productos: {
+              type: ['array', 'null'],
+              description: 'Productos/líneas OCR agrupados dentro de este tramo. Array vacío [] o null si no se distinguen líneas individuales pero sí se ven los agregados del tramo.',
+              items: {
+                type: 'object',
+                properties: {
+                  descripcion: { type: 'string', description: 'Texto literal del producto tal como aparece en la factura (máx 120 chars)' },
+                  importe:     { type: ['string', 'null'], description: 'Importe base del producto (antes de IVA) en formato español; null si solo consta el PVP con IVA incluido' }
+                },
+                required: ['descripcion', 'importe'],
+                additionalProperties: false
+              }
+            }
           },
-          required: ['base', 'porcentaje', 'cuota'],
+          required: ['base', 'porcentaje', 'cuota', 'productos'],
           additionalProperties: false
         }
       },
