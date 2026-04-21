@@ -241,6 +241,14 @@ function formatImagen(cell) {
   return '<span style="color:#a0aec0">—</span>';
 }
 
+// Multi-IVA 2026-04-21 parte 4/7: badge en tabla que abre modal de desglose
+function formatDesglose(cell) {
+  const lineas = cell.getValue();
+  if (!Array.isArray(lineas) || lineas.length === 0) return '<span style="color:#a0aec0">—</span>';
+  if (lineas.length === 1) return '<span style="color:#718096;font-size:11px;" title="Un solo tramo IVA">1 tramo</span>';
+  return `<span class="desglose-badge" title="Click para ver/editar el desglose completo" style="background:#ebf8ff;color:#2b6cb0;border:1px solid #90cdf4;border-radius:10px;padding:2px 8px;font-size:11px;font-weight:700;cursor:pointer;">🧾 ${lineas.length} tramos</span>`;
+}
+
 function verImagenAdmin(id) {
   const token = localStorage.getItem('token');
   const url = `${API_URL}/admin/facturas/${id}/imagen`;
@@ -314,6 +322,13 @@ function initTable() {
         formatter: makeEditableFormatter('irpf_porcentaje', formatPct), cellClick: makeEditableCellClick('irpf_porcentaje') },
       { title: 'Cuota IRPF',       field: 'cuota_irpf',      width: 110, sorter: 'string', hozAlign: 'right',
         formatter: makeEditableFormatter('cuota_irpf', formatEuroStr), cellClick: makeEditableCellClick('cuota_irpf') },
+      { title: 'Desglose',         field: 'lineas_iva',      width: 100, hozAlign: 'center', headerSort: false,
+        formatter: formatDesglose, cellClick: (_e, cell) => {
+          const lineas = cell.getValue();
+          if (!Array.isArray(lineas) || lineas.length < 2) return; // solo multi-IVA abre modal
+          openDesgloseModal(cell.getRow().getData());
+        }
+      },
       { title: 'Total',            field: 'total_factura',   width: 120, sorter: 'number', hozAlign: 'right',
         cellStyle: () => ({ fontWeight: '700', color: '#1a365d' }),
         formatter: makeEditableFormatter('total_factura', formatEuro), cellClick: makeEditableCellClick('total_factura') },
@@ -1177,6 +1192,7 @@ function launchApp(authData) {
   initEditModal();
   initRenameModal();
   initEmpresaModal();
+  initDesgloseModal();
   loadData();
 
   document.getElementById('btn-filtrar').addEventListener('click', () => { currentFilters = getFilters(); loadData(currentFilters); });
@@ -1383,6 +1399,217 @@ async function init() {
   }
   // Sin sesión válida o sin permisos: redirigir al login principal con intención admin.
   window.location.href = '/?next=admin';
+}
+
+// ── Multi-IVA 2026-04-21 parte 4/7 — Modal desglose admin ────────────────────
+// Permite al admin ver/editar los tramos IVA (y productos) de una factura
+// multi-IVA. Reutiliza el patrón del modal de comprobación pero con submit PUT
+// a /api/admin/facturas/:id y refresh de la fila Tabulator tras éxito.
+
+let desgloseRowId = null;
+
+function openDesgloseModal(rowData) {
+  desgloseRowId = rowData.id;
+  const lineas = Array.isArray(rowData.lineas_iva) ? rowData.lineas_iva : [];
+  document.getElementById('desglose-modal-title').textContent =
+    `Desglose IVA — Factura ${rowData.numero_factura ? '#' + rowData.numero_factura : '#' + rowData.id}`;
+  const metaEl = document.getElementById('desglose-meta');
+  metaEl.innerHTML = `
+    <strong>${escHtml(rowData.display_empresa || rowData.proveedor_nombre || '—')}</strong>
+    ${rowData.display_empresa_nif ? ` · <code>${escHtml(rowData.display_empresa_nif)}</code>` : ''}
+    ${rowData.fecha_emision ? ` · ${escHtml(rowData.fecha_emision)}` : ''}
+    ${rowData.total_factura != null ? ` · Total: <strong>${parseFloat(rowData.total_factura).toLocaleString('es-ES', {minimumFractionDigits:2, maximumFractionDigits:2})} €</strong>` : ''}
+  `;
+  renderDesgloseBlocks(lineas);
+  document.getElementById('desglose-error').style.display = 'none';
+  document.getElementById('desglose-modal').style.display = 'flex';
+}
+
+function closeDesgloseModal() {
+  document.getElementById('desglose-modal').style.display = 'none';
+  desgloseRowId = null;
+}
+
+function renderDesgloseBlocks(lineas) {
+  const container = document.getElementById('desglose-blocks');
+  container.innerHTML = (lineas || []).map((l, idx) => {
+    const prodsHtml = (Array.isArray(l.productos) ? l.productos : []).map((p, pIdx) => `
+      <div class="desg-producto" style="display:flex;gap:6px;margin-top:4px;align-items:center;">
+        <input type="text" data-kind="desc" data-tramo="${idx}" data-prod="${pIdx}"
+               value="${escAttr(p.descripcion || '')}" placeholder="Descripción producto"
+               maxlength="120" style="flex:3;font-size:12px;padding:4px 6px;border:1px solid #cbd5e0;border-radius:4px;" />
+        <input type="text" data-kind="importe" data-tramo="${idx}" data-prod="${pIdx}"
+               value="${escAttr(p.importe || '')}" placeholder="0,00"
+               maxlength="15" style="flex:1;font-size:12px;padding:4px 6px;border:1px solid #cbd5e0;border-radius:4px;text-align:right;" />
+        <button type="button" class="btn-desg-del-prod" data-tramo="${idx}" data-prod="${pIdx}" title="Eliminar producto"
+                style="background:transparent;border:1px solid #e2e8f0;border-radius:4px;padding:2px 6px;font-size:12px;color:#a0aec0;cursor:pointer;">✕</button>
+      </div>
+    `).join('');
+    return `
+    <div class="desg-block" data-tramo="${idx}" style="border:1px solid #bee3f8;border-radius:6px;background:#fff;padding:10px;margin-bottom:10px;">
+      <div style="display:flex;gap:6px;margin-bottom:8px;align-items:flex-end;">
+        <div style="flex:1;">
+          <label style="display:block;font-size:10px;font-weight:700;color:#4a90d9;margin-bottom:2px;">IVA %</label>
+          <input type="text" data-kind="porcentaje" data-tramo="${idx}" value="${escAttr(l.porcentaje || '')}"
+                 maxlength="5" placeholder="21,0"
+                 style="width:100%;font-size:13px;padding:4px 6px;border:1px solid #90cdf4;border-radius:4px;text-align:center;font-weight:700;" />
+        </div>
+        <div style="flex:2;">
+          <label style="display:block;font-size:10px;font-weight:700;color:#4a90d9;margin-bottom:2px;">BASE TRAMO</label>
+          <input type="text" data-kind="base" data-tramo="${idx}" value="${escAttr(l.base || '')}"
+                 maxlength="15" placeholder="0,00"
+                 style="width:100%;font-size:13px;padding:4px 6px;border:1px solid #90cdf4;border-radius:4px;" />
+        </div>
+        <div style="flex:2;">
+          <label style="display:block;font-size:10px;font-weight:700;color:#4a90d9;margin-bottom:2px;">CUOTA TRAMO</label>
+          <input type="text" data-kind="cuota" data-tramo="${idx}" value="${escAttr(l.cuota || '')}"
+                 maxlength="15" placeholder="0,00"
+                 style="width:100%;font-size:13px;padding:4px 6px;border:1px solid #90cdf4;border-radius:4px;" />
+        </div>
+        <button type="button" class="btn-desg-del-tramo" data-tramo="${idx}" title="Eliminar tramo"
+                style="background:transparent;border:1px solid #fbd38d;border-radius:4px;padding:4px 8px;font-size:12px;color:#c05621;cursor:pointer;">✕ Tramo</button>
+      </div>
+      <div style="font-size:10px;font-weight:700;color:#718096;margin-bottom:4px;">PRODUCTOS DE ESTE TRAMO</div>
+      ${prodsHtml || '<div style="font-size:11px;color:#a0aec0;font-style:italic;">Sin productos</div>'}
+      <button type="button" class="btn-desg-add-prod" data-tramo="${idx}"
+              style="margin-top:6px;background:#ebf8ff;border:1px dashed #90cdf4;color:#2b6cb0;border-radius:4px;padding:4px 8px;font-size:11px;cursor:pointer;">➕ Añadir producto</button>
+    </div>`;
+  }).join('');
+
+  container.insertAdjacentHTML('beforeend',
+    `<button type="button" id="btn-desg-add-tramo"
+             style="width:100%;margin-top:4px;background:#f0fff4;border:1px dashed #68d391;color:#276749;border-radius:4px;padding:6px 10px;font-size:12px;cursor:pointer;">➕ Añadir otro tramo IVA</button>`);
+
+  container.onclick = (e) => {
+    const t = e.target;
+    if (t.classList.contains('btn-desg-del-prod')) {
+      const tramo = parseInt(t.dataset.tramo, 10);
+      const pIdx  = parseInt(t.dataset.prod, 10);
+      const lineas = readDesgloseFromUI();
+      if (lineas[tramo]) { lineas[tramo].productos.splice(pIdx, 1); renderDesgloseBlocks(lineas); }
+    } else if (t.classList.contains('btn-desg-add-prod')) {
+      const tramo = parseInt(t.dataset.tramo, 10);
+      const lineas = readDesgloseFromUI();
+      if (lineas[tramo]) {
+        lineas[tramo].productos = lineas[tramo].productos || [];
+        lineas[tramo].productos.push({ descripcion: '', importe: '' });
+        renderDesgloseBlocks(lineas);
+      }
+    } else if (t.classList.contains('btn-desg-del-tramo')) {
+      const tramo = parseInt(t.dataset.tramo, 10);
+      const lineas = readDesgloseFromUI();
+      lineas.splice(tramo, 1);
+      renderDesgloseBlocks(lineas);
+    } else if (t.id === 'btn-desg-add-tramo') {
+      const lineas = readDesgloseFromUI();
+      lineas.push({ porcentaje: '', base: '', cuota: '', productos: [] });
+      renderDesgloseBlocks(lineas);
+    }
+  };
+  container.oninput = () => updateDesgloseSummary();
+  updateDesgloseSummary();
+}
+
+function readDesgloseFromUI() {
+  const out = [];
+  document.querySelectorAll('#desglose-blocks .desg-block').forEach((block) => {
+    const tramoIdx = block.dataset.tramo;
+    const base       = block.querySelector(`input[data-kind="base"][data-tramo="${tramoIdx}"]`)?.value.trim() || '';
+    const porcentaje = block.querySelector(`input[data-kind="porcentaje"][data-tramo="${tramoIdx}"]`)?.value.trim() || '';
+    const cuota      = block.querySelector(`input[data-kind="cuota"][data-tramo="${tramoIdx}"]`)?.value.trim() || '';
+    const productos = [];
+    block.querySelectorAll('.desg-producto').forEach((row) => {
+      const desc    = row.querySelector('input[data-kind="desc"]')?.value.trim() || '';
+      const importe = row.querySelector('input[data-kind="importe"]')?.value.trim() || '';
+      if (desc || importe) productos.push({ descripcion: desc, importe: importe || null });
+    });
+    out.push({ base, porcentaje, cuota, productos });
+  });
+  return out;
+}
+
+function updateDesgloseSummary() {
+  const summaryEl = document.getElementById('desglose-summary');
+  if (!summaryEl) return;
+  const lineas = readDesgloseFromUI();
+  const parseNum = (s) => {
+    if (!s) return 0;
+    const clean = String(s).replace(/\./g, '').replace(',', '.').replace(/[€$\s]/g, '');
+    const n = parseFloat(clean);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const fmt = (n) => n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  let sumBase = 0, sumCuota = 0, dominantRate = null, dominantCuota = -1;
+  lineas.forEach((l) => {
+    const b = parseNum(l.base);
+    const c = parseNum(l.cuota);
+    sumBase += b; sumCuota += c;
+    if (c > dominantCuota) { dominantCuota = c; dominantRate = l.porcentaje; }
+  });
+  summaryEl.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+      <span><strong>${lineas.length}</strong> tramo${lineas.length !== 1 ? 's' : ''}</span>
+      <span>Σ bases: <strong>${fmt(sumBase)}</strong> €</span>
+      <span>Σ cuotas: <strong>${fmt(sumCuota)}</strong> €</span>
+      <span>Total IVA: <strong>${fmt(sumBase + sumCuota)}</strong> €</span>
+      ${dominantRate ? `<span>Dominante: <strong>${escHtml(String(dominantRate))}%</strong></span>` : ''}
+    </div>`;
+}
+
+async function saveDesglose() {
+  if (!desgloseRowId) return;
+  const lineas = readDesgloseFromUI();
+  const errEl = document.getElementById('desglose-error');
+  errEl.style.display = 'none';
+  const btn = document.getElementById('desglose-save');
+  btn.disabled = true; btn.textContent = 'Guardando...';
+  try {
+    const res = await authFetch(`${API_URL}/admin/facturas/${desgloseRowId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lineas_iva: lineas }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    // Actualizar la fila en Tabulator con el nuevo lineas_iva (y que el backend ya
+    // habrá recalculado base/iva%/cuota agregados — los recargamos haciendo un
+    // GET del registro, o aplicamos el cálculo local).
+    const row = table.getRow(desgloseRowId);
+    if (row) {
+      // Cálculo rápido local para reflejar al instante (el backend hace lo mismo
+      // canónicamente). Evita un round-trip extra al endpoint GET.
+      const parseN = (s) => parseFloat(String(s || '').replace(/\./g, '').replace(',', '.')) || 0;
+      let sumB = 0, sumC = 0, dom = null, domC = -1;
+      lineas.forEach(l => {
+        const b = parseN(l.base), c = parseN(l.cuota);
+        sumB += b; sumC += c;
+        if (c > domC) { domC = c; dom = l.porcentaje; }
+      });
+      const fmtE = (n) => n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      row.update({
+        lineas_iva: lineas,
+        base_imponible: fmtE(sumB),
+        cuota_iva:      fmtE(sumC),
+        iva_porcentaje: dom || null,
+      });
+    }
+    closeDesgloseModal();
+  } catch (err) {
+    errEl.textContent = err.message; errEl.style.display = 'block';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Guardar cambios';
+  }
+}
+
+function initDesgloseModal() {
+  const closeBtn = document.getElementById('desglose-modal-close');
+  const cancelBtn = document.getElementById('desglose-cancel');
+  const saveBtn = document.getElementById('desglose-save');
+  const modal = document.getElementById('desglose-modal');
+  if (closeBtn)  closeBtn.addEventListener('click', closeDesgloseModal);
+  if (cancelBtn) cancelBtn.addEventListener('click', closeDesgloseModal);
+  if (saveBtn)   saveBtn.addEventListener('click', saveDesglose);
+  if (modal)     modal.addEventListener('click', (e) => { if (e.target === modal) closeDesgloseModal(); });
 }
 
 document.addEventListener('DOMContentLoaded', init);

@@ -3120,6 +3120,7 @@ app.get('/api/admin/facturas', authenticateToken, requireAdmin, async (req, res)
                 u.fecha_emision, u.total_factura,
                 u.base_imponible, u.iva_porcentaje, u.cuota_iva,
                 u.irpf_porcentaje, u.cuota_irpf,
+                u.lineas_iva,
                 u.invoice_type,
                 u.uploaded_at, u.procesado_en,
                 u.file_path
@@ -3365,6 +3366,31 @@ app.put('/api/admin/facturas/:id', authenticateToken, requireAdmin, requireXHR, 
   for (const field of EDITABLE) {
     if (req.body[field] !== undefined) updates[field] = req.body[field] || null;
   }
+
+  // Multi-IVA 2026-04-21 parte 4/7: admin puede editar lineas_iva (JSONB).
+  // Si llega array válido, helper recalcula base/cuota/porcentaje como suma y
+  // estos sobreescriben cualquier valor manual enviado en updates.
+  if (Array.isArray(req.body.lineas_iva)) {
+    const norm = normalizeConfirmedLineasIva(req.body.lineas_iva);
+    if (norm.lineas && norm.lineas.length > 0) {
+      updates.lineas_iva     = JSON.stringify(norm.lineas);
+      updates.base_imponible = norm.base;
+      updates.iva_porcentaje = norm.porcentaje;
+      updates.cuota_iva      = norm.cuota;
+      if (norm.errors.length > 0) {
+        logger.warn(`[Admin PUT] lineas_iva con warnings id=${id}: ${norm.errors.join('; ')}`);
+      }
+    } else if (req.body.lineas_iva.length === 0) {
+      // Array vacío explícito → migrar factura a mono-IVA (null en BD)
+      updates.lineas_iva = null;
+    } else {
+      return res.status(400).json({ error: `lineas_iva inválidas: ${norm.errors.join(', ') || 'sin líneas válidas'}` });
+    }
+  } else if (req.body.lineas_iva === null) {
+    // Acepta migración explícita mono-IVA: admin puso null
+    updates.lineas_iva = null;
+  }
+
   if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'No hay campos para actualizar' });
 
   const setClauses = Object.keys(updates).map((f, i) => `${f} = $${i + 1}`);
