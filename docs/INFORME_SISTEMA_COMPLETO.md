@@ -2216,5 +2216,41 @@ Añade esta línea (backup cada día a las 3:00 AM):
 
 ---
 
+### 2026-04-21 (PM) — Sesión v1.0.2: promoción a main + fix modales + sync histórico
+
+**Contexto:** reunión cliente SETEX — producto aprobado. Julio crea cuenta admin `setex@gmail.com` (id=23). Pide continuar el plan D1+ tras su OK.
+
+**Trabajo realizado:**
+
+- PR #53 `fix/admin-approve-backend-2026-04-21 → develop` (mergeado squash, commit `4c7fac6`)
+  - `admin-facturas.js`: `_empAprobar` y `_empRechazar` cierran modal tras éxito + refrescan facturas/empresas. Fix del bug "botón aceptar/rechazar no hacía nada" (modal tapaba el toast).
+  - `server.js /approve /reject`: `UPDATE uploads SET client_company_id = ...` para consistencia FK.
+  - `client-companies.repo.js`: `approve()` y `reject()` con columnas reales (`reviewed_by`, `reviewed_at`, `rejection_reason`). Antes usaba `approved_at`/`approved_by_email`/`deactivation_reason` que no existen. `deactivate()` duplicado eliminado.
+  - `admin-facturas.html`: cache-buster `v=20260421-002`.
+- PR #52 cerrado como duplicado (su commit de historial ya estaba en #53 vía cherry-pick).
+- PR #54 `sync/main-to-develop-2026-04-21 → develop` (merge commit, `01279ab`): reverse merge de main sobre develop para reconciliar divergencia histórica con PRs #32/#34/#44 squashed. Resolución: HEAD (develop) en 4 ficheros afectados (`client-companies.repo.js`, `index.html`, `backup-offsite-replicate.sh`, `MACROPLAN-SETEX-v2.0.md`) — develop es superset funcional.
+- PR #51 `develop → main` mergeado (squash, commit `0b15200`): promoción formal a producción.
+- Workflow `deploy-prod.yml` disparado con `confirm=DESPLEGAR`: success en 1m9s. Backup pre-deploy GPG + `git reset --hard origin/main` + `docker compose build backend frontend` + swap.
+
+**Incidencia operacional resuelta durante la promoción:**
+- `deploy-staging.yml` falló con `error: insufficient permission for adding an object to repository database .git/objects` al hacer `git fetch`.
+- Causa: 44 dirs `.git/objects/XX` en prod + varios en staging eran `root:root` tras commits manuales de la sesión AM. El workflow SSH usa user `deploy` sin permiso de escritura.
+- Fix: `chown -R deploy:deploy /opt/setex/{prod,staging}/.git` + `chmod -R g+w .git/objects`. Re-run staging deploy: success en 1m9s.
+
+**Estado final prod:**
+- `main @ 0b15200` (merge squash PR #51).
+- `setex-prod-{backend,frontend}` rebuild + swap sin incidencias, healthchecks OK en 5s.
+- `https://setex-facturas.es/health` → HTTP 200.
+- Watchdog 9/9 verde post-deploy.
+- Tag anotado `v1.0.2` sobre `01279ab` (origin/develop) pusheado.
+
+**Pendiente próxima sesión:**
+- Mejoras solicitadas por SETEX en la reunión (pendientes de detallar por Julio).
+- C2/C3: completar CIF real de la cuenta `setex@gmail.com` + verificar flujo recuperación pw.
+- D3: limpieza `/opt/setex-captu-facture.OLD-2026-04-20/kk.txt` tras rotación de credencial `Unifisica95#` si aplica.
+- E1 Fase 1 MACROPLAN (Playwright E2E + CSRF cableado + ADR-0001/0002/0003 + OpenAPI + commitlint).
+
+---
+
 *SETEX Captura Facturas · setex-facturas.es*
 *Documento de referencia — actualizar con cada sesión de desarrollo*
