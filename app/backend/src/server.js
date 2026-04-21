@@ -3779,14 +3779,16 @@ app.post('/api/admin/companies/:id/approve', authenticateToken, requireAdmin, re
       [req.user.userId, id]
     );
 
-    // Activar uploads en estado 'pending' → 'active'
+    // Activar uploads en estado 'pending' → 'active' y asignar client_company_id
+    // (consistencia FK: las facturas de empresas aprobadas quedan indexadas igual que
+    //  las de cualquier empresa registrada, sin depender del JOIN por company_nif)
     const uplRes = await client.query(
-      `UPDATE uploads SET upload_status = 'active'
+      `UPDATE uploads SET upload_status = 'active', client_company_id = $1
        WHERE user_id IN (
-         SELECT id FROM users WHERE UPPER(REPLACE(company_nif, ' ', '')) = UPPER(REPLACE($1, ' ', ''))
+         SELECT id FROM users WHERE UPPER(REPLACE(company_nif, ' ', '')) = UPPER(REPLACE($2, ' ', ''))
        ) AND upload_status = 'pending'
        RETURNING id`,
-      [cc.cif]
+      [id, cc.cif]
     );
 
     await client.query('COMMIT');
@@ -3794,7 +3796,7 @@ app.post('/api/admin/companies/:id/approve', authenticateToken, requireAdmin, re
     await logCompanyAudit(id, req.user.userId, 'APPROVED', notes || null, { activated_uploads: uplRes.rows.length });
     auditLog('ADMIN_APPROVE_COMPANY', { company_id: id, nombre: cc.nombre, cif: cc.cif, uploads_activated: uplRes.rows.length }, req.user.userId, req.ip);
     logger.info(`[Admin] Empresa aprobada: ${cc.nombre} (${cc.cif}) por ${req.user.email}, ${uplRes.rows.length} uploads activados`);
-    res.json({ success: true, nombre: cc.nombre, cif: cc.cif, uploads_activated: uplRes.rows.length });
+    res.json({ success: true, company_id: id, nombre: cc.nombre, cif: cc.cif, uploads_activated: uplRes.rows.length });
   } catch (err) {
     await client.query('ROLLBACK');
     logger.error('[POST /admin/companies/:id/approve] error:', err);
@@ -3830,14 +3832,16 @@ app.post('/api/admin/companies/:id/reject', authenticateToken, requireAdmin, req
       [req.user.userId, reason || null, id]
     );
 
-    // Poner uploads en cuarentena (no perder datos, pero marcar)
+    // Poner uploads en cuarentena y asignar client_company_id (consistencia FK:
+    // conserva trazabilidad a la empresa rechazada; las queries filtran por activa=true
+    // así que no aparecen en el listado normal, pero el vínculo queda para auditoría o revinculación)
     const uplRes = await client.query(
-      `UPDATE uploads SET upload_status = 'quarantine'
+      `UPDATE uploads SET upload_status = 'quarantine', client_company_id = $1
        WHERE user_id IN (
-         SELECT id FROM users WHERE UPPER(REPLACE(company_nif, ' ', '')) = UPPER(REPLACE($1, ' ', ''))
+         SELECT id FROM users WHERE UPPER(REPLACE(company_nif, ' ', '')) = UPPER(REPLACE($2, ' ', ''))
        ) AND upload_status = 'pending'
        RETURNING id`,
-      [cc.cif]
+      [id, cc.cif]
     );
 
     await client.query('COMMIT');

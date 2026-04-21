@@ -50,20 +50,22 @@ class ClientCompaniesRepository {
     return r.rows[0];
   }
 
-  async approve(id, adminEmail, codigoCliente = null) {
+  async approve(id, reviewedByUserId) {
     const r = await this.pool.query(
       `UPDATE client_companies
-       SET pendiente = false, activa = true, approved_at = NOW(), approved_by_email = $1, codigo_cliente = $2
-       WHERE id = $3 RETURNING *`,
-      [adminEmail, codigoCliente, id]
+       SET pendiente = false, activa = true, reviewed_by = $1, reviewed_at = NOW()
+       WHERE id = $2 RETURNING *`,
+      [reviewedByUserId, id]
     );
     return r.rows[0] || null;
   }
 
-  async deactivate(id, reason = null) {
+  async reject(id, reviewedByUserId, reason = null) {
     const r = await this.pool.query(
-      `UPDATE client_companies SET activa = false, deactivation_reason = $1 WHERE id = $2 RETURNING *`,
-      [reason, id]
+      `UPDATE client_companies
+       SET pendiente = false, activa = false, reviewed_by = $1, reviewed_at = NOW(), rejection_reason = $2
+       WHERE id = $3 RETURNING *`,
+      [reviewedByUserId, reason, id]
     );
     return r.rows[0] || null;
   }

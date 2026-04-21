@@ -746,8 +746,11 @@ window._empAprobar = async function(id, nombre) {
     });
     const data = await res.json();
     if (!res.ok) { showEmpresaToast(data.error || 'Error al aprobar', 'error'); return; }
+    const modal = document.getElementById('review-company-modal');
+    if (modal) modal.remove();
     showEmpresaToast(`✓ "${data.nombre}" aprobada. ${data.uploads_activated || 0} documentos activados.`, 'ok');
     loadEmpresas();
+    if (table) loadData(currentFilters);
   } catch (err) { showEmpresaToast('Error de red: ' + err.message, 'error'); }
 };
 
@@ -763,8 +766,11 @@ window._empRechazar = async function(id, nombre) {
     });
     const data = await res.json();
     if (!res.ok) { showEmpresaToast(data.error || 'Error al rechazar', 'error'); return; }
+    const modal = document.getElementById('review-company-modal');
+    if (modal) modal.remove();
     showEmpresaToast(`Empresa "${data.nombre}" rechazada. ${data.quarantined_uploads || 0} docs en cuarentena.`, 'ok');
     loadEmpresas();
+    if (table) loadData(currentFilters);
   } catch (err) { showEmpresaToast('Error de red: ' + err.message, 'error'); }
 };
 
