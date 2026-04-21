@@ -74,9 +74,50 @@ async function pollResult(operationUrl, apiKey, timeoutMs = 45000) {
   throw new Error('Azure DI timeout (>45s)');
 }
 
-// ── Extracción de lineas_iva desde TaxDetails ──────────────────────────────────
-// Azure DI devuelve un array TaxDetails con una entrada por tipo de IVA.
-// Cada entrada tiene: Amount (cuota), Rate (porcentaje), BaseAmount (base).
+// ── Extracción de lineas_iva desde TaxDetails + Items ─────────────────────────
+// Azure DI devuelve:
+//   - TaxDetails: array con una entrada por tipo de IVA (Amount, Rate, BaseAmount)
+//   - Items: array con las líneas/productos de la factura (Description, Amount, TaxRate, Quantity, ProductCode)
+//
+// Estrategia multi-IVA (2026-04-21 super-tarea cliente):
+//   1. Construir el array base de tramos desde TaxDetails (base/%/cuota).
+//   2. Recorrer Items y asociar cada uno al tramo cuyo % coincida con su TaxRate.
+//   3. Productos sin TaxRate identificable quedan fuera del desglose (OpenAI los
+//      pillará en su array propio o el usuario los rellenará a mano).
+//   4. Early-branch: si solo hay 1 tramo en TaxDetails, devolvemos null para que
+//      el flujo simple lo maneje con iva_porcentaje/cuota_iva agregados.
+
+function normalizeRate(rateValue) {
+  // Azure reporta Rate a veces como 21, a veces 0.21, a veces "21%". Normalizamos
+  // a número con 2 decimales max (ej. 21.0, 10.0, 4.0).
+  if (rateValue == null) return null;
+  let n = typeof rateValue === 'number' ? rateValue : parseFloat(String(rateValue).replace(',', '.').replace('%', ''));
+  if (!Number.isFinite(n)) return null;
+  if (n < 1) n = n * 100;               // 0.21 → 21
+  return Math.round(n * 10) / 10;        // evita 21.00000001
+}
+
+function extractProductosFromItems(fields, tramoRate) {
+  const items = fields.Items;
+  if (!items || !Array.isArray(items.valueArray) || items.valueArray.length === 0) {
+    return [];
+  }
+  const productos = [];
+  for (const it of items.valueArray) {
+    const obj = it.valueObject || {};
+    const desc = obj.Description?.valueString || obj.ProductCode?.valueString;
+    if (!desc) continue;
+    const itemRateRaw = obj.TaxRate?.valueNumber ?? obj.TaxRate?.valueString ?? null;
+    const itemRate = normalizeRate(itemRateRaw);
+    if (itemRate == null || itemRate !== tramoRate) continue; // solo items de este tramo
+    const amount = obj.Amount?.valueCurrency?.amount ?? obj.Amount?.valueNumber ?? null;
+    productos.push({
+      descripcion: String(desc).substring(0, 120),
+      importe:     amount != null ? toSpanishAmount(amount) : null
+    });
+  }
+  return productos;
+}
 
 function extractLineasIvaAzure(fields) {
   const taxDetails = fields.TaxDetails;
@@ -92,19 +133,26 @@ function extractLineasIvaAzure(fields) {
     const baseField   = obj.BaseAmount || obj.TaxBase;
 
     const cuota = amountField?.valueCurrency?.amount ?? amountField?.valueNumber ?? null;
-    const rate  = rateField?.valueNumber ?? null;
+    const rateRaw = rateField?.valueNumber ?? rateField?.valueString ?? null;
     const base  = baseField?.valueCurrency?.amount ?? baseField?.valueNumber ?? null;
 
     if (cuota == null) continue; // sin cuota → línea no útil
 
+    const rateNorm = normalizeRate(rateRaw);
+    const productos = rateNorm != null ? extractProductosFromItems(fields, rateNorm) : [];
+
     lineas.push({
       base:       base != null ? toSpanishAmount(base) : null,
-      porcentaje: rate != null ? toSpanishPercent(rate) : null,
-      cuota:      toSpanishAmount(cuota)
+      porcentaje: rateNorm != null ? toSpanishPercent(rateNorm) : null,
+      cuota:      toSpanishAmount(cuota),
+      productos
     });
   }
 
-  return lineas.length > 0 ? lineas : null;
+  // Early-branch: si solo hay un tramo, devolvemos null y el flujo simple se encarga
+  // con iva_porcentaje/cuota_iva agregados. Multi-tramo solo cuando >=2.
+  if (lineas.length < 2) return null;
+  return lineas;
 }
 
 // ── Extracción del porcentaje de IVA principal ────────────────────────────────

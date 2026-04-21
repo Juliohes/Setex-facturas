@@ -1021,21 +1021,25 @@ function showConfirmModal(previewId, campos, meta) {
     // El botón toggle: ocultarlo si ya mostramos el IRPF automáticamente
     if (irpfToggleRow) irpfToggleRow.style.display = showIrpf ? 'none' : 'block';
 
-    // Líneas IVA múltiple (informativo)
-    const lineasEl = document.getElementById('confirm-lineas-iva');
-    if (lineasEl && campos.lineas_iva && Array.isArray(campos.lineas_iva) && campos.lineas_iva.length > 1) {
-        const lineasHtml = campos.lineas_iva.map(l =>
-            `<div style="display:flex;justify-content:space-between;font-size:11px;padding:3px 0;border-bottom:1px solid #bee3f8;">
-                <span style="color:#2b6cb0;">Base ${l.porcentaje}%:</span>
-                <span>${l.base || '—'}</span>
-                <span style="color:#2b6cb0;">Cuota:</span>
-                <span style="font-weight:700;">${l.cuota || '—'}</span>
-            </div>`
-        ).join('');
-        lineasEl.innerHTML = `<div style="font-size:10px;font-weight:700;color:#4a90d9;margin-bottom:4px;">DESGLOSE POR TIPO DE IVA</div>${lineasHtml}`;
-        lineasEl.style.display = 'block';
-    } else if (lineasEl) {
-        lineasEl.style.display = 'none';
+    // Multi-IVA 2026-04-21 parte 3/7: decisión visual mono vs multi.
+    // Si lineas_iva tiene 2+ tramos → vista multi con bloques editables por tramo.
+    // Si no → vista mono (comportamiento actual).
+    const isMultiIva = campos.lineas_iva && Array.isArray(campos.lineas_iva) && campos.lineas_iva.length >= 2;
+    const monoEl    = document.getElementById('confirm-iva-mono');
+    const multiEl   = document.getElementById('confirm-iva-multi');
+    const calcEl    = document.getElementById('confirm-iva-calc');
+    const ivaTitleEl = document.getElementById('confirm-iva-title');
+    if (isMultiIva) {
+        if (monoEl)    monoEl.style.display  = 'none';
+        if (multiEl)   multiEl.style.display = 'block';
+        if (calcEl)    calcEl.style.display  = 'none';
+        if (ivaTitleEl) ivaTitleEl.textContent = 'DESGLOSE IVA POR TRAMOS';
+        renderLineasIvaMulti(campos.lineas_iva);
+    } else {
+        if (monoEl)    monoEl.style.display  = 'block';
+        if (multiEl)   multiEl.style.display = 'none';
+        if (calcEl)    calcEl.style.display  = 'block';
+        if (ivaTitleEl) ivaTitleEl.textContent = 'DESGLOSE IVA';
     }
 
     // Estado de validación IVA del backend
@@ -1150,6 +1154,165 @@ window.addEventListener('popstate', function() {
     }
 });
 
+// ── Multi-IVA 2026-04-21 parte 3/7 ──────────────────────────────────────────
+// Renderiza bloques editables por tramo cuando la factura tiene varios IVAs.
+// Cada bloque permite editar base/cuota + añadir/quitar productos.
+
+function escAttr(s) { return String(s ?? '').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
+function escHtmlF(s) { return String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+function renderLineasIvaMulti(lineas) {
+    const container = document.getElementById('confirm-lineas-iva-blocks');
+    if (!container) return;
+    container.innerHTML = (lineas || []).map((l, idx) => {
+        const productosHtml = (Array.isArray(l.productos) ? l.productos : []).map((p, pIdx) => `
+          <div class="lineas-iva-producto" style="display:flex; gap:6px; margin-top:4px; align-items:center;">
+            <input type="text" data-kind="desc" data-tramo="${idx}" data-prod="${pIdx}"
+                   value="${escAttr(p.descripcion || '')}" placeholder="Descripción producto"
+                   maxlength="120" style="flex:3; font-size:12px; padding:4px 6px; border:1px solid #cbd5e0; border-radius:4px;" />
+            <input type="text" data-kind="importe" data-tramo="${idx}" data-prod="${pIdx}"
+                   value="${escAttr(p.importe || '')}" placeholder="0,00"
+                   maxlength="15" style="flex:1; font-size:12px; padding:4px 6px; border:1px solid #cbd5e0; border-radius:4px; text-align:right;" />
+            <button type="button" class="btn-del-producto" data-tramo="${idx}" data-prod="${pIdx}" title="Eliminar producto"
+                    style="background:transparent; border:1px solid #e2e8f0; border-radius:4px; padding:2px 6px; font-size:12px; color:#a0aec0; cursor:pointer;">✕</button>
+          </div>
+        `).join('');
+        return `
+        <div class="lineas-iva-block" data-tramo="${idx}" style="border:1px solid #bee3f8; border-radius:6px; background:#fff; padding:10px; margin-bottom:10px;">
+          <div style="display:flex; gap:6px; margin-bottom:8px; align-items:flex-end;">
+            <div style="flex:1;">
+              <label style="display:block; font-size:10px; font-weight:700; color:#4a90d9; margin-bottom:2px;">IVA %</label>
+              <input type="text" data-kind="porcentaje" data-tramo="${idx}" value="${escAttr(l.porcentaje || '')}"
+                     maxlength="5" placeholder="21,0"
+                     style="width:100%; font-size:13px; padding:4px 6px; border:1px solid #90cdf4; border-radius:4px; text-align:center; font-weight:700;" />
+            </div>
+            <div style="flex:2;">
+              <label style="display:block; font-size:10px; font-weight:700; color:#4a90d9; margin-bottom:2px;">BASE TRAMO</label>
+              <input type="text" data-kind="base" data-tramo="${idx}" value="${escAttr(l.base || '')}"
+                     maxlength="15" placeholder="0,00"
+                     style="width:100%; font-size:13px; padding:4px 6px; border:1px solid #90cdf4; border-radius:4px;" />
+            </div>
+            <div style="flex:2;">
+              <label style="display:block; font-size:10px; font-weight:700; color:#4a90d9; margin-bottom:2px;">CUOTA TRAMO</label>
+              <input type="text" data-kind="cuota" data-tramo="${idx}" value="${escAttr(l.cuota || '')}"
+                     maxlength="15" placeholder="0,00"
+                     style="width:100%; font-size:13px; padding:4px 6px; border:1px solid #90cdf4; border-radius:4px;" />
+            </div>
+            <button type="button" class="btn-del-tramo" data-tramo="${idx}" title="Eliminar tramo"
+                    style="background:transparent; border:1px solid #fbd38d; border-radius:4px; padding:4px 8px; font-size:12px; color:#c05621; cursor:pointer;">✕ Tramo</button>
+          </div>
+          <div class="lineas-iva-productos-list" data-tramo="${idx}">
+            <div style="font-size:10px; font-weight:700; color:#718096; margin-bottom:4px;">PRODUCTOS DE ESTE TRAMO</div>
+            ${productosHtml || '<div style="font-size:11px; color:#a0aec0; font-style:italic;">Sin productos detectados por OCR — añade manualmente si procede</div>'}
+            <button type="button" class="btn-add-producto" data-tramo="${idx}" title="Añadir producto"
+                    style="margin-top:6px; background:#ebf8ff; border:1px dashed #90cdf4; color:#2b6cb0; border-radius:4px; padding:4px 8px; font-size:11px; cursor:pointer;">➕ Añadir producto</button>
+          </div>
+        </div>`;
+    }).join('');
+
+    // Botón global para añadir tramo nuevo
+    const btnAddTramoHtml = `
+      <button type="button" id="btn-add-tramo"
+              style="width:100%; margin-top:4px; background:#f0fff4; border:1px dashed #68d391; color:#276749; border-radius:4px; padding:6px 10px; font-size:12px; cursor:pointer;">
+        ➕ Añadir otro tramo IVA
+      </button>`;
+    container.insertAdjacentHTML('beforeend', btnAddTramoHtml);
+
+    // Event delegation (una sola vez por render)
+    container.onclick = (e) => {
+        const t = e.target;
+        if (t.classList.contains('btn-del-producto')) {
+            const tramo = parseInt(t.dataset.tramo, 10);
+            const pIdx  = parseInt(t.dataset.prod, 10);
+            const lineasActuales = readLineasIvaFromUI();
+            if (lineasActuales[tramo] && Array.isArray(lineasActuales[tramo].productos)) {
+                lineasActuales[tramo].productos.splice(pIdx, 1);
+                renderLineasIvaMulti(lineasActuales);
+                updateLineasIvaSummary();
+            }
+        } else if (t.classList.contains('btn-add-producto')) {
+            const tramo = parseInt(t.dataset.tramo, 10);
+            const lineasActuales = readLineasIvaFromUI();
+            if (lineasActuales[tramo]) {
+                lineasActuales[tramo].productos = lineasActuales[tramo].productos || [];
+                lineasActuales[tramo].productos.push({ descripcion: '', importe: '' });
+                renderLineasIvaMulti(lineasActuales);
+                updateLineasIvaSummary();
+            }
+        } else if (t.classList.contains('btn-del-tramo')) {
+            const tramo = parseInt(t.dataset.tramo, 10);
+            const lineasActuales = readLineasIvaFromUI();
+            lineasActuales.splice(tramo, 1);
+            renderLineasIvaMulti(lineasActuales);
+            updateLineasIvaSummary();
+        } else if (t.id === 'btn-add-tramo') {
+            const lineasActuales = readLineasIvaFromUI();
+            lineasActuales.push({ porcentaje: '', base: '', cuota: '', productos: [] });
+            renderLineasIvaMulti(lineasActuales);
+            updateLineasIvaSummary();
+        }
+    };
+    container.oninput = () => updateLineasIvaSummary();
+
+    updateLineasIvaSummary();
+}
+
+function readLineasIvaFromUI() {
+    const multiEl = document.getElementById('confirm-iva-multi');
+    if (!multiEl || multiEl.style.display === 'none') return null;
+    const blocks = multiEl.querySelectorAll('.lineas-iva-block');
+    if (blocks.length === 0) return [];
+    const out = [];
+    blocks.forEach((block) => {
+        const tramoIdx = block.dataset.tramo;
+        const base       = block.querySelector(`input[data-kind="base"][data-tramo="${tramoIdx}"]`)?.value.trim() || '';
+        const porcentaje = block.querySelector(`input[data-kind="porcentaje"][data-tramo="${tramoIdx}"]`)?.value.trim() || '';
+        const cuota      = block.querySelector(`input[data-kind="cuota"][data-tramo="${tramoIdx}"]`)?.value.trim() || '';
+        const productos = [];
+        block.querySelectorAll('.lineas-iva-producto').forEach((row) => {
+            const desc    = row.querySelector('input[data-kind="desc"]')?.value.trim() || '';
+            const importe = row.querySelector('input[data-kind="importe"]')?.value.trim() || '';
+            if (desc || importe) productos.push({ descripcion: desc, importe: importe || null });
+        });
+        out.push({ base, porcentaje, cuota, productos });
+    });
+    return out;
+}
+
+function updateLineasIvaSummary() {
+    const summaryEl = document.getElementById('confirm-lineas-iva-summary');
+    if (!summaryEl) return;
+    const lineas = readLineasIvaFromUI();
+    if (!lineas || lineas.length === 0) {
+        summaryEl.innerHTML = '<em style="color:#a0aec0;">Sin tramos definidos</em>';
+        return;
+    }
+    // Parseador simple de formato español para la suma
+    const parseNum = (s) => {
+        if (!s) return 0;
+        const clean = String(s).replace(/\./g, '').replace(',', '.').replace(/[€$\s]/g, '');
+        const n = parseFloat(clean);
+        return Number.isFinite(n) ? n : 0;
+    };
+    const fmt = (n) => n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    let sumBase = 0, sumCuota = 0, dominantRate = null, dominantCuota = -1;
+    lineas.forEach((l) => {
+        const b = parseNum(l.base);
+        const c = parseNum(l.cuota);
+        sumBase  += b;
+        sumCuota += c;
+        if (c > dominantCuota) { dominantCuota = c; dominantRate = l.porcentaje; }
+    });
+    summaryEl.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <span><strong>${lineas.length}</strong> tramo${lineas.length !== 1 ? 's' : ''}</span>
+        <span>Σ bases: <strong>${fmt(sumBase)}</strong> €</span>
+        <span>Σ cuotas: <strong>${fmt(sumCuota)}</strong> €</span>
+        <span>Total IVA: <strong>${fmt(sumBase + sumCuota)}</strong> €</span>
+        ${dominantRate ? `<span style="color:#2c5282;">Tipo dominante: <strong>${escHtmlF(dominantRate)}%</strong></span>` : ''}
+      </div>`;
+}
+
 async function confirmUpload() {
     if (!currentPreviewId) return;
 
@@ -1161,12 +1324,18 @@ async function confirmUpload() {
     const confirmed_proveedor_nombre = document.getElementById('confirm-proveedor')?.value?.trim() || '';
     const confirmed_receptor_nombre  = document.getElementById('confirm-receptor-nombre')?.value?.trim() || '';
     const confirmed_receptor_nif     = document.getElementById('confirm-receptor-nif')?.value?.trim().toUpperCase().replace(/[\s\-\.]/g, '') || '';
-    // Campos IVA corregibles por el usuario
+    // Campos IVA corregibles por el usuario — modo mono (un solo tramo editable)
     const confirmed_base_imponible  = document.getElementById('confirm-base').value.trim();
     const confirmed_iva_porcentaje  = document.getElementById('confirm-iva-pct').value.trim();
     const confirmed_cuota_iva       = document.getElementById('confirm-cuota-iva').value.trim();
     const confirmed_irpf_porcentaje = document.getElementById('confirm-irpf-pct')?.value?.trim() || '';
     const confirmed_cuota_irpf      = document.getElementById('confirm-cuota-irpf')?.value?.trim() || '';
+
+    // Multi-IVA 2026-04-21 parte 3/7: si la vista multi está activa, serializamos
+    // los tramos editados. El backend (parte 2/7) recalculará base/cuota/iva%
+    // como suma + tipo dominante, sobreescribiendo los campos mono si ambos se
+    // envían (el normalizeConfirmedLineasIva tiene prioridad sobre los agregados).
+    const confirmed_lineas_iva = readLineasIvaFromUI();
 
     const msgEl = document.getElementById('confirm-message');
 
@@ -1198,6 +1367,7 @@ async function confirmUpload() {
                 confirmed_cuota_iva,
                 confirmed_irpf_porcentaje,
                 confirmed_cuota_irpf,
+                confirmed_lineas_iva,
             })
         });
 

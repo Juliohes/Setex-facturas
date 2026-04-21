@@ -233,8 +233,28 @@
     </div>
   </div>
 
+  <!-- Modal desglose IVA por tramos (admin) — Super-tarea multi-IVA parte 4/7 -->
+  <div id="desglose-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-card" style="max-width:820px;max-height:88vh;overflow-y:auto;">
+      <div class="modal-header">
+        <h3 id="desglose-modal-title">Desglose IVA por tramos</h3>
+        <button id="desglose-modal-close" class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body" style="padding:16px 20px;">
+        <div id="desglose-meta" style="font-size:12px;color:#4a5568;margin-bottom:12px;padding:8px 10px;background:#f7fafc;border-left:3px solid #90cdf4;border-radius:4px;"></div>
+        <div id="desglose-blocks"></div>
+        <div id="desglose-summary" style="margin-top:10px;padding:8px 10px;background:#ebf8ff;border:1px solid #bee3f8;border-radius:4px;font-size:12px;color:#2c5282;"></div>
+        <p id="desglose-error" class="edit-error" style="display:none;margin-top:10px;"></p>
+      </div>
+      <div class="modal-footer">
+        <button id="desglose-cancel" class="btn-secondary">Cancelar</button>
+        <button id="desglose-save" class="btn-primary">Guardar cambios</button>
+      </div>
+    </div>
+  </div>
+
   <script src="tabulator.min.js"></script>
   <script src="auth.js?v=20260414-003"></script>
-  <script src="admin-facturas.js?v=20260421-002"></script>
+  <script src="admin-facturas.js?v=20260421-003"></script>
 </body>
 </html>
