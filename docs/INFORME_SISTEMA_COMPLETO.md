@@ -2246,9 +2246,33 @@ Añade esta línea (backup cada día a las 3:00 AM):
 
 **Pendiente próxima sesión:**
 - Mejoras solicitadas por SETEX en la reunión (pendientes de detallar por Julio).
-- C2/C3: completar CIF real de la cuenta `setex@gmail.com` + verificar flujo recuperación pw.
 - D3: limpieza `/opt/setex-captu-facture.OLD-2026-04-20/kk.txt` tras rotación de credencial `Unifisica95#` si aplica.
-- E1 Fase 1 MACROPLAN (Playwright E2E + CSRF cableado + ADR-0001/0002/0003 + OpenAPI + commitlint).
+
+---
+
+### 2026-04-21 (PM segunda parte) — C2 + C3 + arranque Fase 1 MACROPLAN
+
+**C2 cerrado** — cuenta admin de prueba `setex@gmail.com` (id=23) completada con CIF inventado `B87654323` (categoría B/SL, válido AEAT según `checkDigitCIF`). Auditoría en `audit_logs` acción `ADMIN_UPDATE_USER_TEST_CIF`. No es un CIF real — es dummy para que el panel funcione durante las pruebas del cliente.
+
+**C3 verificado** — `POST /api/auth/forgot-password` operativo end-to-end:
+- Email inexistente → HTTP 200 + respuesta genérica (no revela) + log `non-existent email`.
+- Email vacío → HTTP 400.
+- Email existente (`juliohesuni@gmail.com`) → HTTP 200 + token en `password_reset_tokens` + log `Password reset email sent` + Julio confirma recepción en inbox y cambio de password exitoso.
+
+**E1 arrancada** — PR #56 `feat/phase1-playwright-adr-commitlint-2026-04-21` mergeado a develop (squash, commit `b1b70a5`):
+- **P1.1**: `tests/e2e/` con Playwright ^1.48 + 3 specs (login, admin-panel, health). 3/3 passed contra prod en 4s. Soporte BasicAuth opcional para staging Traefik.
+- **P1.4**: `docs/adr/` con README + template + 0001 (Git+ESLint+Husky+commitlint) + 0002 (Strangler-Fig) + 0003 (TypeScript gradual).
+- **P1.5 parcial**: `package.json` root + husky + `@commitlint/cli` + `commitlint.config.js` + `.husky/commit-msg` hook bloqueando commits no-CC.
+
+**Pendiente Fase 1 (próxima sesión):**
+- P1.1 bis: spec `04-invoice-upload.spec.js` + workflow CI `.github/workflows/e2e.yml` contra staging.
+- P1.2: cablear CSRF double-submit en rutas mutantes (módulo existe en `services/auth/csrf.service.js`).
+- P1.3: Strangler-Fig paso 21b (cablear services/auth + repositories en rutas) + paso 22 (renombre `server.js → app.js` <100 líneas).
+- P1.5 bis: lint-staged + pre-commit hook + OpenAPI 3.1 yaml canónico.
+
+**Pendiente menor:**
+- D3: limpieza `kk.txt` + symlink legacy (tras rotación de credencial y semana de gracia).
+- Mejoras cliente SETEX (pendientes de lista por Julio).
 
 ---
 
