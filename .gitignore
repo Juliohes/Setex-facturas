@@ -94,3 +94,11 @@ ehthumbs.db
 *.bak
 *.orig
 *.backup
+
+# Root tooling (commitlint + husky)
+/node_modules/
+
+# E2E tests artifacts
+tests/e2e/node_modules/
+tests/e2e/playwright-report/
+tests/e2e/test-results/

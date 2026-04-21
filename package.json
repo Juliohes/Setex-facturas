@@ -1,0 +1,18 @@
+{
+  "name": "setex-root",
+  "version": "1.0.2",
+  "private": true,
+  "description": "Workspace root de SETEX Captura de Facturas — sólo tooling de repo (hooks, commitlint, ADR). El código vive en app/backend y app/frontend.",
+  "scripts": {
+    "prepare": "husky",
+    "commitlint": "commitlint --edit"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^19.5.0",
+    "@commitlint/config-conventional": "^19.5.0",
+    "husky": "^9.1.7"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
