@@ -1,16 +1,35 @@
-# SETEX · paths.sh — fuente única de rutas, contenedores y dominio (entorno: PROD)
+# SETEX · paths.sh — fuente única de rutas, contenedores y dominio
+#
+# Autodetección de entorno: resuelve prod vs staging a partir del directorio
+# de instalación del propio fichero. Un mismo paths.sh sirve para ambos
+# entornos: solo hay que instalarlo en /opt/setex/prod/scripts/lib/ o en
+# /opt/setex/staging/scripts/lib/ — el script decide el resto.
 #
 # Source desde cualquier script bash con:
-#   source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/paths.sh"
-#
-# ⚠️  MANTENER EN PARALELO con /opt/setex/staging/scripts/lib/paths.sh
-#     Sólo deben diferir las 2 primeras variables (ENV y BASE_DIR) + DOMAIN.
-#     Un próximo cutover debe requerir editar ÚNICAMENTE este fichero.
+#   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+#   source "${SCRIPT_DIR}/lib/paths.sh"
 
-# ── Identidad del entorno ─────────────────────────────────────────────────────
-export SETEX_ENV="prod"
-export BASE_DIR="/opt/setex/prod"
-export DOMAIN="setex-facturas.es"
+# ── Detección de entorno ──────────────────────────────────────────────────────
+# BASE_DIR se deriva de la ruta real del fichero: .../{prod|staging}/scripts/lib/paths.sh
+_PATHS_SH_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export BASE_DIR="$(cd "${_PATHS_SH_PATH}/../.." && pwd)"
+_ENV_NAME="$(basename "${BASE_DIR}")"
+
+case "${_ENV_NAME}" in
+  prod)
+    export SETEX_ENV="prod"
+    export DOMAIN="setex-facturas.es"
+    ;;
+  staging)
+    export SETEX_ENV="staging"
+    export DOMAIN="staging.setex-facturas.es"
+    ;;
+  *)
+    echo "paths.sh: entorno no reconocido a partir de BASE_DIR=${BASE_DIR}" >&2
+    echo "  esperado basename 'prod' o 'staging'" >&2
+    return 1 2>/dev/null || exit 1
+    ;;
+esac
 
 # ── Directorios derivados ─────────────────────────────────────────────────────
 export SHARED_DIR="/opt/setex/shared"
@@ -41,7 +60,12 @@ export HEALTH_URL="${BASE_URL}/health"
 
 # ── Backup offsite ────────────────────────────────────────────────────────────
 export OFFSITE_HOST="72.62.189.27"
-export OFFSITE_DIR="/opt/setex-backups-offsite/postgres"
+# Prod → /opt/setex-backups-offsite/postgres · staging → .../postgres-staging
+if [ "${SETEX_ENV}" = "staging" ]; then
+  export OFFSITE_DIR="/opt/setex-backups-offsite/postgres-staging"
+else
+  export OFFSITE_DIR="/opt/setex-backups-offsite/postgres"
+fi
 
 # ── Postgres ──────────────────────────────────────────────────────────────────
 export PG_USER="setex_user"
