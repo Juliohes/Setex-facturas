@@ -578,6 +578,21 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-04-22 — Fase 1 refactor v3 · Round 8: services auth/email + mail adapter/factory (PR #70)
+- `src/services/auth/token-verification.service.js` — verificación JWT + token_version BD con **queryWithTimeout 500ms** (fail-secure: si pool no responde rechaza token con `db_unavailable retriable:true`)
+- `src/services/auth/refresh-token.service.js` — rotación RT con **reuse detection**: si llega RT ya revocado con `replaced_by_hash ≠ null` → revoca toda la familia (cierra sesión atacante y usuario); `issue/rotate/logout/cleanupExpired/hashToken`; JWT TTL 7d + SHA-256 en BD
+- `src/services/auth/password-reset-token.service.js` — token raw 32 bytes (64 hex) al email, hash SHA-256 en BD; `issue/verify/consume` con TTL 30min
+- `src/adapters/mail/nodemailer.adapter.js` — implementa MailPort. Healthcheck via `transport.verify()`. Send valida to/subject/text obligatorios. assertMailPort runtime check
+- `src/factories/email-transport.factory.js` — `createMailPort()` encadena `createMailTransport` (config) → `createNodemailerAdapter` (adapter) → devuelve MailPort listo para DI
+- `src/services/email/templates/base-layout.template.js` — HTML mínimo compatible (Outlook/Apple Mail) con escapeHtml en call-site
+- `src/services/email/templates/password-reset.template.js` — texto + HTML con CTA, enlace fallback, TTL explícito, escapado de email y URL
+- `src/services/email/templates/approval-pending.template.js` — notificación admin con datos empresa pendiente + CTA panel admin
+- `src/services/email/password-reset.service.js` — `send()` compone URL + invoca template + mail.send. Logs PII-safe vía sanitizer
+- `src/services/email/approval-notification.service.js` — `notifyPending()` envía a lista de adminEmails, devuelve `{ ok, sent, results }` con status por destinatario
+- 10 ficheros nuevos · 439 líneas · máx 83 líneas (target Round 8 <150)
+- Smoke local verificado: hashToken determinístico, templates escapan `<script>` → `&lt;script&gt;`, adapter con transport null rechaza con error claro, tokens servicios instancian OK. 17/17 tests siguen verdes
+- `server.js` intacto — todos los services/adapters listos para cablear en Round 9+
+
 ### 2026-04-22 — Fase 1 refactor v3 · Round 7: adapters/ocr + factory + orchestration Strategy (PR #69)
 - `src/adapters/ocr/openai.adapter.js` — implementa OcrPort delegando en `ocr/openai.js`. Normaliza output: engine/emisor/receptor/fecha/totales/IRPF/tramos_iva/lineas_iva/confidence/duration_ms. Healthcheck vía `GET /v1/models` con timeout 3s
 - `src/adapters/ocr/azure.adapter.js` — implementa OcrPort delegando en `ocr/azure.js`. Healthcheck vía `/formrecognizer/info`. Normalización homogénea con openai
