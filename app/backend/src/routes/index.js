@@ -7,6 +7,7 @@
 
 const { makeHealthRoutes } = require('./health.routes');
 const { makeAuthRoutes } = require('./auth.routes');
+const { makeUploadsRoutes } = require('./uploads.routes');
 
 function mountRoutes(app, { container, middleware = {} } = {}) {
   if (!app) throw new Error('mountRoutes: "app" required');
@@ -31,6 +32,23 @@ function mountRoutes(app, { container, middleware = {} } = {}) {
       refreshLimiter: middleware.refreshLimiter,
     });
     app.use('/api/auth', authRouter);
+  }
+
+  if (container.hasRegistration('previewController')) {
+    const uploadsRouter = makeUploadsRoutes({
+      previewController: container.resolve('previewController'),
+      confirmController: container.resolve('confirmController'),
+      listMineController: container.resolve('listMineController'),
+      imageController: container.resolve('imageController'),
+      proveedorController: container.resolve('proveedorController'),
+      exportXlsxController: container.resolve('exportXlsxController'),
+      authenticate: middleware.authenticate,
+      requireActiveCompany: middleware.requireActiveCompany,
+      uploadLimiter: middleware.uploadLimiter,
+      confirmLimiter: middleware.confirmLimiter,
+      fileUploader: middleware.fileUploader,
+    });
+    app.use('/api', uploadsRouter);
   }
 }
 
