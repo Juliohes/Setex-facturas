@@ -578,6 +578,20 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-04-22 — Fase 1 refactor v3 · Round 2: lib/ + ports/ + container DI (PR #64)
+- Instalada dependencia `awilix@^10.0.2` (container DI JS puro, 0 CVE moderate+, ~30KB)
+- `src/lib/errors/` creada — `app-error.js` (raíz + toJSON), `http-error.js` (Auth/Forbidden/NotFound/Conflict/RateLimit/UnprocessableEntity/BadGateway/ServiceUnavailable), `validation-error.js` (con `ValidationError.fromZod()`), `index.js` (barrel). Reemplaza el antiguo `lib/errors.js` (huérfano, 0 importers)
+- `src/lib/async-handler.js` — wrapper para handlers async Express (captura rechazos → next(err))
+- `src/lib/html-escape.js` — escapado HTML para templates email (defense-in-depth anti XSS en server-side render)
+- `src/lib/ip-utils.js` — `extractClientIp` (Traefik-aware), `isValidIp`, `ipInCidr`, `normalizeIp`
+- `src/lib/pii-sanitizer.js` — redacta emails (`ju***@dominio`) + keys sensibles (password/token/secret/session/authorization/csrf) en estructuras recursivas antes de logs
+- `src/lib/file-cleanup.js` — `safeUnlink` con guardia anti path-traversal + `cleanupOlderThan` con mtime
+- `src/ports/` creada — 6 contratos JSDoc typedef + `assert*Port()` guards: `ocr.port.js`, `mail.port.js`, `cache.port.js`, `queue.port.js`, `storage.port.js`, `auth-token.port.js`
+- `src/container.js` — factoría `createAppContainer()` (Awilix PROXY strict) + middleware `attachRequestScope` per-request con `requestId`/`userAgent`/`clientIp`
+- `src/bootstrap/index.js` — esqueleto del bootstrap por capas (infra → adapters → factories → repos → services → controllers). Providers reales se añadirán en rounds 3-14
+- Smoke: container inicia OK, `assertOcrPort` rechaza inválido y acepta válido, `sanitize` redacta, `asyncHandler` delega err
+- `server.js` intacto (4308 líneas) — container aún no cableado. Round 2 solo añade módulos sin romper el monolito
+
 ### 2026-04-22 — Fase 1 refactor v3: ADR-0004 + ADR-0005 (Round 1 · PR #63)
 - `docs/adr/0004-modular-architecture-solid-patterns.md` — decisión de arquitectura modular v3 con SOLID explícito + patrones canónicos (Repository, Service Layer, Controller thin, Ports & Adapters, Factory, Strategy, Builder). Mapeo SOLID→solución + enforcement CI (eslint-plugin-boundaries + dependency-cruiser + tests/architecture.test.js)
 - `docs/adr/0005-dependency-injection-awilix.md` — adopción de Awilix 10.x como contenedor DI (scopes SINGLETON/SCOPED). Patrón factory `make*Controller({ ... })` con destructuring. Bootstrap modular por capa (infra, adapters, factories, repositories, services, controllers)
