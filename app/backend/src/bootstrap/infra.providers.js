@@ -40,6 +40,10 @@ async function registerInfraProviders(container) {
     isStaging: asValue(isStaging()),
     readSecret: asValue(readSecret),
     jwtSecret: asValue(jwtSecret),
+    // Paths — defaults coherentes con Dockerfile + docker-compose (/app/uploads)
+    storageBase: asValue(process.env.STORAGE_BASE || '/app/uploads'),
+    uploadsDir: asValue(process.env.UPLOADS_DIR || '/app/uploads'),
+    securityConfigPath: asValue(process.env.SECURITY_CONFIG_PATH || '/app/src/config/security.json'),
     features: asFunction(() => getFeatures(), { lifetime: Lifetime.SINGLETON }),
     reloadFeatures: asValue(reloadFeatures),
     logger: asValue(logger),
