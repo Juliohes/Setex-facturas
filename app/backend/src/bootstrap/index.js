@@ -1,34 +1,25 @@
-// Bootstrap del container DI — registra todos los providers en orden de capa.
-// Se ejecuta UNA vez al arrancar la app (ver src/app.js, Round 15).
-//
-// Orden de registro obligatorio (cada capa depende de las anteriores):
-//   1. infra        — clientes singleton (pool pg, redis, mailer, logger)
-//   2. adapters     — implementaciones de ports (reciben infra)
-//   3. factories    — factories que eligen adapter por config (reciben adapters)
-//   4. repositories — DAOs sobre pool (reciben infra.pool)
-//   5. services     — lógica dominio (reciben repos + ports)
-//   6. controllers  — handlers HTTP (reciben services)
-//
-// Durante Round 2 solo existe el esqueleto. Cada round posterior añade el
-// archivo de su capa sin tocar este index.
+// Bootstrap del container DI — registra providers en orden por capa.
+// Se ejecuta UNA vez al arrancar (src/app.js). Orden obligatorio:
+//   infra → repositories → services → middleware → controllers
 'use strict';
 
 const { createAppContainer } = require('../container');
 const { registerInfraProviders, disposeInfraProviders } = require('./infra.providers');
+const { registerRepositories } = require('./repositories.providers');
+const { registerServices } = require('./services.providers');
+const { registerMiddleware } = require('./middleware.providers');
+const { registerControllers } = require('./controllers.providers');
 
 async function bootstrapContainer({ withInfra = false } = {}) {
   const container = createAppContainer();
 
   if (withInfra) {
     await registerInfraProviders(container);
+    registerRepositories(container);
+    await registerServices(container);
+    registerMiddleware(container);
+    registerControllers(container);
   }
-
-  // Round 7: registerAdaptersOcr(container)
-  // Round 7: registerFactories(container)
-  // Round 8: registerAdaptersMail(container)
-  // Round 6: registerRepositories(container)
-  // Round 7-14: registerServices(container)
-  // Round 9-14: registerControllers(container)
 
   return container;
 }

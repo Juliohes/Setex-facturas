@@ -578,6 +578,23 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-04-22 — Fase 1 refactor v3 · Round 15: bootstrap providers + app.js + server.next.js (PR #77)
+- `src/bootstrap/repositories.providers.js` — registra los 9 repos con `asClass(...).classic()` (patrón constructor(pool) clásico) en SINGLETON
+- `src/bootstrap/services.providers.js` — registra 15+ services con `asFunction(...).singleton()`: audit, token-verification, refresh-token, password-reset-token, deduplication, counterparty, invoice-persist, ocrEngines + ocrOrchestration (Strategy), mail port (from factory), password-reset-email, approval-notification, ipListManager + loadSecurityConfig (closure), autoBlockService, viesValidator, adminEmailsProvider (factory)
+- `src/bootstrap/middleware.providers.js` — registra authenticate/requireActiveCompany/requireAdmin/requireXHR/securityIp/securityAutoblock/csrf/sanitizeBody como providers
+- `src/bootstrap/controllers.providers.js` — registra los 35 controllers como `asFunction(make*).singleton()` (auth 6 + uploads 6 + me 8 + company 1 + admin 22 + 2 helpers)
+- `src/bootstrap/index.js` — encadena registros en orden por capa: infra → repos → services → middleware → controllers
+- `src/app.js` (50) — `createApp({ withInfra })` compose Express: setupSecurityHeaders + body parsers + cookie-parser + requestId + attachRequestScope + mountRoutes con middleware resuelto + notFoundHandler + makeErrorHandler
+- `src/server.next.js` (49) — entry v3 con `createApp({ withInfra: true })` + listen + SIGTERM/SIGINT graceful shutdown (10s grace + forceExit) + unhandledRejection handler. **Permanece en paralelo a `server.js` legacy hasta validación Round 16**
+- `src/adapters/queue/inmemory.adapter.js` — stub QueuePort in-memory con setImmediate worker dispatch
+- `src/adapters/storage/fs.adapter.js` — StoragePort filesystem con path-traversal guard intrínseco
+- `src/adapters/auth-token/pg.adapter.js` — AuthTokenPort wrappea AuthTokensRepository
+- `package.json` — script `start:next` para poder arrancar el v3 en staging sin tocar docker-compose
+- `tests/architecture.test.js` v2 — 7 invariantes (añadidas: "cada *Port tiene adapter" + "controllers no importan pg/ioredis/openai/nodemailer/@azure"). **19/19 tests verdes** (5 arquitectura + 12 contracts + 2 enforcement v3)
+- cookie-parser instalado como dep backend
+- 11 ficheros nuevos/modificados · total refactor v3 ~100 ficheros · todos los nuevos ≤94 líneas
+- **server.js legacy intacto** (4308) — validación staging 24-48h en Round 16 antes del swap final
+
 ### 2026-04-22 — Fase 1 refactor v3 · Round 14: admin catalog/security/ocr-engine/system + services/security (PR #76)
 - `src/services/security/ip-list-manager.service.js` — load/save con backup atómico (`.bak` + `.tmp` + rename), cache 30s TTL, DEFAULT_CONFIG congelado, addToList/removeFromList anti-duplicado (Set)
 - `src/services/security/auto-block.service.js` — listBlocked/unblock/countBlocked via ports/cache. Delete atómico block+count keys en unblock
