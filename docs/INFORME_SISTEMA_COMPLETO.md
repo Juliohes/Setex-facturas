@@ -578,6 +578,21 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-04-22 — Fase 1 refactor v3 · Round 9: routes/health + routes/auth + controllers/auth DI (PR #71)
+- `src/controllers/auth/login.controller.js` — factory DI. Fiel al monolito: findByEmail → bcrypt.compare → verifica empresa activa/pending/no-encontrada con 3 mensajes distintos → emite AT 15m + RT cookie httpOnly SameSite=Strict + audit. 94 líneas
+- `src/controllers/auth/register.controller.js` — email unique check → bcrypt hash cost 12 → createUser → si CIF no catalogado crea registro `pending` + dispara `approvalNotificationService.notifyPending` a lista admins (fire-and-forget). 76 líneas
+- `src/controllers/auth/logout.controller.js` — `refreshTokenService.logout(userId)` revoca todos los RT + clearCookie. 16 líneas
+- `src/controllers/auth/refresh.controller.js` — lee cookie `rt` → `refreshTokenService.rotate` (con reuse detection del Round 8) → nueva cookie + nuevo AT. Si reuse: audit `REFRESH_REUSE_DETECTED` + 401. 75 líneas
+- `src/controllers/auth/forgot-password.controller.js` — **respuesta idempotente** (200 siempre) para mitigar user enumeration. Si usuario existe: emite token reset + dispara email fire-and-forget. Audit diferencia `UNKNOWN` vs `ISSUED`. 49 líneas
+- `src/controllers/auth/reset-password.controller.js` — `passwordResetTokenService.consume` atómico → bcrypt.hash → updatePassword (incrementa token_version) → **logout todas las sesiones** del usuario. 45 líneas
+- `src/controllers/auth/index.js` — barrel con 6 factories
+- `src/routes/health.routes.js` — GET /health (200 uptime+pid) + GET /health/ready (ping BD + Redis con `Promise.allSettled`, 503 si falla)
+- `src/routes/auth.routes.js` — factory que recibe controllers + middleware (validate, rate-limit, authenticate). Monta las 6 rutas con Zod schemas correctos
+- `src/routes/index.js` — `mountRoutes(app, { container, middleware })` monta health siempre + auth si container tiene los controllers registrados
+- 10 ficheros nuevos · 542 líneas · máx 94 líneas/controller (target Round 9 <180 cumplido con margen)
+- Smoke verificado: 6 controllers + 2 routers instancian con mocks; auth router tiene 6 rutas; health router tiene 2. 17/17 tests siguen verdes
+- `server.js` intacto — Round 9 prepara el stack completo auth listo para cablear en Round 15
+
 ### 2026-04-22 — Fase 1 refactor v3 · Round 8: services auth/email + mail adapter/factory (PR #70)
 - `src/services/auth/token-verification.service.js` — verificación JWT + token_version BD con **queryWithTimeout 500ms** (fail-secure: si pool no responde rechaza token con `db_unavailable retriable:true`)
 - `src/services/auth/refresh-token.service.js` — rotación RT con **reuse detection**: si llega RT ya revocado con `replaced_by_hash ≠ null` → revoca toda la familia (cierra sesión atacante y usuario); `issue/rotate/logout/cleanupExpired/hashToken`; JWT TTL 7d + SHA-256 en BD
