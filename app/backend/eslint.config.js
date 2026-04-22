@@ -52,10 +52,12 @@ module.exports = [
       'comma-dangle': 'off',
     },
   },
-  // Exención temporal para server.js durante el refactor.
-  // Se elimina en Round 15 cuando server.js queda en <40 líneas.
+  // Exención para src/server.legacy.js — el monolito de 4308 líneas conservado
+  // post-swap v2.0.0-rc1 (2026-04-22) para rollback rápido. Se elimina cuando
+  // estemos cómodos (ROADMAP Q3). El nuevo src/server.js tiene <60 líneas y ya
+  // no necesita exención.
   {
-    files: ['src/server.js'],
+    files: ['src/server.legacy.js'],
     rules: {
       'max-lines': 'off',
       'max-lines-per-function': 'off',

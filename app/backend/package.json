@@ -5,7 +5,7 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "start:next": "node src/server.next.js",
+    "start:legacy": "node src/server.legacy.js",
     "test": "node --test tests/",
     "test:arch": "node --test tests/architecture.test.js",
     "depcruise": "depcruise -v .dependency-cruiser.cjs src",
