@@ -5,6 +5,10 @@ const { makeAdminFacturasRoutes } = require('./facturas.routes');
 const { makeAdminClientCompaniesRoutes } = require('./client-companies.routes');
 const { makeAdminCompaniesRoutes } = require('./companies.routes');
 const { makeAdminUsersRoutes } = require('./users.routes');
+const { makeAdminCatalogRoutes } = require('./catalog.routes');
+const { makeAdminSecurityRoutes } = require('./security.routes');
+const { makeAdminOcrEngineRoutes } = require('./ocr-engine.routes');
+const { makeAdminSystemRoutes } = require('./system.routes');
 
 function makeAdminRouter({ container, middleware = {} } = {}) {
   const express = require('express');
@@ -71,6 +75,61 @@ function makeAdminRouter({ container, middleware = {} } = {}) {
         requireAdmin: middleware.requireAdmin,
         requireXHR: middleware.requireXHR,
         csrf: middleware.csrf,
+      })
+    );
+  }
+
+  if (container.hasRegistration('adminCatalogListController')) {
+    router.use(
+      '/',
+      makeAdminCatalogRoutes({
+        adminCatalogListController: container.resolve('adminCatalogListController'),
+        adminCatalogCreateController: container.resolve('adminCatalogCreateController'),
+        adminCatalogDeleteController: container.resolve('adminCatalogDeleteController'),
+        authenticate: middleware.authenticate,
+        requireAdmin: middleware.requireAdmin,
+        requireXHR: middleware.requireXHR,
+        csrf: middleware.csrf,
+      })
+    );
+  }
+
+  if (container.hasRegistration('adminSecurityConfigController')) {
+    router.use(
+      '/',
+      makeAdminSecurityRoutes({
+        adminSecurityConfigController: container.resolve('adminSecurityConfigController'),
+        adminSecurityListUpdateController: container.resolve('adminSecurityListUpdateController'),
+        adminSecurityBlockedController: container.resolve('adminSecurityBlockedController'),
+        authenticate: middleware.authenticate,
+        requireAdmin: middleware.requireAdmin,
+        requireXHR: middleware.requireXHR,
+        csrf: middleware.csrf,
+      })
+    );
+  }
+
+  if (container.hasRegistration('adminOcrEngineGetController')) {
+    router.use(
+      '/',
+      makeAdminOcrEngineRoutes({
+        adminOcrEngineGetController: container.resolve('adminOcrEngineGetController'),
+        adminOcrEngineUpdateController: container.resolve('adminOcrEngineUpdateController'),
+        authenticate: middleware.authenticate,
+        requireAdmin: middleware.requireAdmin,
+        requireXHR: middleware.requireXHR,
+        csrf: middleware.csrf,
+      })
+    );
+  }
+
+  if (container.hasRegistration('adminSystemHealthController')) {
+    router.use(
+      '/',
+      makeAdminSystemRoutes({
+        adminSystemHealthController: container.resolve('adminSystemHealthController'),
+        authenticate: middleware.authenticate,
+        requireAdmin: middleware.requireAdmin,
       })
     );
   }

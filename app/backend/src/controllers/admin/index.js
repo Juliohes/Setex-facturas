@@ -28,6 +28,23 @@ const { makeAdminCompaniesCountPendingController } = require('./companies/count-
 const { makeAdminUsersListController } = require('./users/list.controller');
 const { makeAdminUsersUpdateController } = require('./users/update.controller');
 
+// catalog (Round 14)
+const { makeAdminCatalogListController } = require('./catalog/list.controller');
+const { makeAdminCatalogCreateController } = require('./catalog/create.controller');
+const { makeAdminCatalogDeleteController } = require('./catalog/delete.controller');
+
+// security (Round 14)
+const { makeAdminSecurityConfigController } = require('./security/config.controller');
+const { makeAdminSecurityListUpdateController } = require('./security/list-update.controller');
+const { makeAdminSecurityBlockedController } = require('./security/blocked.controller');
+
+// ocr-engine (Round 14)
+const { makeAdminOcrEngineGetController } = require('./ocr-engine/get.controller');
+const { makeAdminOcrEngineUpdateController } = require('./ocr-engine/update.controller');
+
+// system (Round 14)
+const { makeAdminSystemHealthController } = require('./system/health.controller');
+
 module.exports = {
   // facturas
   makeAdminFacturasListController,
@@ -52,4 +69,17 @@ module.exports = {
   // users
   makeAdminUsersListController,
   makeAdminUsersUpdateController,
+  // catalog
+  makeAdminCatalogListController,
+  makeAdminCatalogCreateController,
+  makeAdminCatalogDeleteController,
+  // security
+  makeAdminSecurityConfigController,
+  makeAdminSecurityListUpdateController,
+  makeAdminSecurityBlockedController,
+  // ocr-engine
+  makeAdminOcrEngineGetController,
+  makeAdminOcrEngineUpdateController,
+  // system
+  makeAdminSystemHealthController,
 };

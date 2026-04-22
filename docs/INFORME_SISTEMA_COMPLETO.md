@@ -578,6 +578,19 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-04-22 — Fase 1 refactor v3 · Round 14: admin catalog/security/ocr-engine/system + services/security (PR #76)
+- `src/services/security/ip-list-manager.service.js` — load/save con backup atómico (`.bak` + `.tmp` + rename), cache 30s TTL, DEFAULT_CONFIG congelado, addToList/removeFromList anti-duplicado (Set)
+- `src/services/security/auto-block.service.js` — listBlocked/unblock/countBlocked via ports/cache. Delete atómico block+count keys en unblock
+- `src/services/security/restricted-hour.service.js` — función pura `isRestrictedHour(cfg, { now })` con TZ Intl + guardia start=end
+- `src/controllers/admin/catalog/` — 3 controllers CRUD catálogo proveedores (list paginado, create con normalizeNombre NFKD + notas slice 500, delete)
+- `src/controllers/admin/security/` — 3 controllers: config GET (+blocked_count), list-update parametrizado (4 handlers addBlacklist/removeBlacklist/addWhitelist/removeWhitelist; whitelist-add auto-unblock IP), blocked (list + remove con query ?ip=)
+- `src/controllers/admin/ocr-engine/` — 2 controllers: get con healthcheck por engine, update con allowlist {mode, primary_engine, enabled} + atomic write features.json (`.tmp` + rename) + reloadFeatures()
+- `src/controllers/admin/system/health.controller.js` — BD + Redis + pool counts + process.memoryUsage + disk stat + uptime + Node version
+- `src/routes/admin/{catalog,security,ocr-engine,system}.routes.js` — 13 endpoints con adminGuard + CSRF en mutaciones
+- barrels controllers/admin/index.js (+11 factories) y routes/admin/index.js (+4 sub-routers) extendidos
+- 17 ficheros nuevos · controllers 12-52 líneas · services 37-91 · routes 17-34
+- server.js intacto (4308) · 17/17 tests verdes
+
 ### 2026-04-22 — Fase 1 refactor v3 · Round 13: admin companies + users + CSRF cableado (PR #75)
 - `src/middleware/csrf.js` — `makeCsrfMiddleware({ skipPaths })` wrapper sobre `services/auth/csrf.service` (double-submit pattern); skip automático `/api/internal/*` (nginx auth_request compat)
 - `src/controllers/admin/companies/` — 7 controllers approval workflow: list-pending, detail (con audit_log JOIN), approve (+ attachCompanyByCif para uploads, fix 2026-04-21), reject (con reason 1000 chars + quarantine), link (pending→target + redirectToTargetCompany), audit-log, count-pending
