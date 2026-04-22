@@ -578,6 +578,22 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-04-22 — Fase 1 refactor v3 · Round 10: uploads + services/invoices + Builder (PR #72)
+- `src/services/invoices/deduplication.service.js` — `check()` normaliza NIF/fecha/total y consulta `uploadsRepo.findDuplicate` (índice unique BD). Devuelve `{ duplicate, existingId, uploadedAt }`
+- `src/services/invoices/counterparty-resolver.service.js` — Capa 3 anti-fallo CIF. `resolve({ userId, ocrNombre, ocrNif })` consulta cache usuario → catálogo global → fuzzy (threshold 0.4). `remember()` incrementa confirmations. `normalizeNombre` NFKD + alphanum
+- `src/services/invoices/invoice-persist.service.js` — orquesta `confirm()`: required check → deduplication → uploadsRepo.createOrUpdate → remember counterparty + upsert catalog (fire-and-forget) → audit UPLOAD_CONFIRMED
+- `src/services/invoices/invoice.builder.js` — **patrón Builder** con `fromOcr()`, `withUserOverrides()`, `withIvaValidation()`, `withProveedor()`, `withInvoiceType()`, `build()` defensivo. Reemplaza el objeto gigante construido inline en server.js
+- `src/controllers/uploads/preview.controller.js` (63) — invoca `ocrOrchestration.extract` + `InvoiceBuilder` + resolver counterparty + cache preview Redis TTL 30min
+- `src/controllers/uploads/confirm.controller.js` (60) — resuelve preview de Redis + merge con overrides user + `invoicePersistService.confirm` → 409 duplicate / 400 missing / 200 ok; borra preview tras éxito
+- `src/controllers/uploads/list-mine.controller.js` (20) — paginated default 50/7días, límites 200/90
+- `src/controllers/uploads/image.controller.js` (40) — guard owner (userId match) + guardia path-traversal (`path.resolve` + `startsWith(storageBase)`), stream file
+- `src/controllers/uploads/proveedor.controller.js` (38) — lookup user_cache → global_catalog → 404
+- `src/controllers/uploads/export-xlsx.controller.js` (31) — delega en `excelService.buildUserWorkbook` (a extraer en Round 15); fallback JSON si no cableado
+- `src/routes/uploads.routes.js` (82) — 6 endpoints con authenticate + requireActiveCompany + rate-limiters + fileUploader por DI
+- `src/routes/index.js` — añade mount uploads cuando container tiene controllers registrados
+- 12 ficheros nuevos · 787 líneas · controller máx 63 · services máx 90 (target Round 10 <200 cumplido con margen)
+- server.js intacto (4308) · ocr/* intacto · 17/17 tests verdes
+
 ### 2026-04-22 — Fase 1 refactor v3 · Round 9: routes/health + routes/auth + controllers/auth DI (PR #71)
 - `src/controllers/auth/login.controller.js` — factory DI. Fiel al monolito: findByEmail → bcrypt.compare → verifica empresa activa/pending/no-encontrada con 3 mensajes distintos → emite AT 15m + RT cookie httpOnly SameSite=Strict + audit. 94 líneas
 - `src/controllers/auth/register.controller.js` — email unique check → bcrypt hash cost 12 → createUser → si CIF no catalogado crea registro `pending` + dispara `approvalNotificationService.notifyPending` a lista admins (fire-and-forget). 76 líneas
