@@ -578,6 +578,18 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-04-22 — Fase 1 refactor v3 · Round 7: adapters/ocr + factory + orchestration Strategy (PR #69)
+- `src/adapters/ocr/openai.adapter.js` — implementa OcrPort delegando en `ocr/openai.js`. Normaliza output: engine/emisor/receptor/fecha/totales/IRPF/tramos_iva/lineas_iva/confidence/duration_ms. Healthcheck vía `GET /v1/models` con timeout 3s
+- `src/adapters/ocr/azure.adapter.js` — implementa OcrPort delegando en `ocr/azure.js`. Healthcheck vía `/formrecognizer/info`. Normalización homogénea con openai
+- `src/adapters/ocr/gemini.adapter.js` — stub deshabilitado (decisión producto 2026-04-16). healthcheck siempre false, extract throw. Documenta el patrón OCP para futuro motor
+- `src/adapters/ocr/paddle.adapter.js` — stub hook para integración ROADMAP Q3
+- `src/factories/ocr-engine.factory.js` — `createOcrEngines({ features, readSecret, logger })` lee secrets openai_api_key + azure_di_{endpoint,key}, construye adapters según `ocr_mode` ∈ {dual,openai,azure}. Soporta `ocr_experimental_engines: ['gemini','paddle']` en features.json. `pickPrimary()` selecciona según `ocr_primary_engine`
+- `src/services/invoices/ocr-orchestration.service.js` — Strategy: **consensus** (paralelo + dual_confirmed si NIF+fecha+total coinciden), **weighted** (paralelo + primary = max confidence), **fallback** (serial con threshold 0.5). Default: consensus si ≥2 engines, fallback si 1. Timeout 45s por engine + filtro healthcheck inicial con timeout 3s
+- `tests/contracts/ocr-port.test.js` — **12 tests LSP**: cada adapter (openai/azure/gemini/paddle) cumple `assertOcrPort`, `healthcheck()` devuelve boolean sin lanzar, `extract()` sin credenciales rechaza en lugar de devolver undefined
+- `tests/architecture.test.js` (5 tests) + contracts (12 tests) = **17/17 pass**
+- 7 ficheros nuevos · 457 líneas · orchestration service 140 líneas (target Round 7 <180), resto ≤76
+- `server.js` intacto (4308 líneas) · `ocr/*` legacy intacto — los adapters delegan durante refactor; Round 15 moverá el código engine y eliminará `ocr/*`
+
 ### 2026-04-22 — Fase 1 refactor v3 · Round 6: 5 repos nuevos + tests arquitectura + depcruise (PR #68)
 - `src/repositories/auth-tokens.repo.js` — refresh_tokens (save/find/rotate/revokeFamily/revokeAllForUser/deleteExpired) + password_reset_tokens (save/find/consume). Rotación de refresh con transacción (revoca antigua + crea nueva + replaced_by_hash)
 - `src/repositories/known-cifs.repo.js` — findByUserAndNombreNorm/findByUserAndNif/listByUser/upsert (ON CONFLICT incrementa confirmations)/deleteByUser
