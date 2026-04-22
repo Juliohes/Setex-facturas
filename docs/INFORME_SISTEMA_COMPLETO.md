@@ -578,6 +578,12 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-04-22 — Fase 1 refactor v3: ADR-0004 + ADR-0005 (Round 1 · PR #63)
+- `docs/adr/0004-modular-architecture-solid-patterns.md` — decisión de arquitectura modular v3 con SOLID explícito + patrones canónicos (Repository, Service Layer, Controller thin, Ports & Adapters, Factory, Strategy, Builder). Mapeo SOLID→solución + enforcement CI (eslint-plugin-boundaries + dependency-cruiser + tests/architecture.test.js)
+- `docs/adr/0005-dependency-injection-awilix.md` — adopción de Awilix 10.x como contenedor DI (scopes SINGLETON/SCOPED). Patrón factory `make*Controller({ ... })` con destructuring. Bootstrap modular por capa (infra, adapters, factories, repositories, services, controllers)
+- `docs/adr/README.md` — índice actualizado con ADR-0004 y ADR-0005
+- Rama `refactor/modular-architecture-2026-04-22` desde `develop` · 16 rounds planificados · deploy solo staging hasta Round 16
+
 ### 2026-04-21 — Backend: `client_company_id` en approve/reject + limpieza repo (post-presentación)
 
 **Contexto:** tras la presentación al cliente (v1.0.0 GO), completar la Opción 2 que quedó pendiente del fix anterior: dejar el backend consistente a nivel de FK cuando se aprueba/rechaza una empresa pendiente.

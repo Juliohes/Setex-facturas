@@ -18,6 +18,8 @@ Cada ADR vive en un fichero `NNNN-titulo-corto.md` con las secciones:
 | [0001](0001-git-eslint-prettier-husky-commitlint.md) | Git + ESLint + Prettier + Husky + commitlint obligatorios | accepted | 2026-04-21 |
 | [0002](0002-strangler-fig-target-structure.md) | Estructura modular target: Strangler-Fig sobre `server.js` monolítico | accepted | 2026-04-21 |
 | [0003](0003-typescript-gradual-migration.md) | Migración gradual a TypeScript (Fase 3 MACROPLAN) | accepted | 2026-04-21 |
+| [0004](0004-modular-architecture-solid-patterns.md) | Arquitectura modular · SOLID + patrones canónicos (Fase 1) | accepted | 2026-04-22 |
+| [0005](0005-dependency-injection-awilix.md) | Dependency Injection con Awilix · Container explícito | accepted | 2026-04-22 |
 
 ## Cómo añadir un ADR nuevo
 

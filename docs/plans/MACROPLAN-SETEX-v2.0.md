@@ -16,8 +16,8 @@
 | Mantenedor | Julio |
 | Versión del plan | 2.0 (plan híbrido — combina lo mejor del Plan A externo y del Plan B interno basado en estado real) |
 | Fecha creación | 2026-04-20 |
-| Última actualización | **2026-04-21 19:00 UTC** (post-v1.1.0 · super-tarea multi-IVA completa + deploy prod) |
-| Estado global | 🟢 **v1.1.0 desplegado · super-tarea multi-IVA entregada en 7 partes · pendiente validación manual cliente con factura real (2026-04-22)** |
+| Última actualización | **2026-04-22 08:20 UTC** (Round 1/16 refactor modular v3 · ADR-0004 + ADR-0005) |
+| Estado global | 🟢 **v1.1.0 en prod · pendiente validación manual cliente (2026-04-22)** · Refactor modular v3 arrancado en rama `refactor/modular-architecture-2026-04-22` (Round 1/16 · PR #63) |
 | Release activo | **v1.1.0** en `main @ 628a230` (deploy-prod.yml 2026-04-21 18:54 UTC, success 1m10s) |
 | Tags publicados | v1.0.0 (entrega inicial), v1.0.1 (fix watchdog + IRPF + Excel), v1.0.2 (fix modales + sync histórico), **v1.1.0 (desglose multi-IVA coherente en 5 capas)** |
 
@@ -407,12 +407,44 @@ Matriz de 11 checks (sección 4.6 abajo).
 
 ## 5. FASE 1 — Semana 1
 
-### Día 1 post-entrega
+### 🏗️ Plan ejecutivo v3 — Refactor modular SOLID + Patrones (2026-04-22)
 
-- [ ] Verificar staging completo operativo (ya existe — solo confirmar parity)
-- [ ] ADR-0001: "Git + ESLint + Prettier + Husky obligatorio"
-- [ ] ADR-0002: "Estructura modular — Strangler-Fig target"
-- [ ] ADR-0003: "TypeScript gradual allowJs en Fase 2"
+El plan originalmente Strangler-Fig (ADR-0002) se **eleva a v3** con SOLID explícito, patrones canónicos (Repository, Service Layer, Controller thin, Ports & Adapters, Factory, Strategy, Builder, DI) y enforcement por CI. Referencias:
+
+- **ADR-0004** — `docs/adr/0004-modular-architecture-solid-patterns.md`
+- **ADR-0005** — `docs/adr/0005-dependency-injection-awilix.md` (Awilix)
+
+### Rounds v3 (16 rounds · ~15h trabajo · 5-6 sesiones)
+
+| # | Scope | Min | PR |
+|---|---|---|---|
+| 1 | Rama refactor + ADR-0004 + ADR-0005 | 25 | #63 |
+| 2 | `lib/` + `ports/` + `container.js` | 60 | #64 |
+| 3 | `config/` split + `adapters/{db,cache}` + bootstrap infra | 70 | #65 |
+| 4 | `middleware/` parte 1 + helmet extendida | 60 | #66 |
+| 5 | `middleware/` parte 2 Zod + `schemas/auth/` | 50 | #67 |
+| 6 | `repositories/` completados + eslint-plugin-boundaries + `architecture.test.js` | 70 | #68 |
+| 7 | `adapters/ocr/*` + factory + OCR orchestration Strategy | 60 | #69 |
+| 8 | `services/{auth,email,security}` + mail adapter/factory | 60 | #70 |
+| 9 | `routes/health` + `routes/auth` + `controllers/auth/*` DI | 60 | #71 |
+| 10 | `routes/uploads` + `controllers/uploads/*` + `services/invoices/*` | 90 | #72 |
+| 11 | `routes/me` + `routes/company` + controllers | 60 | #73 |
+| 12 | `routes/admin/{facturas,client-companies}` + controllers | 60 | #74 |
+| 13 | `routes/admin/{companies,users}` + CSRF P1.2 | 70 | #75 |
+| 14 | `routes/admin/{catalog,security,ocr-engine,system}` + `services/security` | 60 | #76 |
+| 15 | `app.js` + `server.js` finales + quitar exención ESLint + architecture.test.js v2 | 50 | #77 |
+| 16 | Validación staging 24-48h | real | — |
+
+**Rama:** `refactor/modular-architecture-2026-04-22` desde `develop`. `deploy-prod.yml` NO se dispara hasta Round 16 validado. `main` permanece en v1.1.0 hasta la sesión de promoción (tag `v2.0.0`).
+
+### Día 1 post-entrega (histórico — ya completado)
+
+- [x] Verificar staging completo operativo (2026-04-21)
+- [x] ADR-0001: "Git + ESLint + Prettier + Husky obligatorio"
+- [x] ADR-0002: "Estructura modular — Strangler-Fig target"
+- [x] ADR-0003: "TypeScript gradual allowJs en Fase 2"
+- [x] ADR-0004: "Arquitectura modular · SOLID + Patrones" (2026-04-22)
+- [x] ADR-0005: "Dependency Injection con Awilix" (2026-04-22)
 
 ### Día 2-3 · Primeros tests E2E
 
