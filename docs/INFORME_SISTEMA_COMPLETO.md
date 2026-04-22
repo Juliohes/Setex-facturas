@@ -578,6 +578,17 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-04-22 — Fase 1 refactor v3 · Round 13: admin companies + users + CSRF cableado (PR #75)
+- `src/middleware/csrf.js` — `makeCsrfMiddleware({ skipPaths })` wrapper sobre `services/auth/csrf.service` (double-submit pattern); skip automático `/api/internal/*` (nginx auth_request compat)
+- `src/controllers/admin/companies/` — 7 controllers approval workflow: list-pending, detail (con audit_log JOIN), approve (+ attachCompanyByCif para uploads, fix 2026-04-21), reject (con reason 1000 chars + quarantine), link (pending→target + redirectToTargetCompany), audit-log, count-pending
+- `src/controllers/admin/users/` — 2 controllers: list con counts + update con **guard anti-lockout** (admin no puede quitarse is_admin a sí mismo)
+- `src/routes/admin/companies.routes.js` — 7 endpoints con mutGuard = authenticate + requireAdmin + requireXHR + **csrf**
+- `src/routes/admin/users.routes.js` — CRUD con mismo mutGuard
+- barrel controllers/admin/index.js y routes/admin/index.js extendidos con 9 factories + 2 routes
+- **P1.2 cerrado**: CSRF double-submit cableado en todas las mutaciones admin (companies + users)
+- 12 ficheros nuevos/modificados · controllers 16-52 líneas · routes 30-37 · middleware csrf 17
+- server.js intacto · 17/17 tests verdes
+
 ### 2026-04-22 — Fase 1 refactor v3 · Round 12: admin facturas + admin client-companies (PR #74)
 - `src/controllers/admin/facturas/` — 6 controllers thin DI: list con filtros user_id/cif/fecha/status (limit 500, max 2000) · users-list distinct · image con owner-agnostic + path-traversal guard · export-xlsx delegando excelService · update con allowlist 15 campos + recalcule hook · delete con `safeUnlink(storageBase,...)` best-effort
 - `src/controllers/admin/client-companies/` — 4 controllers: list full, create con unique violation 409 (código 23505), update con allowlist (nombre/codigo_cliente/activa/notas), delete soft-default + `?hard=true` opcional (409 si FK constraint 23503)

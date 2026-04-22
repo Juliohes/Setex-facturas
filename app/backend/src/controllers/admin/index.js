@@ -15,6 +15,19 @@ const { makeAdminClientCompaniesCreateController } = require('./client-companies
 const { makeAdminClientCompaniesUpdateController } = require('./client-companies/update.controller');
 const { makeAdminClientCompaniesDeleteController } = require('./client-companies/delete.controller');
 
+// companies approval flow (Round 13)
+const { makeAdminCompaniesPendingController } = require('./companies/list-pending.controller');
+const { makeAdminCompaniesDetailController } = require('./companies/detail.controller');
+const { makeAdminCompaniesApproveController } = require('./companies/approve.controller');
+const { makeAdminCompaniesRejectController } = require('./companies/reject.controller');
+const { makeAdminCompaniesLinkController } = require('./companies/link.controller');
+const { makeAdminCompaniesAuditLogController } = require('./companies/audit-log.controller');
+const { makeAdminCompaniesCountPendingController } = require('./companies/count-pending.controller');
+
+// users (Round 13)
+const { makeAdminUsersListController } = require('./users/list.controller');
+const { makeAdminUsersUpdateController } = require('./users/update.controller');
+
 module.exports = {
   // facturas
   makeAdminFacturasListController,
@@ -28,4 +41,15 @@ module.exports = {
   makeAdminClientCompaniesCreateController,
   makeAdminClientCompaniesUpdateController,
   makeAdminClientCompaniesDeleteController,
+  // companies approval flow
+  makeAdminCompaniesPendingController,
+  makeAdminCompaniesDetailController,
+  makeAdminCompaniesApproveController,
+  makeAdminCompaniesRejectController,
+  makeAdminCompaniesLinkController,
+  makeAdminCompaniesAuditLogController,
+  makeAdminCompaniesCountPendingController,
+  // users
+  makeAdminUsersListController,
+  makeAdminUsersUpdateController,
 };
