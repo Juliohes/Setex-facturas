@@ -578,6 +578,16 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-04-22 — Fase 1 refactor v3 · Round 12: admin facturas + admin client-companies (PR #74)
+- `src/controllers/admin/facturas/` — 6 controllers thin DI: list con filtros user_id/cif/fecha/status (limit 500, max 2000) · users-list distinct · image con owner-agnostic + path-traversal guard · export-xlsx delegando excelService · update con allowlist 15 campos + recalcule hook · delete con `safeUnlink(storageBase,...)` best-effort
+- `src/controllers/admin/client-companies/` — 4 controllers: list full, create con unique violation 409 (código 23505), update con allowlist (nombre/codigo_cliente/activa/notas), delete soft-default + `?hard=true` opcional (409 si FK constraint 23503)
+- `src/routes/admin/facturas.routes.js` — 6 endpoints tras `authenticate` + `requireAdmin`; mutaciones (PUT/DELETE) exigen `requireXHR` (mitigación CSRF low-cost previo a Round 13)
+- `src/routes/admin/client-companies.routes.js` — CRUD completo con mismos guards
+- `src/routes/admin/index.js` — `makeAdminRouter({ container, middleware })` resuelve controllers y compone router `/api/admin`
+- `src/routes/index.js` — siempre monta admin router (los sub-routers aparecen cuando container tiene sus controllers)
+- 14 ficheros nuevos. Controllers entre 16-54 líneas. Routes 29-34 líneas
+- server.js intacto · 17/17 tests verdes
+
 ### 2026-04-22 — Fase 1 refactor v3 · Round 11: me + company + controllers (PR #73)
 - `src/controllers/me/` — 8 controllers thin: profile-get (~22), profile-update (~41, valida NIF regex + normaliza), settings-get (~16), settings-update (~26), export-rgpd (~35, art.15+20 sin password_hash), delete-account (~38, art.17 con confirm literal "DELETE MY ACCOUNT" en transacción), client-companies-list (~16), vies (~24) + index barrel
 - `src/controllers/company/status.controller.js` (41) — status con diferenciación `active|pending|not_found|no_company|admin`, fiel a server.js pero con repos DI

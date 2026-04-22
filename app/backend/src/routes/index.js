@@ -10,6 +10,7 @@ const { makeAuthRoutes } = require('./auth.routes');
 const { makeUploadsRoutes } = require('./uploads.routes');
 const { makeMeRoutes } = require('./me.routes');
 const { makeCompanyRoutes } = require('./company.routes');
+const { makeAdminRouter } = require('./admin');
 
 function mountRoutes(app, { container, middleware = {} } = {}) {
   if (!app) throw new Error('mountRoutes: "app" required');
@@ -77,6 +78,9 @@ function mountRoutes(app, { container, middleware = {} } = {}) {
     });
     app.use('/api', companyRouter);
   }
+
+  const adminRouter = makeAdminRouter({ container, middleware });
+  app.use('/api/admin', adminRouter);
 }
 
 module.exports = { mountRoutes };
