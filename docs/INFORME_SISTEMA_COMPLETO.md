@@ -578,6 +578,20 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-04-22 — Fase 1 refactor v3 · Round 6: 5 repos nuevos + tests arquitectura + depcruise (PR #68)
+- `src/repositories/auth-tokens.repo.js` — refresh_tokens (save/find/rotate/revokeFamily/revokeAllForUser/deleteExpired) + password_reset_tokens (save/find/consume). Rotación de refresh con transacción (revoca antigua + crea nueva + replaced_by_hash)
+- `src/repositories/known-cifs.repo.js` — findByUserAndNombreNorm/findByUserAndNif/listByUser/upsert (ON CONFLICT incrementa confirmations)/deleteByUser
+- `src/repositories/company-catalog.repo.js` — findByNif/findByNombreFuzzy (pg_trgm similarity con threshold 0.3)/upsert/listAll/deleteById
+- `src/repositories/company-audit-log.repo.js` — log/findByCompany/findLatest (JOIN client_companies + users)/countByAction con filtro since
+- `src/repositories/failed-jobs.repo.js` — create/findById/incrementAttempts/markRetried/listPending/deleteOlderThan
+- Los 10 repos (5 existentes + 5 nuevos) siguen patrón `class XxxRepository { constructor(pool) { ... } }`. Cableado en container via asClass(...).classic() en Round 7+
+- `tests/architecture.test.js` — 5 invariantes en node:test nativo (sin deps): controllers sin pool.query, repos sin res.*, nadie importa server.js, lib/ sin deps internas, ports/ sin deps internas. 5/5 pass
+- `.dependency-cruiser.cjs` — policy: no-circular warn, not-to-server error, not-to-spec error, not-to-dev-dep error. Baseline 0 errors/warnings (24 infos orphans = código no cableado aún, esperado)
+- `eslint.config.js` — eslint-plugin-boundaries@4 descartado por incompatibilidad con ESLint 10 flat config (TypeError getFilename). La arquitectura por capas queda enforced por architecture.test.js (linter Node puro)
+- `package.json` — nuevos scripts: `test` / `test:arch` / `depcruise` / `depcruise:graph`. Dep `dependency-cruiser@^16.10.4` en devDependencies
+- 10 ficheros nuevos/modificados · repos todos ≤114 líneas · npm audit prod 0 CVE
+- `server.js` intacto (4308 líneas). Todos los repos/tests aditivos sin consumidores (aún)
+
 ### 2026-04-22 — Fase 1 refactor v3 · Round 5: Zod validate + sanitize XSS + error-handler + schemas/auth (PR #67)
 - Instalada `zod@^3.25.76` (0 vulnerabilidades moderate+, ~57KB)
 - `src/middleware/validate.js` — `validate(schema, target)` donde target ∈ {body,query,params,headers}; reemplaza target con output parseado (coerciones aplicadas); errores → `ValidationError` vía `next(err)`
