@@ -14,12 +14,15 @@
 'use strict';
 
 const { createAppContainer } = require('../container');
+const { registerInfraProviders, disposeInfraProviders } = require('./infra.providers');
 
-function bootstrapContainer() {
+async function bootstrapContainer({ withInfra = false } = {}) {
   const container = createAppContainer();
 
-  // Round 3: registerInfra(container, { config })
-  // Round 3: registerAdaptersInfra(container)  // db, cache
+  if (withInfra) {
+    await registerInfraProviders(container);
+  }
+
   // Round 7: registerAdaptersOcr(container)
   // Round 7: registerFactories(container)
   // Round 8: registerAdaptersMail(container)
@@ -30,4 +33,9 @@ function bootstrapContainer() {
   return container;
 }
 
-module.exports = { bootstrapContainer };
+async function disposeContainer(container, opts) {
+  if (!container) return;
+  await disposeInfraProviders(container, opts);
+}
+
+module.exports = { bootstrapContainer, disposeContainer };

@@ -578,6 +578,20 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-04-22 — Fase 1 refactor v3 · Round 3: config/ split + adapters infra + bootstrap providers (PR #65)
+- `src/config/database.js` — factoría `createPool()` con statement_timeout 5s default, query_timeout 10s, pool max 30, idleTimeout 30s, connectionTimeout 5s + healthcheck inicial `SELECT 1` + `closePool()` graceful con timeout 10s
+- `src/config/redis.js` — factoría `createRedisClient()` con retry backoff exponencial (máx 3s), reconnectOnError READONLY, ping inicial + `closeRedisClient()` con fallback disconnect
+- `src/config/email.js` — factoría `createMailTransport()` con pool SMTP (max 3 conexiones, 100 msgs) + verify() + cierre limpio
+- `src/config/logger.js` — winston JSON con PII sanitizer en format pipeline (redacta emails + keys sensibles ANTES de serializar), handleExceptions + handleRejections
+- `src/config/features.js` — loader de features.json con cache + `reloadFeatures()` para hot-reload; defaults seguros si parseo falla
+- `src/config/index.js` — barrel que re-exporta los 18 helpers de config (env, secrets, factorías, close*)
+- `src/adapters/db/pg-pool.adapter.js` — wrapper sobre Pool con `.query()`, `.connect()`, `.healthcheck()` + `queryWithTimeout(sql, params, { timeoutMs, label })` con transacción + SET LOCAL statement_timeout para queries críticas (auth 500ms)
+- `src/adapters/cache/ioredis.adapter.js` — implementa CachePort (get/set/del/has/incr/expire/keys) con normalización (null vs undefined, TTL opcional)
+- `src/bootstrap/infra.providers.js` — `registerInfraProviders(container)` registra logger, pool, db (adapter), redisClient, cache (adapter), mailTransport, env, features como SINGLETON + `disposeInfraProviders()` para graceful shutdown (Round 15)
+- `src/bootstrap/index.js` — `bootstrapContainer({ withInfra })` opcional + `disposeContainer()`
+- `server.js` intacto (4308 líneas). Todos los nuevos módulos son aditivos: nadie los importa todavía, se cablearán en Rounds 9-15
+- 10 ficheros nuevos/modificados · todos ≤70 líneas (muy por debajo del target <150 Round 3)
+
 ### 2026-04-22 — Fase 1 refactor v3 · Round 2: lib/ + ports/ + container DI (PR #64)
 - Instalada dependencia `awilix@^10.0.2` (container DI JS puro, 0 CVE moderate+, ~30KB)
 - `src/lib/errors/` creada — `app-error.js` (raíz + toJSON), `http-error.js` (Auth/Forbidden/NotFound/Conflict/RateLimit/UnprocessableEntity/BadGateway/ServiceUnavailable), `validation-error.js` (con `ValidationError.fromZod()`), `index.js` (barrel). Reemplaza el antiguo `lib/errors.js` (huérfano, 0 importers)
