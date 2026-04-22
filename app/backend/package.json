@@ -4,7 +4,11 @@
   "description": "Backend API para SETEX Captura de Facturas",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "test": "node --test tests/",
+    "test:arch": "node --test tests/architecture.test.js",
+    "depcruise": "depcruise -v .dependency-cruiser.cjs src",
+    "depcruise:graph": "depcruise --output-type dot src"
   },
   "keywords": [
     "setex",
@@ -34,5 +38,8 @@
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "dependency-cruiser": "^16.10.4"
   }
 }

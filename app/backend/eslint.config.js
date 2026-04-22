@@ -1,6 +1,9 @@
 // ESLint flat config — Node 20 + Express
-// Reglas profesionales alineadas con Strangler-Fig roadmap.
-// max-lines: 500 obliga a partir módulos grandes (server.js actual exento durante refactor).
+// Reglas alineadas con refactor modular v3 (ADR-0004).
+//
+// Arquitectura por capas: enforced por tests/architecture.test.js (linter Node
+// puro, sin dependencias rotas). El plugin eslint-plugin-boundaries fue
+// descartado en Round 6 por incompatibilidad con ESLint 10 flat config.
 
 module.exports = [
   {
@@ -30,36 +33,27 @@ module.exports = [
       },
     },
     rules: {
-      // --- Calidad ---
       'no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
       'no-undef': 'error',
-      'no-console': 'off', // Permitido: logging inicial antes de tener winston up
+      'no-console': 'off',
       'prefer-const': 'error',
       'no-var': 'error',
-
-      // --- Tamaño (Strangler-Fig) ---
-      // server.js está en proceso de refactor; se le da exención temporal.
-      // El resto de archivos: máximo 500 líneas, funciones 80 líneas.
       'max-lines': ['warn', { max: 500, skipBlankLines: true, skipComments: true }],
       'max-lines-per-function': ['warn', { max: 80, skipBlankLines: true, skipComments: true }],
-
-      // --- Seguridad / buenas prácticas ---
       'no-eval': 'error',
       'no-implied-eval': 'error',
       'no-new-func': 'error',
-      'no-return-await': 'off', // Permite claridad en algunos casos
+      'no-return-await': 'off',
       'no-throw-literal': 'error',
-
-      // --- Estilo (alineado con Prettier) ---
       'semi': ['error', 'always'],
       'quotes': ['warn', 'single', { avoidEscape: true }],
-      'indent': 'off', // Prettier se encarga
+      'indent': 'off',
       'linebreak-style': 'off',
       'comma-dangle': 'off',
     },
   },
-  // Exención temporal para server.js durante el refactor Strangler-Fig.
-  // Al completar los 22 pasos, eliminar esta exención.
+  // Exención temporal para server.js durante el refactor.
+  // Se elimina en Round 15 cuando server.js queda en <40 líneas.
   {
     files: ['src/server.js'],
     rules: {
