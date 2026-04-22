@@ -578,6 +578,15 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-04-22 — Fase 1 refactor v3 · Round 11: me + company + controllers (PR #73)
+- `src/controllers/me/` — 8 controllers thin: profile-get (~22), profile-update (~41, valida NIF regex + normaliza), settings-get (~16), settings-update (~26), export-rgpd (~35, art.15+20 sin password_hash), delete-account (~38, art.17 con confirm literal "DELETE MY ACCOUNT" en transacción), client-companies-list (~16), vies (~24) + index barrel
+- `src/controllers/company/status.controller.js` (41) — status con diferenciación `active|pending|not_found|no_company|admin`, fiel a server.js pero con repos DI
+- `src/routes/me.routes.js` (54) — 8 endpoints: profile get/put, settings get/post, export, delete, client-companies, vies con viesLimiter. Todas tras authenticate
+- `src/routes/company.routes.js` (19) — GET /api/company/status sin requireActiveCompany (para que "pending" pueda consultar)
+- `src/routes/index.js` — mount condicional me + company cuando container tiene los controllers registrados
+- 13 ficheros nuevos · 359 líneas · máx 54 líneas (target Round 11 <100 cumplido con amplio margen)
+- server.js intacto · 17/17 tests verdes
+
 ### 2026-04-22 — Fase 1 refactor v3 · Round 10: uploads + services/invoices + Builder (PR #72)
 - `src/services/invoices/deduplication.service.js` — `check()` normaliza NIF/fecha/total y consulta `uploadsRepo.findDuplicate` (índice unique BD). Devuelve `{ duplicate, existingId, uploadedAt }`
 - `src/services/invoices/counterparty-resolver.service.js` — Capa 3 anti-fallo CIF. `resolve({ userId, ocrNombre, ocrNif })` consulta cache usuario → catálogo global → fuzzy (threshold 0.4). `remember()` incrementa confirmations. `normalizeNombre` NFKD + alphanum

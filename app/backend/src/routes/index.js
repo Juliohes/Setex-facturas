@@ -8,6 +8,8 @@
 const { makeHealthRoutes } = require('./health.routes');
 const { makeAuthRoutes } = require('./auth.routes');
 const { makeUploadsRoutes } = require('./uploads.routes');
+const { makeMeRoutes } = require('./me.routes');
+const { makeCompanyRoutes } = require('./company.routes');
 
 function mountRoutes(app, { container, middleware = {} } = {}) {
   if (!app) throw new Error('mountRoutes: "app" required');
@@ -49,6 +51,31 @@ function mountRoutes(app, { container, middleware = {} } = {}) {
       fileUploader: middleware.fileUploader,
     });
     app.use('/api', uploadsRouter);
+  }
+
+  if (container.hasRegistration('profileGetController')) {
+    const meRouter = makeMeRoutes({
+      profileGetController: container.resolve('profileGetController'),
+      profileUpdateController: container.resolve('profileUpdateController'),
+      settingsGetController: container.resolve('settingsGetController'),
+      settingsUpdateController: container.resolve('settingsUpdateController'),
+      exportRgpdController: container.resolve('exportRgpdController'),
+      deleteAccountController: container.resolve('deleteAccountController'),
+      clientCompaniesListController: container.resolve('clientCompaniesListController'),
+      viesController: container.resolve('viesController'),
+      authenticate: middleware.authenticate,
+      requireActiveCompany: middleware.requireActiveCompany,
+      viesLimiter: middleware.viesLimiter,
+    });
+    app.use('/api', meRouter);
+  }
+
+  if (container.hasRegistration('companyStatusController')) {
+    const companyRouter = makeCompanyRoutes({
+      companyStatusController: container.resolve('companyStatusController'),
+      authenticate: middleware.authenticate,
+    });
+    app.use('/api', companyRouter);
   }
 }
 
