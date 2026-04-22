@@ -578,6 +578,16 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-04-22 — Fase 1 refactor v3 · Round 5: Zod validate + sanitize XSS + error-handler + schemas/auth (PR #67)
+- Instalada `zod@^3.25.76` (0 vulnerabilidades moderate+, ~57KB)
+- `src/middleware/validate.js` — `validate(schema, target)` donde target ∈ {body,query,params,headers}; reemplaza target con output parseado (coerciones aplicadas); errores → `ValidationError` vía `next(err)`
+- `src/middleware/sanitize.js` — `makeSanitizeBody({ skipPaths })` + `sanitizeDeep` recursivo con guarda anti-DoS (profundidad máx 20), strippea `<tags>` y null bytes; solo req.body
+- `src/middleware/error-handler.js` — `makeErrorHandler({ logger, isProduction })`: AppError → statusCode + payload tipado; ZodError → 400 + detail estructurado; SyntaxError body parse → 400 JSON inválido; otros → 500 genérico SIN stack trace en prod (con `requestId` incluido si `x-request-id` presente). `notFoundHandler` para rutas no montadas
+- `src/middleware/async-handler.js` — re-export de `lib/async-handler` (DX)
+- `src/schemas/auth/` — `login` (email normalizado + password ≤256), `register` (email + password ≥10 con may/min/num + NIF uppercase regex + company_name + consent_rgpd literal true), `forgot-password` (solo email, strict), `reset-password` (token ≥20 + password requisitos), `index` barrel
+- 8 ficheros nuevos · 271 líneas · máx 68 líneas/fichero (target Round 5 <80)
+- `server.js` intacto — todos los módulos aditivos listos para cablear en Round 9+
+
 ### 2026-04-22 — Fase 1 refactor v3 · Round 4: middleware parte 1 + helmet extendida (PR #66)
 - `src/middleware/auth.js` — factories DI: `makeAuthenticate({ pool, jwtSecret, logger })` con verificación JWT + `token_version` DB check fail-secure, `requireAdmin` (function), `makeRequireActiveCompany({ pool, logger })`, `requireXHR`
 - `src/middleware/security-ip.js` — `makeSecurityIpMiddleware({ loadSecurityConfig, logger })` + helpers puros `ipInList` (CIDR via lib/ip-utils) + `isRestrictedHour` (TZ Europe/Madrid, guardia anti lockout si start=end)
