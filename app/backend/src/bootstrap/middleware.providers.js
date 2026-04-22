@@ -17,12 +17,8 @@ const { makeSanitizeBody } = require('../middleware/sanitize');
 
 function registerMiddleware(container) {
   container.register({
-    authenticate: asFunction(({ pool, logger, readSecret }) =>
-      makeAuthenticate({
-        pool,
-        jwtSecret: readSecret('jwt_secret', { required: true }),
-        logger,
-      })
+    authenticate: asFunction(({ pool, logger, jwtSecret }) =>
+      makeAuthenticate({ pool, jwtSecret, logger })
     ).singleton(),
 
     requireActiveCompany: asFunction(makeRequireActiveCompany).singleton(),

@@ -29,11 +29,17 @@ async function registerInfraProviders(container) {
   const dbAdapter = wrapPoolAsAdapter(pool);
   const cacheAdapter = createIoredisCacheAdapter(redisClient);
 
+  // Secretos cargados eagerly para que providers downstream los reciban via DI
+  // sin tener que invocar readSecret() repetidamente. required: true → fail loud
+  // en arranque si el secreto no existe.
+  const jwtSecret = readSecret('jwt_secret', { required: true });
+
   container.register({
     env: asValue(env),
     isProduction: asValue(isProduction()),
     isStaging: asValue(isStaging()),
     readSecret: asValue(readSecret),
+    jwtSecret: asValue(jwtSecret),
     features: asFunction(() => getFeatures(), { lifetime: Lifetime.SINGLETON }),
     reloadFeatures: asValue(reloadFeatures),
     logger: asValue(logger),
