@@ -578,6 +578,21 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-04-22 — Fase 1 refactor v3 · Round 16 · SWAP v2.0.0-rc1 (PR #83)
+- **Swap runtime**: `src/server.js` (monolito 4308 líneas) renombrado a `src/server.legacy.js` por rollback; `src/server.next.js` renombrado a `src/server.js` (53 líneas, entry v3 con DI container)
+- **Dockerfile CMD `["node", "src/server.js"]` intacto** — ahora arranca el v3 post-swap
+- `package.json` — scripts ajustados: `start` → nuevo server.js (v3), `start:legacy` fallback al legacy para rollback rápido
+- `eslint.config.js` — exención `max-lines` migrada de `src/server.js` a `src/server.legacy.js`
+- **Validación staging previa (5 hotfixes Round 16 resolvieron gaps runtime):**
+  - #78 fix gitignore anclaje + recupera 7 controllers/uploads perdidos
+  - #79 fix bootstrap jwtSecret registration
+  - #80 fix repos 22 métodos faltantes (uploads +11, client-companies +8, users +3) con dual signatures
+  - #81 fix container paths (storageBase/uploadsDir/securityConfigPath)
+  - #82 fix container deps opcionales asValue(null) (excelService/fileUploader/limiters)
+- **Smoke staging en puerto 3100**: server.next.js arranca sin crash, `/health` → 200, `/health/ready` → 200 con `db:true, cache:true`
+- Tag `v2.0.0-rc1` en develop post-merge (major por refactor arquitectónico completo)
+- Refactor v3 cerrado: **15 rounds + 5 hotfixes + swap final**. Total 20 PRs (#63-#83)
+
 ### 2026-04-22 — Fase 1 refactor v3 · Round 15: bootstrap providers + app.js + server.next.js (PR #77)
 - `src/bootstrap/repositories.providers.js` — registra los 9 repos con `asClass(...).classic()` (patrón constructor(pool) clásico) en SINGLETON
 - `src/bootstrap/services.providers.js` — registra 15+ services con `asFunction(...).singleton()`: audit, token-verification, refresh-token, password-reset-token, deduplication, counterparty, invoice-persist, ocrEngines + ocrOrchestration (Strategy), mail port (from factory), password-reset-email, approval-notification, ipListManager + loadSecurityConfig (closure), autoBlockService, viesValidator, adminEmailsProvider (factory)
