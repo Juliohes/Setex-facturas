@@ -88,6 +88,18 @@ async function registerServices(container) {
       const admins = await usersRepo.listAdmins().catch(() => []);
       return admins.map((a) => a.email).filter(Boolean);
     }).singleton(),
+
+    // ── Deps opcionales registradas como null para satisfacer Awilix PROXY ──
+    // Controllers que las listan en su destructuring con default esperan que el
+    // container las resuelva aunque no estén activas. Round 16+ reemplazará
+    // con implementaciones reales (p.ej. excelService real para exportar XLSX).
+    excelService: asValue(null),
+    fileUploader: asValue(null),
+    authLimiter: asValue(null),
+    uploadLimiter: asValue(null),
+    confirmLimiter: asValue(null),
+    refreshLimiter: asValue(null),
+    viesLimiter: asValue(null),
   });
 }
 
