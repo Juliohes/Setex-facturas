@@ -578,6 +578,14 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-04-22 — Fase 1 refactor v3 · Round 4: middleware parte 1 + helmet extendida (PR #66)
+- `src/middleware/auth.js` — factories DI: `makeAuthenticate({ pool, jwtSecret, logger })` con verificación JWT + `token_version` DB check fail-secure, `requireAdmin` (function), `makeRequireActiveCompany({ pool, logger })`, `requireXHR`
+- `src/middleware/security-ip.js` — `makeSecurityIpMiddleware({ loadSecurityConfig, logger })` + helpers puros `ipInList` (CIDR via lib/ip-utils) + `isRestrictedHour` (TZ Europe/Madrid, guardia anti lockout si start=end)
+- `src/middleware/security-autoblock.js` — `makeSecurityAutoBlockMiddleware({ loadSecurityConfig, redisClient, logger })` con exención `/api/internal/*` (compat nginx auth_request) + fail-open si Redis no responde
+- `src/middleware/setup.js` — `setupSecurityHeaders(app, { corsOrigin, helmetOverrides })` con helmet extendida: CSP estricta con `upgradeInsecureRequests` + HSTS preload 2y + frameguard deny + noSniff + referrerPolicy strict-origin-when-cross-origin + COOP same-origin + CORP same-origin + originAgentCluster + permittedCrossDomainPolicies none. **Permissions-Policy** inyectado a mano (no soportado por helmet): accelerometer/camera/geolocation/gyroscope/magnetometer/microphone/payment/usb = none. `setupBodyParsers` con límite 1MB en json y urlencoded
+- Los 4 middleware son **aditivos** — `server.js` sigue usando su lógica inline actual; se cablearán desde el container en Round 9+
+- 4 ficheros nuevos · 306 líneas totales · máx 95 líneas/fichero (target Round 4 <100)
+
 ### 2026-04-22 — Fase 1 refactor v3 · Round 3: config/ split + adapters infra + bootstrap providers (PR #65)
 - `src/config/database.js` — factoría `createPool()` con statement_timeout 5s default, query_timeout 10s, pool max 30, idleTimeout 30s, connectionTimeout 5s + healthcheck inicial `SELECT 1` + `closePool()` graceful con timeout 10s
 - `src/config/redis.js` — factoría `createRedisClient()` con retry backoff exponencial (máx 3s), reconnectOnError READONLY, ping inicial + `closeRedisClient()` con fallback disconnect
