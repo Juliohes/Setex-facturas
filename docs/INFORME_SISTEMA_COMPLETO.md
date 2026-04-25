@@ -578,6 +578,29 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-04-22 (tarde) — Incidente staging: rollback Round 16 · vuelta a `server.legacy.js`
+- **Síntoma**: Julio reporta 404 en toda la app staging (index + admin + /api/*). Traefik basic auth (401) seguía funcionando, pero tras autenticar todo el contenido devolvía 404.
+- **Causa raíz**: el refactor v3 (PR #83) NO portó las rutas `/api/internal/check-access` ni `/api/internal/check-admin-page`. El frontend nginx las usa como `auth_request` en los bloques `location /`, `location /api/`, `location = /admin-facturas.html` y `location = /service-worker.js`. Al devolver 404 el backend v3, nginx mapeaba CUALQUIER petición a `@bloqueado` → 404 genérico "Not Found".
+- **Gaps detectados v3 vs legacy (5 rutas)**: `/api/internal/check-access`, `/api/internal/check-admin-page`, `/api/admin/refresh-session`, `/api/admin/retry-failed/:id`, `/api/admin/security/time`. Los 19 tests del swap no cubrían contrato nginx↔backend.
+- **Acción**: invertido el swap — `src/server.js` (v3 53 líneas) renombrado a `src/server.next.js`; `src/server.legacy.js` (monolito 4308) renombrado a `src/server.js`. Rebuild imagen + `docker compose stop backend && up -d backend`.
+- **Verificación post-rollback**: `/api/internal/check-access` responde 200 internamente; `POST /api/auth/login` devuelve `{"error":"Credenciales inválidas"}` 401 (ruteo OK); `/api/admin/facturas` 401 sin JWT (auth middleware OK). Backend healthy, logs limpios.
+- **Estado del refactor v3**: tag `v2.0.0-rc1` sigue en develop pero el runtime v3 queda CONGELADO hasta sesión dedicada a (1) portar los 5 endpoints faltantes, (2) añadir test de paridad de superficie API legacy↔v3, (3) endurecer healthcheck del container con `/api/internal/check-access` en lugar de solo `/health`, (4) añadir smoke-test HTTP post-deploy con login+preview+confirm.
+- **Impacto producción**: NULO — prod corre v1.1.0 con el monolito, no fue tocado en ningún momento.
+- **Ficheros afectados**: `app/backend/src/server.js` (ahora legacy), `app/backend/src/server.next.js` (ahora v3 congelado). package.json/Dockerfile intactos (el CMD `["node", "src/server.js"]` vuelve a arrancar el monolito al renombrar).
+
+### 2026-04-22 — DevOps/Seguridad: Claude Code Remote Control operativo (devuser@srv1027670)
+- **Migración a devuser**: `usermod -aG sudo,docker,deploy`; VS Code Remote-SSH ya no entra como root. `authorized_keys` + `CLAUDE.md` copiados desde root con `install -m 600 -o devuser -g devuser`.
+- **Fix HOME devuser**: `/home/devuser` pasó de `root:root` a `devuser:devuser` (defecto del provisioning inicial); dotfiles `.bashrc/.profile/.bash_logout` copiados desde `/etc/skel`. Sin esto, VS Code Server no podía crear `~/.vscode-server` (error `Permission denied`).
+- **Permisos grupo en /opt/setex (Opción B acotada)**: `setgid + g+rw` solo en `{prod,staging}/{app,scripts,docs}` y `shared/` (142 dirs + 561 ficheros). Excluidos: `data/postgres` (evita romper modo 0700 validado por Postgres al arrancar), `secrets/`, `node_modules/`, `.git/`, `logs/`. Dry-run previo detectó el riesgo postgres y motivó el scope acotado vs. el runbook original que proponía `find /opt/setex`.
+- **Claude CLI para devuser**: `~/.local/bin/claude` 2.1.117 (user-native, PATH preferente) junto a `/usr/local/bin/claude` 2.1.87 (sistema, preexistente). OAuth Claude Max autenticado (juliohesuni@gmail.com Organization). `~/.claude` endurecido a 700/600.
+- **Sandbox RC validado end-to-end**: `~/sandbox-rc` + tmux + `claude rc` → URL/QR → app móvil → detach (Ctrl+b d) + cierre VS Code + mensaje desde móvil → reattach con conversación intacta.
+- **Alias cc-* en ~/.bashrc**: `cc-setex-staging`, `cc-setex-prod`, `cc-sandbox`, `cc-list`, `cc-attach`, `cc-kill`. No existe `cc-setex` genérico a propósito (diseño fuerza elección consciente entorno).
+- **Runbook operacional**: `/home/devuser/docs/claude-rc-runbook.md` con flujo diario, conexión móvil, troubleshooting y principios de seguridad permanentes (no commits como root, secretos intocables, postgres data intocable, no `--dangerously-skip-permissions` en prod).
+- **Auto-arranque post-reboot**: `loginctl enable-linger devuser` + systemd --user units `tmux-setex-{staging,prod}.service` arrancan `tmux + claude rc --spawn=same-dir --remote-control-session-name-prefix=setex-{env}` al boot. Trust dialog pre-aceptado en `~/.claude.json` para ambos paths (evita bloqueo interactivo en boot).
+- **Ficheros nuevos o modificados**: `/home/devuser/{.bashrc,.claude.json,.config/systemd/user/tmux-setex-*.service,docs/claude-rc-runbook.md,.ssh/,.claude/,.local/,sandbox-rc/}`; `/opt/setex/{prod,staging}/{app,scripts,docs}` + `/opt/setex/shared/` (solo modos de grupo; ownership intacto).
+- **Docker sin impacto**: los 8 contenedores (prod+staging: backend, frontend, postgres, redis) permanecieron healthy durante TODO el proceso, sin reinicios ni degradación.
+- **Runbook maestro fuente**: `/opt/setex/claude-code-rc-plan-maestro.md`. Incluye BLOQUES A→G + 2 bloques fuera de plan (chown HOME, Opción B acotada del BLOQUE C).
+
 ### 2026-04-22 — Fase 1 refactor v3 · Round 16 · SWAP v2.0.0-rc1 (PR #83)
 - **Swap runtime**: `src/server.js` (monolito 4308 líneas) renombrado a `src/server.legacy.js` por rollback; `src/server.next.js` renombrado a `src/server.js` (53 líneas, entry v3 con DI container)
 - **Dockerfile CMD `["node", "src/server.js"]` intacto** — ahora arranca el v3 post-swap
