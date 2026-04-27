@@ -105,6 +105,9 @@ function makeAdminRouter({ container, middleware = {} } = {}) {
         adminSecurityConfigController: container.resolve('adminSecurityConfigController'),
         adminSecurityListUpdateController: container.resolve('adminSecurityListUpdateController'),
         adminSecurityBlockedController: container.resolve('adminSecurityBlockedController'),
+        adminSecurityTimeController: container.hasRegistration('adminSecurityTimeController')
+          ? container.resolve('adminSecurityTimeController')
+          : null,
         authenticate: middleware.authenticate,
         requireAdmin: middleware.requireAdmin,
         requireXHR: middleware.requireXHR,

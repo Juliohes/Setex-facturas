@@ -79,6 +79,7 @@ function registerControllers(container) {
     adminSecurityConfigController: asFunction(adminCtrl.makeAdminSecurityConfigController).singleton(),
     adminSecurityListUpdateController: asFunction(adminCtrl.makeAdminSecurityListUpdateController).singleton(),
     adminSecurityBlockedController: asFunction(adminCtrl.makeAdminSecurityBlockedController).singleton(),
+    adminSecurityTimeController: asFunction(adminCtrl.makeAdminSecurityTimeController).singleton(),
 
     // admin ocr-engine
     adminOcrEngineGetController: asFunction(adminCtrl.makeAdminOcrEngineGetController).singleton(),

@@ -34,10 +34,11 @@ const { makeAdminCatalogListController } = require('./catalog/list.controller');
 const { makeAdminCatalogCreateController } = require('./catalog/create.controller');
 const { makeAdminCatalogDeleteController } = require('./catalog/delete.controller');
 
-// security (Round 14)
+// security (Round 14 + FASE 1B Etapa 1: time)
 const { makeAdminSecurityConfigController } = require('./security/config.controller');
 const { makeAdminSecurityListUpdateController } = require('./security/list-update.controller');
 const { makeAdminSecurityBlockedController } = require('./security/blocked.controller');
+const { makeAdminSecurityTimeController } = require('./security/time.controller');
 
 // ocr-engine (Round 14)
 const { makeAdminOcrEngineGetController } = require('./ocr-engine/get.controller');
@@ -82,6 +83,7 @@ module.exports = {
   makeAdminSecurityConfigController,
   makeAdminSecurityListUpdateController,
   makeAdminSecurityBlockedController,
+  makeAdminSecurityTimeController,
   // ocr-engine
   makeAdminOcrEngineGetController,
   makeAdminOcrEngineUpdateController,
