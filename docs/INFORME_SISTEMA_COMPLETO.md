@@ -578,6 +578,45 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-04-27 — Cleanup post-cutover Fase 4: legacy symlink + YAML Traefik retirados, HSTS a 10 años en nginx, xanflatest a labels Docker
+- **Contexto**: cierre de las dos tareas críticas pendientes del ROADMAP Q2 derivadas del cutover Fase 4 (2026-04-20). Operación a nivel de host (sudoers acotado y temporal, autoborrado al final) + cambios en repo (este PR).
+
+#### Symlink y target legacy `/opt/setex-captu-facture*` eliminados
+- **Hallazgo proactivo**: investigación previa al borrado detectó que `/etc/logrotate.d/setex` apuntaba a paths legacy (`/opt/setex-captu-facture/logs/*`) y rotaba ficheros vacíos cada semana, mientras que **los logs activos en `/opt/setex/{prod,staging}/logs/*.log` NO tenían ninguna rotación** — `watchdog.log` de prod ya en 1.18 MB y creciendo cada 5 min sin techo.
+- **`/etc/logrotate.d/setex` reemplazado**: nueva config cubre `/opt/setex/prod/logs/*.log` y `/opt/setex/staging/logs/*.log` (comodín *.log). Mantiene parámetros previos (weekly, rotate 4, compress, copytruncate, maxsize 10M, su root root). Backup en `/etc/logrotate.d/setex.bak-2026-04-27`. Validado con `logrotate -d`: detecta los 8 logs activos sin errores.
+- **Tarball del legacy** a `/opt/setex/shared/backups/setex-captu-facture.OLD-2026-04-20.tar.gz` (109 MB descomprimido → 33 MB comprimido). Trazabilidad histórica.
+- **Symlink + target borrados** (109 MB liberados). Verificación post: `ls /opt | grep setex-captu` → vacío.
+
+#### YAML estático Traefik `/docker/n8n/traefik-dynamic/setex.yml` retirado
+- **Análisis del contenido del YAML**: definía router `setex` (ya en labels Docker), service → setex-prod-frontend:80 (ya en labels), middleware `setex-headers` con HSTS 10 años + browserXssFilter + contentTypeNosniff (HSTS único exclusivo del YAML — el resto ya estaba en nginx), y los 2 routers de redirect xanflatest.com → setex-facturas.es (302 no permanente).
+- **Hallazgo clave**: los headers de seguridad (X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, CSP, HSTS) **ya estaban en `nginx.conf` del frontend**. Traefik solo añadía un HSTS más estricto encima (`max-age=315360000` 10 años vs los `max-age=63072000` 2 años de nginx). Solución limpia: subir el HSTS de nginx a los mismos 10 años y eliminar la duplicidad.
+- **`app/frontend/nginx.conf`**: HSTS `max-age=63072000` → `max-age=315360000` en las 4 ocurrencias (server block raíz + locations específicas /service-worker.js, /admin-facturas.html, /api/internal/check-access).
+- **`app/docker-compose.yml`**: 13 labels nuevas en setex-prod-frontend para xanflatest. Routers `xanflatest-http` (entrypoint web) y `xanflatest-https` (entrypoint websecure, TLS letsencrypt) + middleware `xanflatest-redirect` con `redirectregex` `^https?://xanflatest\.com(.*)` → `https://setex-facturas.es$${1}` (escape `$$` correcto en docker-compose: se convierte a `${1}` en runtime). `permanent=false` mantiene 302/307 según la nota original "xanflatest.com puede reasignarse en el futuro".
+- **YAML borrado**: backup en `/docker/n8n/traefik-dynamic/setex.yml.removed-2026-04-27` por trazabilidad. También borrado el `setex.yml.bak-2026-04-20` (legacy del cutover).
+- **Rebuild + redeploy** de frontends prod y staging (`docker compose build frontend && docker compose up -d frontend`). Cero downtime perceptible.
+
+#### Verificación end-to-end (post-cambio)
+- **prod `https://setex-facturas.es/`** → 200, `strict-transport-security: max-age=315360000; includeSubDomains; preload` ✅ (ahora desde nginx).
+- **prod `https://xanflatest.com/`** → 307 con `location: https://setex-facturas.es/` ✅ (idéntico al comportamiento previo del YAML).
+- **prod `http://xanflatest.com/`** → 308 con `location: https://xanflatest.com/` (doble hop). **NO es regresión nuestra**: causa `--entrypoints.web.http.redirections.entryPoint.to=websecure` como redirect global del container `n8n-traefik-1` (config preexistente, no controlable desde labels Docker). El comportamiento HTTP era el mismo con el YAML original.
+- **staging `https://staging.setex-facturas.es/`** → 401 + basic-auth Traefik intacto. Hit directo al nginx interno confirma `strict-transport-security: max-age=315360000` ✅.
+- **8 containers SETEX healthy**: backends prod/staging intactos (5 días/4 días uptime), solo se recrearon los frontends.
+
+#### Backups y reversibilidad
+- `/opt/setex/shared/backups/setex-captu-facture.OLD-2026-04-20.tar.gz` (33 MB)
+- `/docker/n8n/traefik-dynamic/setex.yml.removed-2026-04-27` (1418 B)
+- `/etc/logrotate.d/setex.bak-2026-04-27` (449 B)
+- Material de cleanup en `/opt/setex/shared/cleanup-2026-04-27/` (script `apply.sh`, config `setex-logrotate.new`, `kkk.txt`, `README.md`)
+
+#### Ficheros tocados en este PR (5)
+- `app/frontend/nginx.conf` (HSTS 4 ocurrencias)
+- `app/docker-compose.yml` (+13 labels xanflatest)
+- `docs/INFORME_SISTEMA_COMPLETO.md` (esta entrada)
+- `docs/ROADMAP.md` (2 tareas Q2 cerradas)
+- `.claude/CLAUDE.md` (sección "problemas conocidos" actualizada)
+
+> **Nota sobre `develop`**: la rama `develop` contiene el refactor v3 (Rounds 1-15 + swap PR #83) que sufrió un incidente el 2026-04-22 — el v3 no portaba las rutas `auth_request` que usa nginx (`/api/internal/check-access`, `/api/internal/check-admin-page`, etc.). Ese trabajo queda **congelado en develop** hasta sesión dedicada que aborde: portar los 5 endpoints faltantes, test de paridad de superficie API legacy↔v3, healthcheck endurecido y smoke-test post-deploy. Detalle del incidente y plan de descongelado documentado en develop. Este PR a `main` NO incluye nada del v3 — main sigue siendo el monolito v1.1.0 que corre estable en prod desde el cutover.
+
 ### 2026-04-21 — Backend: `client_company_id` en approve/reject + limpieza repo (post-presentación)
 
 **Contexto:** tras la presentación al cliente (v1.0.0 GO), completar la Opción 2 que quedó pendiente del fix anterior: dejar el backend consistente a nivel de FK cuando se aprueba/rechaza una empresa pendiente.

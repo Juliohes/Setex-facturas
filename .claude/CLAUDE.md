@@ -49,8 +49,8 @@ Traefik reverse-proxy compartido (`n8n-traefik-1`) con Let's Encrypt para ambos.
 ### MEDIO — PaddleOCR instalado pero sin usar (~3 GB)
 `paddleocr.js` existe pero `ocr/index.js` NO lo llama. Decisión pendiente: integrarlo o desinstalar. ROADMAP Q3.
 
-### BAJO — Symlink legacy activo
-`/opt/setex-captu-facture → /opt/setex-captu-facture.OLD-2026-04-20`. Pendiente de borrar tras 1 semana de gracia (ROADMAP Q2). Ningún script/cron activo depende del symlink desde 2026-04-21.
+### (Resuelto 2026-04-27) — Symlink legacy y YAML estático Traefik eliminados
+Ya no hay symlink `/opt/setex-captu-facture` ni target `/opt/setex-captu-facture.OLD-2026-04-20` (109 MB liberados, tarball en `/opt/setex/shared/backups/`). El YAML estático `/docker/n8n/traefik-dynamic/setex.yml` también borrado: HSTS migrado a nginx con `max-age=315360000` (10 años) y redirect xanflatest.com a labels Docker en `setex-prod-frontend`. `/etc/logrotate.d/setex` ahora cubre `/opt/setex/{prod,staging}/logs/*.log`. Detalle en `docs/INFORME_SISTEMA_COMPLETO.md` entrada 2026-04-27.
 
 ---
 
