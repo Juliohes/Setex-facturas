@@ -6,10 +6,10 @@
 
 ### 🚨 Críticas para cerrar al 100% el plan de migración
 
-- [ ] **Verificar 2FA en GitHub Settings** (5 min, manual de Julio)
-- [ ] **Promocionar PR #18** (scripts paths) develop → main vía `deploy-prod.yml` con `DESPLEGAR`
-- [ ] **Eliminar el symlink** `/opt/setex-captu-facture` cuando Julio confirme que no hay nada legacy que dependa de él (esperar 1 semana de gracia)
-- [ ] **Eliminar el YAML estático** `/docker/n8n/traefik-dynamic/setex.yml` y dejar todo el routing en labels Docker (PR + verificar headers HSTS siguen presentes)
+- [x] **Verificar 2FA en GitHub Settings** ✅ (2026-04-27 · Authenticator app + GitHub Mobile activos)
+- [x] **Promocionar PR #18** (scripts paths) develop → main ✅ (superseded por PR #51 "Deploy 2026-04-21" mergeado · `scripts/lib/paths.sh` ya idéntico en main/develop con md5 `c691ddc3...`)
+- [x] **Eliminar el symlink** `/opt/setex-captu-facture` ✅ (2026-04-27 · 109 MB liberados, tarball en `shared/backups/`)
+- [x] **Eliminar el YAML estático** `/docker/n8n/traefik-dynamic/setex.yml` y dejar todo el routing en labels Docker ✅ (2026-04-27 · HSTS subido a 10 años en nginx, xanflatest a labels en `setex-prod-frontend`)
 
 ### ⚠️ Importantes para mantener la salud del producto
 

@@ -155,6 +155,24 @@ services:
       - "traefik.http.middlewares.${SETEX_ROUTER}-ipallow.ipallowlist.sourcerange=${SETEX_ALLOWED_IPS:-0.0.0.0/0}"
       # Service
       - "traefik.http.services.${SETEX_ROUTER}.loadbalancer.server.port=80"
+      # ── xanflatest.com → setex-facturas.es (redirect 302) ──
+      # Migrado desde /docker/n8n/traefik-dynamic/setex.yml (cleanup 2026-04-27).
+      # 302 (no permanente) porque xanflatest.com puede reasignarse a otro
+      # proyecto en el futuro — si llega ese día, BORRAR estas 9 labels.
+      # Solo prod: staging no sirve xanflatest.com.
+      - "traefik.http.routers.xanflatest-http.rule=Host(`xanflatest.com`)"
+      - "traefik.http.routers.xanflatest-http.entrypoints=web"
+      - "traefik.http.routers.xanflatest-http.middlewares=xanflatest-redirect"
+      - "traefik.http.routers.xanflatest-http.service=${SETEX_ROUTER}"
+      - "traefik.http.routers.xanflatest-https.rule=Host(`xanflatest.com`)"
+      - "traefik.http.routers.xanflatest-https.entrypoints=websecure"
+      - "traefik.http.routers.xanflatest-https.tls=true"
+      - "traefik.http.routers.xanflatest-https.tls.certresolver=mytlschallenge"
+      - "traefik.http.routers.xanflatest-https.middlewares=xanflatest-redirect"
+      - "traefik.http.routers.xanflatest-https.service=${SETEX_ROUTER}"
+      - "traefik.http.middlewares.xanflatest-redirect.redirectregex.regex=^https?://xanflatest\\.com(.*)"
+      - "traefik.http.middlewares.xanflatest-redirect.redirectregex.replacement=https://setex-facturas.es$${1}"
+      - "traefik.http.middlewares.xanflatest-redirect.redirectregex.permanent=false"
     logging:
       driver: "json-file"
       options:
