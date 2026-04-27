@@ -12,10 +12,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '20'
           cache: 'npm'
@@ -59,12 +59,45 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Setup Node 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '20'
       - name: Verificar smoke-test-ocr
         run: node --check scripts/smoke-test-ocr.js
       - name: Verificar list-invalid-cifs
         run: node --check scripts/list-invalid-cifs.js
+
+  tests:
+    name: Tests backend (architecture + contracts + paridad legacy↔v3)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'app/backend/package-lock.json'
+
+      - name: Install backend deps (lockfile estricto)
+        working-directory: app/backend
+        run: npm ci --no-audit --no-fund
+
+      - name: Run tests
+        working-directory: app/backend
+        run: |
+          # Suite completa con node --test. Incluye:
+          #   - tests/architecture.test.js            (boundaries entre capas)
+          #   - tests/contracts/ocr-port.test.js      (LSP del OcrPort)
+          #   - tests/contracts/internal-routes.test.js (5 rutas portadas FASE 1B Etapa 1)
+          #   - tests/contracts/api-surface-parity.test.js (paridad legacy↔v3 — bloquea Round 16)
+          node --test tests/
+
+      - name: Validar dependency-cruiser (boundaries)
+        working-directory: app/backend
+        run: npm run depcruise
+        continue-on-error: false

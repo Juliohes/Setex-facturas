@@ -77,8 +77,9 @@ function makeIpListManagerService({ configPath = '/app/src/config/security.json'
   }
 
   // Actualiza time_restriction respetando los campos no provistos. Devuelve la
-  // nueva sub-config o lanza Error con código si la validación falla. La regla
-  // start_hour === end_hour se rechaza (causaría lockout permanente del sitio).
+  // nueva sub-config o lanza Error con código si la validación falla. Reglas:
+  //   - start_hour y end_hour deben ser enteros en [0, 23].
+  //   - start_hour !== end_hour (lockout permanente prevention).
   function updateTimeRestriction(patch = {}) {
     const cfg = load();
     const current = cfg.time_restriction || {};
@@ -86,6 +87,16 @@ function makeIpListManagerService({ configPath = '/app/src/config/security.json'
     if (patch.enabled !== undefined) next.enabled = !!patch.enabled;
     if (patch.start_hour !== undefined) next.start_hour = parseInt(patch.start_hour, 10);
     if (patch.end_hour !== undefined) next.end_hour = parseInt(patch.end_hour, 10);
+
+    for (const key of ['start_hour', 'end_hour']) {
+      const v = next[key];
+      if (v !== undefined && (!Number.isInteger(v) || v < 0 || v > 23)) {
+        const err = new Error(`${key} debe ser un entero entre 0 y 23 (recibido: ${v}).`);
+        err.code = 'INVALID_RANGE';
+        throw err;
+      }
+    }
+
     if (
       Number.isFinite(next.start_hour) &&
       Number.isFinite(next.end_hour) &&
