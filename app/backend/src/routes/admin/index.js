@@ -9,6 +9,7 @@ const { makeAdminCatalogRoutes } = require('./catalog.routes');
 const { makeAdminSecurityRoutes } = require('./security.routes');
 const { makeAdminOcrEngineRoutes } = require('./ocr-engine.routes');
 const { makeAdminSystemRoutes } = require('./system.routes');
+const { makeAdminSessionRoutes } = require('./session.routes');
 
 function makeAdminRouter({ container, middleware = {} } = {}) {
   const express = require('express');
@@ -24,6 +25,9 @@ function makeAdminRouter({ container, middleware = {} } = {}) {
         adminFacturasExportXlsxController: container.resolve('adminFacturasExportXlsxController'),
         adminFacturasUpdateController: container.resolve('adminFacturasUpdateController'),
         adminFacturasDeleteController: container.resolve('adminFacturasDeleteController'),
+        adminRetryFailedController: container.hasRegistration('adminRetryFailedController')
+          ? container.resolve('adminRetryFailedController')
+          : null,
         authenticate: middleware.authenticate,
         requireAdmin: middleware.requireAdmin,
         requireXHR: middleware.requireXHR,
@@ -101,6 +105,9 @@ function makeAdminRouter({ container, middleware = {} } = {}) {
         adminSecurityConfigController: container.resolve('adminSecurityConfigController'),
         adminSecurityListUpdateController: container.resolve('adminSecurityListUpdateController'),
         adminSecurityBlockedController: container.resolve('adminSecurityBlockedController'),
+        adminSecurityTimeController: container.hasRegistration('adminSecurityTimeController')
+          ? container.resolve('adminSecurityTimeController')
+          : null,
         authenticate: middleware.authenticate,
         requireAdmin: middleware.requireAdmin,
         requireXHR: middleware.requireXHR,
@@ -128,6 +135,18 @@ function makeAdminRouter({ container, middleware = {} } = {}) {
       '/',
       makeAdminSystemRoutes({
         adminSystemHealthController: container.resolve('adminSystemHealthController'),
+        authenticate: middleware.authenticate,
+        requireAdmin: middleware.requireAdmin,
+      })
+    );
+  }
+
+  // FASE 1B Etapa 1 — refresh de cookie admin para nginx auth_request
+  if (container.hasRegistration('adminSessionRefreshController')) {
+    router.use(
+      '/',
+      makeAdminSessionRoutes({
+        adminSessionRefreshController: container.resolve('adminSessionRefreshController'),
         authenticate: middleware.authenticate,
         requireAdmin: middleware.requireAdmin,
       })

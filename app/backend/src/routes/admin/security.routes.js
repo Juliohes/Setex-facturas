@@ -8,6 +8,7 @@ function makeAdminSecurityRoutes({
   adminSecurityConfigController,
   adminSecurityListUpdateController,
   adminSecurityBlockedController,
+  adminSecurityTimeController,
   authenticate,
   requireAdmin,
   requireXHR,
@@ -29,6 +30,11 @@ function makeAdminSecurityRoutes({
   // Blocked
   router.get('/security/blocked', ...adminGuard, asyncHandler(adminSecurityBlockedController.list));
   router.delete('/security/blocked', ...mutGuard, asyncHandler(adminSecurityBlockedController.remove));
+
+  // FASE 1B Etapa 1 — time_restriction (mutación admin · CSRF + XHR)
+  if (adminSecurityTimeController) {
+    router.patch('/security/time', ...mutGuard, asyncHandler(adminSecurityTimeController));
+  }
 
   return router;
 }

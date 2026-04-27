@@ -76,7 +76,38 @@ function makeIpListManagerService({ configPath = '/app/src/config/security.json'
     return filtered.length;
   }
 
-  return { load, save, addToList, removeFromList, DEFAULT_CONFIG, configPath: () => configPath };
+  // Actualiza time_restriction respetando los campos no provistos. Devuelve la
+  // nueva sub-config o lanza Error con código si la validación falla. La regla
+  // start_hour === end_hour se rechaza (causaría lockout permanente del sitio).
+  function updateTimeRestriction(patch = {}) {
+    const cfg = load();
+    const current = cfg.time_restriction || {};
+    const next = { ...current };
+    if (patch.enabled !== undefined) next.enabled = !!patch.enabled;
+    if (patch.start_hour !== undefined) next.start_hour = parseInt(patch.start_hour, 10);
+    if (patch.end_hour !== undefined) next.end_hour = parseInt(patch.end_hour, 10);
+    if (
+      Number.isFinite(next.start_hour) &&
+      Number.isFinite(next.end_hour) &&
+      next.start_hour === next.end_hour
+    ) {
+      const err = new Error('start_hour y end_hour no pueden ser iguales (causaría bloqueo permanente del sitio).');
+      err.code = 'INVALID_RANGE';
+      throw err;
+    }
+    save({ ...cfg, time_restriction: next });
+    return next;
+  }
+
+  return {
+    load,
+    save,
+    addToList,
+    removeFromList,
+    updateTimeRestriction,
+    DEFAULT_CONFIG,
+    configPath: () => configPath,
+  };
 }
 
 module.exports = { makeIpListManagerService };

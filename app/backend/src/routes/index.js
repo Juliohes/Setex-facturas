@@ -11,6 +11,7 @@ const { makeUploadsRoutes } = require('./uploads.routes');
 const { makeMeRoutes } = require('./me.routes');
 const { makeCompanyRoutes } = require('./company.routes');
 const { makeAdminRouter } = require('./admin');
+const { makeInternalRoutes } = require('./internal.routes');
 
 function mountRoutes(app, { container, middleware = {} } = {}) {
   if (!app) throw new Error('mountRoutes: "app" required');
@@ -81,6 +82,16 @@ function mountRoutes(app, { container, middleware = {} } = {}) {
 
   const adminRouter = makeAdminRouter({ container, middleware });
   app.use('/api/admin', adminRouter);
+
+  // Internal endpoints para nginx auth_request — sin auth global, sin rate limit.
+  // FASE 1B Etapa 1 (descongelado v3 post-incidente Round 16, 2026-04-22).
+  if (container.hasRegistration('internalCheckAccessController')) {
+    const internalRouter = makeInternalRoutes({
+      internalCheckAccessController: container.resolve('internalCheckAccessController'),
+      internalCheckAdminPageController: container.resolve('internalCheckAdminPageController'),
+    });
+    app.use('/api/internal', internalRouter);
+  }
 }
 
 module.exports = { mountRoutes };

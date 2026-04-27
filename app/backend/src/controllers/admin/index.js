@@ -1,13 +1,14 @@
 // Barrel de controllers admin (crece en rounds 12-14).
 'use strict';
 
-// facturas (Round 12)
+// facturas (Round 12 + FASE 1B Etapa 1: retry-failed)
 const { makeAdminFacturasListController } = require('./facturas/list.controller');
 const { makeAdminFacturasUsersListController } = require('./facturas/users-list.controller');
 const { makeAdminFacturasImageController } = require('./facturas/image.controller');
 const { makeAdminFacturasExportXlsxController } = require('./facturas/export-xlsx.controller');
 const { makeAdminFacturasUpdateController } = require('./facturas/update.controller');
 const { makeAdminFacturasDeleteController } = require('./facturas/delete.controller');
+const { makeAdminRetryFailedController } = require('./facturas/retry-failed.controller');
 
 // client-companies (Round 12)
 const { makeAdminClientCompaniesListController } = require('./client-companies/list.controller');
@@ -33,10 +34,11 @@ const { makeAdminCatalogListController } = require('./catalog/list.controller');
 const { makeAdminCatalogCreateController } = require('./catalog/create.controller');
 const { makeAdminCatalogDeleteController } = require('./catalog/delete.controller');
 
-// security (Round 14)
+// security (Round 14 + FASE 1B Etapa 1: time)
 const { makeAdminSecurityConfigController } = require('./security/config.controller');
 const { makeAdminSecurityListUpdateController } = require('./security/list-update.controller');
 const { makeAdminSecurityBlockedController } = require('./security/blocked.controller');
+const { makeAdminSecurityTimeController } = require('./security/time.controller');
 
 // ocr-engine (Round 14)
 const { makeAdminOcrEngineGetController } = require('./ocr-engine/get.controller');
@@ -44,6 +46,9 @@ const { makeAdminOcrEngineUpdateController } = require('./ocr-engine/update.cont
 
 // system (Round 14)
 const { makeAdminSystemHealthController } = require('./system/health.controller');
+
+// session refresh (FASE 1B Etapa 1)
+const { makeAdminSessionRefreshController } = require('./session-refresh.controller');
 
 module.exports = {
   // facturas
@@ -53,6 +58,7 @@ module.exports = {
   makeAdminFacturasExportXlsxController,
   makeAdminFacturasUpdateController,
   makeAdminFacturasDeleteController,
+  makeAdminRetryFailedController,
   // client-companies
   makeAdminClientCompaniesListController,
   makeAdminClientCompaniesCreateController,
@@ -77,9 +83,12 @@ module.exports = {
   makeAdminSecurityConfigController,
   makeAdminSecurityListUpdateController,
   makeAdminSecurityBlockedController,
+  makeAdminSecurityTimeController,
   // ocr-engine
   makeAdminOcrEngineGetController,
   makeAdminOcrEngineUpdateController,
   // system
   makeAdminSystemHealthController,
+  // session refresh (FASE 1B)
+  makeAdminSessionRefreshController,
 };

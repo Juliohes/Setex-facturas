@@ -12,6 +12,7 @@ function makeAdminFacturasRoutes({
   adminFacturasExportXlsxController,
   adminFacturasUpdateController,
   adminFacturasDeleteController,
+  adminRetryFailedController,
   authenticate,
   requireAdmin,
   requireXHR,
@@ -28,6 +29,11 @@ function makeAdminFacturasRoutes({
   router.get('/facturas/:id/imagen', ...adminGuard, asyncHandler(adminFacturasImageController));
   router.put('/facturas/:id', ...mutGuard, asyncHandler(adminFacturasUpdateController));
   router.delete('/facturas/:id', ...mutGuard, asyncHandler(adminFacturasDeleteController));
+
+  // FASE 1B Etapa 1 — retry-failed (mutación admin · requiere XHR)
+  if (adminRetryFailedController) {
+    router.post('/retry-failed/:id', ...mutGuard, asyncHandler(adminRetryFailedController));
+  }
 
   return router;
 }

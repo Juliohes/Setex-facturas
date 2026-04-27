@@ -9,6 +9,7 @@ const uploadsCtrl = require('../controllers/uploads');
 const meCtrl = require('../controllers/me');
 const companyCtrl = require('../controllers/company');
 const adminCtrl = require('../controllers/admin');
+const internalCtrl = require('../controllers/internal');
 
 function registerControllers(container) {
   container.register({
@@ -48,6 +49,7 @@ function registerControllers(container) {
     adminFacturasExportXlsxController: asFunction(adminCtrl.makeAdminFacturasExportXlsxController).singleton(),
     adminFacturasUpdateController: asFunction(adminCtrl.makeAdminFacturasUpdateController).singleton(),
     adminFacturasDeleteController: asFunction(adminCtrl.makeAdminFacturasDeleteController).singleton(),
+    adminRetryFailedController: asFunction(adminCtrl.makeAdminRetryFailedController).singleton(),
 
     // admin client-companies
     adminClientCompaniesListController: asFunction(adminCtrl.makeAdminClientCompaniesListController).singleton(),
@@ -77,6 +79,7 @@ function registerControllers(container) {
     adminSecurityConfigController: asFunction(adminCtrl.makeAdminSecurityConfigController).singleton(),
     adminSecurityListUpdateController: asFunction(adminCtrl.makeAdminSecurityListUpdateController).singleton(),
     adminSecurityBlockedController: asFunction(adminCtrl.makeAdminSecurityBlockedController).singleton(),
+    adminSecurityTimeController: asFunction(adminCtrl.makeAdminSecurityTimeController).singleton(),
 
     // admin ocr-engine
     adminOcrEngineGetController: asFunction(adminCtrl.makeAdminOcrEngineGetController).singleton(),
@@ -84,6 +87,13 @@ function registerControllers(container) {
 
     // admin system
     adminSystemHealthController: asFunction(adminCtrl.makeAdminSystemHealthController).singleton(),
+
+    // admin session refresh (FASE 1B Etapa 1)
+    adminSessionRefreshController: asFunction(adminCtrl.makeAdminSessionRefreshController).singleton(),
+
+    // internal (nginx auth_request endpoints — FASE 1B Etapa 1)
+    internalCheckAccessController: asFunction(internalCtrl.makeInternalCheckAccessController).singleton(),
+    internalCheckAdminPageController: asFunction(internalCtrl.makeInternalCheckAdminPageController).singleton(),
   });
 }
 
