@@ -1,16 +1,35 @@
 # SETEX — Roadmap trimestral 2026
 
-Última actualización: **2026-04-27** — tras cierre Q2 cleanup post-cutover Fase 4 (PR #84 mergeado + deploy a producción exitoso).
+Última actualización: **2026-04-27 23:55 UTC** — tras cierre FASE 1B Etapas 0-4 (PRs #85, #86 + PR cierre pendiente squash).
 
 ---
 
-## 🎯 Siguiente bloque del proyecto · FASE 1B Descongelado v3
+## 🎯 Siguiente acción del proyecto · FASE 1B Etapas 5-6 (validación + swap)
 
-**Plan ejecutable autocontenido**: `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md`
+**Estado**: el descongelado del refactor v3 está **listo para swap**. Plumbing completo en `develop`:
+- 5 rutas `auth_request` portadas y testadas (PR #86 mergeado).
+- Test de paridad legacy↔v3 corre en CI (cada PR a develop/main valida que no regresamos).
+- Healthcheck container apunta a la ruta crítica → unhealthy automático si falta.
+- Smoke HTTP post-deploy bloquea promoción si la superficie API se rompe.
 
-El refactor v3 (Rounds 1-15 + 5 hotfixes, mergeados a develop el 2026-04-22) sufrió un incidente en el SWAP runtime (PR #83) por 5 rutas `auth_request` faltantes. Está CONGELADO en `develop`. La sesión de descongelado (3-4 horas, 6 etapas) sigue el plan referenciado.
+**Acciones manuales que faltan** (no automatizables hoy):
 
-**ANTES de tocar nada del v3**: ejecutar Etapa 0 del plan (PR a develop con rollback equivalente al de prod). Sin esa etapa, cualquier `deploy-staging.yml` reproduciría el incidente del 22-Abr.
+1. **Etapa 5 — Validación staging 24-48h**:
+   - Disparar `deploy-staging.yml` (push a develop o `workflow_dispatch`).
+   - Staging arranca con monolito (server.js = 4308 líneas, NO el v3 todavía).
+   - Smoke post-deploy debe pasar verde inmediato.
+   - Dejar correr 24-48h vigilando: `docker logs setex-staging-backend`, watchdog, alertas.
+   - Si todo verde → seguir a Etapa 6.
+
+2. **Etapa 6 — Swap final del v3 a runtime + tag v2.0.0**:
+   - Branch nuevo `refactor/v3-swap-runtime-2026-XX-XX` desde develop.
+   - `mv src/server.js src/server.legacy.js` y `mv src/server.next.js src/server.js`.
+   - Ajustar `package.json` (`start:next` → `start:legacy`) y `eslint.config.js` (excepción `max-lines` a `server.legacy.js`).
+   - PR a develop, CI paridad seguirá pasando, merge.
+   - Deploy a staging automático, smoke verde.
+   - 24-48h adicionales en staging.
+   - Si todo OK: PR develop → main + tag `v2.0.0` + `Deploy a producción (manual)` con `DESPLEGAR`.
+   - Plan detallado: `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md` sección 6.
 
 ---
 
@@ -18,12 +37,18 @@ El refactor v3 (Rounds 1-15 + 5 hotfixes, mergeados a develop el 2026-04-22) suf
 
 ### 🚨 Críticas para cerrar al 100% el plan de migración
 
-- [x] **Verificar 2FA en GitHub Settings** ✅ (2026-04-27 · Authenticator app + GitHub Mobile activos)
-- [x] **Promocionar PR #18** (scripts paths) develop → main ✅ (superseded por PR #51 "Deploy 2026-04-21" mergeado · `scripts/lib/paths.sh` ya idéntico en main/develop con md5 `c691ddc3...`)
-- [x] **Eliminar el symlink** `/opt/setex-captu-facture` ✅ (2026-04-27 · 109 MB liberados, tarball en `shared/backups/`)
-- [x] **Eliminar el YAML estático** `/docker/n8n/traefik-dynamic/setex.yml` y dejar todo el routing en labels Docker ✅ (2026-04-27 · HSTS subido a 10 años en nginx, xanflatest a labels en `setex-prod-frontend`)
-- [x] **PR #84 cleanup post-cutover mergeado a main + deploy a producción ejecutado** ✅ (2026-04-27 11:21 UTC · `uuid@14.0.0` override cierra GHSA-w5hq-g745-h8pq · 5 ficheros en main: nginx.conf, docker-compose.yml, INFORME, ROADMAP, CLAUDE.md)
-- [ ] **🚧 FASE 1B · Descongelado del refactor v3** (PRIORITARIO · siguiente sesión) — ver `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md`
+- [x] **Verificar 2FA en GitHub Settings** ✅ (2026-04-27)
+- [x] **Promocionar PR #18** (scripts paths) develop → main ✅
+- [x] **Eliminar el symlink** `/opt/setex-captu-facture` ✅ (2026-04-27)
+- [x] **Eliminar el YAML estático** `/docker/n8n/traefik-dynamic/setex.yml` ✅ (2026-04-27)
+- [x] **PR #84 cleanup post-cutover mergeado a main + deploy a producción** ✅ (2026-04-27 11:21 UTC)
+- [x] **FASE 1B Etapa 0 — Rollback en `develop`** ✅ (PR #85, squash `6c9f65b`, 2026-04-27 15:55 UTC)
+- [x] **FASE 1B Etapa 1 — Portar 5 rutas `auth_request` faltantes al v3** ✅ (PR #86, squash `5513b5f`, 2026-04-27)
+- [x] **FASE 1B Etapa 2 — Test paridad legacy↔v3 + integración CI** ✅ (PR cierre, 2026-04-27)
+- [x] **FASE 1B Etapa 3 — Healthcheck container endurecido** ✅ (PR cierre, 2026-04-27)
+- [x] **FASE 1B Etapa 4 — Smoke HTTP post-deploy en workflows staging+prod** ✅ (PR cierre, 2026-04-27)
+- [ ] **FASE 1B Etapa 5 — Validación staging 24-48h** (acción manual de Julio)
+- [ ] **FASE 1B Etapa 6 — Swap v3 a runtime + tag `v2.0.0` + promoción a prod** (acción manual de Julio, post-Etapa 5)
 
 ### 🔧 Tareas operacionales nuevas (detectadas durante el cleanup 2026-04-27)
 

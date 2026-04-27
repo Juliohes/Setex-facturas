@@ -578,6 +578,45 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-04-27 (noche) — FASE 1B Etapas 0-4 cerradas · v3 listo para swap futuro
+- **Contexto**: sesión de descongelado del refactor v3 que estaba congelado en `develop` desde el incidente Round 16 (2026-04-22). Plan ejecutable: `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md`. Ejecutadas las 4 etapas que **se pueden hacer hoy**; las 2 restantes (5: validación 24-48h · 6: swap real) quedan listas para que Julio las dispare cuando decida.
+- **Etapa 0 — Rollback en `develop`** (PR #85, squash `6c9f65b`):
+  - `develop` apuntaba al swap v3 roto (`0e48ab3`, PR #83). Cualquier `deploy-staging.yml` reproducía el incidente.
+  - Aplicado el rollback equivalente al de disco del 22-Abr: `server.js` = monolito 4308 líneas, `server.next.js` = v3 mini congelado, `server.legacy.js` borrado, `package.json` con `start:next` + `overrides.uuid ^14.0.0`, `eslint.config.js` con excepción `max-lines` migrada al monolito.
+  - Documentación masiva incluida: `PLAN-FASE-4-DESCONGELADO-V3.md` (NUEVO), `MACROPLAN-SETEX-v2.0.md`, `ROADMAP.md`, `.claude/CLAUDE.md`, este `INFORME`.
+  - CI ROJO inicial por `npm audit` con `uuid<14`: regenerado lockfile completo + `overrides` explícito en lockfile root → CI verde.
+- **Etapa 1 — Portar 5 rutas faltantes** (PR #86, squash `5513b5f`):
+  - Las 5 rutas que tiraron staging en 404 masivo el 22-Abr ya están en el v3:
+    - `GET /api/internal/check-access` (auth_request crítica)
+    - `GET /api/internal/check-admin-page` (auth_request admin)
+    - `POST /api/admin/refresh-session` (cookie `setex_admin` 8h httpOnly)
+    - `POST /api/admin/retry-failed/:id` (panel admin · failed_jobs)
+    - `PATCH /api/admin/security/time` (edita time_restriction)
+  - Decisiones técnicas: reutilizado `tokenVerificationService.verify()` (timeout 500ms fail-secure ya existente) en `check-admin-page`. `req.cookies` (cookie-parser ya montado). `ipListManagerService` extendido con `updateTimeRestriction(patch)` en vez de crear `securityConfigService` nuevo (DRY).
+  - Tests unitarios: 20 tests nuevos en `tests/contracts/internal-routes.test.js`, suite total 39/39 pass.
+- **Etapa 2 — Test paridad legacy↔v3 + CI integration** (PR pendiente squash al cerrar esta sesión):
+  - `tests/contracts/api-surface-parity.test.js`: regex sobre `server.js` extrae rutas del monolito (58 detectadas), `mountRoutes(app, { container: mockContainer })` con stubs Awilix `asValue` extrae rutas del v3, comparación 1:1 estricta. Allowlist vacía. Si el v3 deja de portar una ruta, CI rompe.
+  - Workflow `.github/workflows/ci.yml`: nuevo job `tests` que corre `node --test tests/` + `npm run depcruise` (boundaries entre capas). Si la paridad rompe en una PR, no se mergea.
+  - Bump `actions/checkout@v4 → @v5` y `actions/setup-node@v4 → @v5` para silenciar warning "Node.js 20 actions deprecated" (válidos hasta junio 2026, mejor pre-empt).
+  - Endurecimiento adicional `ipListManager.updateTimeRestriction`: validación rangos `[0,23]` para `start_hour`/`end_hour` (antes solo se rechazaba `start === end`).
+  - Suite total: 44/44 pass. depcruise: 0 errors, 0 warnings, 181 modules.
+- **Etapa 3 — Healthcheck container endurecido**:
+  - `app/backend/Dockerfile`: HEALTHCHECK ahora apunta a `/api/internal/check-access` (no `/health` trivial). Whitelist de status codes "healthy": 200 (todo OK) y 403 (hora bloqueada, comportamiento esperado). Cualquier otro (404, 5xx, conn refused, timeout) → unhealthy → Docker reinicia container automáticamente.
+  - Esto detecta el incidente Round 16 EN RUNTIME: si el v3 no porta la ruta, el healthcheck devuelve 404 → unhealthy → recuperación automática (en lugar de servir 404 a usuarios durante horas).
+  - El monolito ya tiene la ruta (línea 700 server.js), así que el cambio es transparente para el runtime actual.
+- **Etapa 4 — Smoke HTTP post-deploy en workflows**:
+  - `scripts/smoke-test-http.sh` (NUEVO, idempotente, sin OCR real). 3 verificaciones (~5s):
+    1. `GET /health` → 200 (proceso vivo)
+    2. `GET /api/internal/check-access` → 200 ó 403 (un 404 = INCIDENTE ROUND 16 → exit 1 inmediato con mensaje explícito)
+    3. `POST /api/auth/login` con creds inválidas → 401/429 (endpoint vivo)
+  - `deploy-staging.yml` y `deploy-prod.yml`: step `Smoke HTTP post-deploy` tras los healthchecks verdes. Si falla, deploy aborta. En prod el mensaje es prefijo "REVISAR INMEDIATAMENTE".
+  - El smoke se sourcea con `paths.sh` para autodetectar entorno y BASE_URL — un solo script para ambos entornos.
+- **PR adicional** (mismo branch): HSTS staging `max-age=63072000` (2 años) → `315360000` (10 años) en las 4 ocurrencias de `app/frontend/nginx.conf`. Equipara con prod (que ya tiene 10 años desde el cleanup post-cutover Fase 4). Sin downside funcional. Suma puntos para HSTS preload list.
+- **Etapas pendientes** (no automatizables hoy):
+  - **Etapa 5**: validación staging 24-48h tras deploy de develop con todo este plumbing. Requiere observación humana de logs/watchdog.
+  - **Etapa 6**: swap final del v3 a runtime (rename `server.js` ↔ `server.next.js`) + tag `v2.0.0` + promoción manual a prod (`deploy-prod.yml` con `DESPLEGAR`). El plan PLAN-FASE-4-DESCONGELADO-V3.md sección 6 detalla los pasos exactos.
+- **Estado neto del descongelado a 2026-04-27 23:55 UTC**: el v3 modular está totalmente listo para arrancar en runtime. Cualquier deploy a staging desde develop reproduce el monolito (no el v3) porque el swap es un cambio explícito de Etapa 6. El plumbing de seguridad alrededor del swap (test paridad CI + healthcheck + smoke post-deploy) garantiza que un v3 incompleto NO puede llegar a producción sin que CI/deploy lo bloqueen.
+
 ### 2026-04-27 (tarde) — PR #84 mergeado a main + deploy a producción · incidente ownership root + lección aprendida
 - **Contexto**: tras cerrar las FASES 1, 2, 3 en runtime el 2026-04-27 mañana, se preparó PR #84 (`chore/cleanup-post-cutover-2026-04-27`) con los 5 ficheros que debían commitearse a `main`: `nginx.conf` (HSTS 10 años), `docker-compose.yml` (labels xanflatest), `INFORME_SISTEMA_COMPLETO.md`, `ROADMAP.md`, `.claude/CLAUDE.md`. PR creado vía `git push origin chore/cleanup-post-cutover-2026-04-27` desde clone temporal en `/tmp/setex-cleanup-pr` (clave SSH de devuser autorizada en GitHub como user Juliohes).
 - **CI bloqueó por vulnerabilidad uuid**: el job `Lint sintaxis + npm audit` falló con `2 moderate severity vulnerabilities` en `uuid <14.0.0` (GHSA-w5hq-g745-h8pq · missing buffer bounds check), llegando como dependencia transitiva de `exceljs@4.4.0` (última versión, sin update upstream). Solución mínima: segundo commit en la rama del PR con `"overrides": {"uuid": "^14.0.0"}` en `app/backend/package.json` + lockfile regenerado. Verificado: `npm audit` → `found 0 vulnerabilities`, `npm ls uuid` → `uuid@14.0.0 overridden`, smoke `exceljs.Workbook.addWorksheet.addRow` con uuid 14 funcional. Re-ejecución del CI: ambos checks verdes.
