@@ -7,12 +7,29 @@
 | Campo | Valor |
 |---|---|
 | Creado | 2026-04-27 |
-| Estado | 🟡 PENDIENTE — siguiente bloque grande del proyecto |
-| Tiempo estimado | 3-4 horas concentradas (1 sesión dedicada) |
-| Trabajar en | `/opt/setex/staging` (probar TODO en staging antes de tocar main) |
-| Rama base | `develop` (ya tiene v3 mergeado pero ROTO en runtime) |
-| Rama de trabajo | `refactor/v3-descongelado-2026-04-XX` (nueva, desde develop) |
-| Promoción a prod | Solo tras 24-48h de staging estable + tag `v2.0.0` |
+| Última actualización | 2026-04-27 23:55 UTC |
+| Estado | 🟢 **Etapas 0-4 CERRADAS** · 🟡 Etapas 5-6 pendientes (acción manual de Julio) |
+| Tiempo estimado restante | 24-48h validación staging + ~2h sesión de swap final |
+| Trabajar en | `/opt/setex/staging` (Etapa 5) y nuevo branch (Etapa 6) |
+| Rama base | `develop` (deployable: monolito en runtime, v3 listo en `server.next.js`) |
+| Promoción a prod | Solo tras 24-48h de staging post-swap estable + tag `v2.0.0` |
+
+### Estado de las etapas
+
+| Etapa | Estado | PR | Squash commit | Verificación |
+|---|---|---|---|---|
+| 0. Rollback en develop | ✅ MERGEADO | #85 | `6c9f65b` | server.js=4308 líneas, server.legacy.js borrado, plan presente |
+| 1. Portar 5 rutas faltantes | ✅ MERGEADO | #86 | `5513b5f` | 20/20 tests pass, 5 controllers nuevos en v3 |
+| 2. Test paridad + CI | ✅ MERGEADO | (cierre PR) | (squash) | 4 tests paridad pass, job CI `tests` activo |
+| 3. Healthcheck endurecido | ✅ MERGEADO | (cierre PR) | (squash) | Dockerfile apunta a /api/internal/check-access |
+| 4. Smoke HTTP post-deploy | ✅ MERGEADO | (cierre PR) | (squash) | scripts/smoke-test-http.sh + step en staging+prod workflows |
+| 5. Validación staging 24-48h | 🟡 PENDIENTE | — | — | dispara `deploy-staging.yml` y observa |
+| 6. Swap v3 a runtime | 🟡 PENDIENTE | — | — | tras Etapa 5 verde, branch swap → PR → merge → tag v2.0.0 |
+
+**Lo que ya está blindado** (no hace falta repetir trabajo en futuras sesiones):
+- Cualquier PR que haga `develop` regrese una ruta del monolito sin portarla al v3 → CI rompe (test paridad).
+- Container con `/api/internal/check-access` 404 → unhealthy automático → Docker reinicia.
+- Deploy con superficie API rota → `smoke-test-http.sh` aborta el job antes de marcar éxito.
 
 ---
 

@@ -16,10 +16,10 @@
 | Mantenedor | Julio |
 | Versión del plan | 2.0 (plan híbrido — combina lo mejor del Plan A externo y del Plan B interno basado en estado real) |
 | Fecha creación | 2026-04-20 |
-| Última actualización | **2026-04-27 11:50 UTC** (cierre Q2 cleanup post-cutover · refactor v3 CONGELADO post-incidente Round 16 · plan descongelado en `PLAN-FASE-4-DESCONGELADO-V3.md`) |
-| Estado global | 🟢 **v1.1.0 + cleanup post-cutover (PR #84) en prod · monolito estable**. ⚠️ Refactor v3 CONGELADO en `develop` tras incidente Round 16 (5 rutas `auth_request` faltantes — staging 404 masivo el 2026-04-22 tarde). 🎯 **Siguiente bloque: FASE 4 descongelado v3** — ver `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md`. |
-| Release activo | **v1.1.0 + PR #84** en `main @ 788ff6a` (deploy-prod.yml 2026-04-27 11:21 UTC, success tras chown deploy:deploy de 195 ficheros root contaminados por git pulls anteriores). Backend container con `uuid@14.0.0` override (vulnerabilidad GHSA-w5hq-g745-h8pq cerrada). |
-| Tags publicados | v1.0.0 (entrega inicial), v1.0.1 (fix watchdog + IRPF + Excel), v1.0.2 (fix modales + sync histórico), **v1.1.0 (desglose multi-IVA coherente en 5 capas)**. Próximo tag previsto: **v2.0.0** tras descongelado v3 completo (post-FASE 4). |
+| Última actualización | **2026-04-27 23:55 UTC** (FASE 1B Etapas 0-4 cerradas y mergeadas a develop · v3 listo para swap pendiente solo de validación staging 24-48h) |
+| Estado global | 🟢 **v1.1.0 + PR #84 en prod · monolito estable**. 🟢 **Refactor v3 DESCONGELADO en `develop`** — 5 rutas portadas + paridad CI + healthcheck endurecido + smoke HTTP post-deploy. 🟡 Pendiente: validación staging 24-48h (Etapa 5) y swap a runtime + tag v2.0.0 (Etapa 6). Plan: `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md`. |
+| Release activo | **v1.1.0 + PR #84** en `main @ 788ff6a` (deploy-prod.yml 2026-04-27 11:21 UTC). Backend container con `uuid@14.0.0` override (GHSA-w5hq-g745-h8pq cerrada). El swap a v3 (Etapa 6) cambiará el release a v2.0.0. |
+| Tags publicados | v1.0.0, v1.0.1, v1.0.2, **v1.1.0**, v2.0.0-rc1 (rollback 22-Abr). Próximo tag previsto: **v2.0.0** tras swap v3 estable 7+ días en prod. |
 
 ### Reglas del documento
 
@@ -446,23 +446,27 @@ El plan originalmente Strangler-Fig (ADR-0002) se **eleva a v3** con SOLID expl�
 - **Estado v3 hoy**: CONGELADO. Todo el código v3 sigue en `develop` y disponible como `src/server.next.js`. No corre en runtime.
 - **Lección documentada**: los 19 tests del swap NO cubrían contrato `nginx ↔ backend`. Hace falta **test de paridad de superficie API** automático en CI.
 
-#### 🎯 FASE 1B · Descongelado del v3 — **siguiente bloque grande del proyecto**
+#### 🎯 FASE 1B · Descongelado del v3 — **EN CURSO · Etapas 0-4 cerradas, 5-6 pendientes acción manual**
 
-Plan ejecutable autocontenido en `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md`. Resumen de las 6 etapas:
+Plan ejecutable autocontenido en `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md`. Estado de las 6 etapas:
 
-| Etapa | Objetivo | Tiempo |
-|---|---|---|
-| 0 | PR a `develop` con rollback Round 16 (HOY develop apunta al swap roto — mina pisada para staging) | 30 min |
-| 1 | Portar 5 rutas faltantes al v3 (`/api/internal/check-access` etc) | 60-90 min |
-| 2 | Test paridad legacy↔v3 + integración CI (lo que faltó en Round 16) | 45-60 min |
-| 3 | Healthcheck container apunta a `/api/internal/check-access` (no a `/health` trivial) | 15 min |
-| 4 | Smoke HTTP post-deploy (login + preview + confirm) en `deploy-staging.yml` | 30 min |
-| 5 | Validación staging 24-48h con monolito (no swap aún) | 24-48h |
-| 6 | Swap v3 a runtime + promoción `v2.0.0` con monitoring 24h en prod | 2h + 24h |
+| Etapa | Objetivo | Estado | PR / Squash |
+|---|---|---|---|
+| 0 | PR a `develop` con rollback Round 16 | ✅ MERGEADO (2026-04-27) | #85 / `6c9f65b` |
+| 1 | Portar 5 rutas `auth_request` + admin faltantes al v3 | ✅ MERGEADO (2026-04-27) | #86 / `5513b5f` |
+| 2 | Test paridad legacy↔v3 + integración CI + bump actions @v5 | ✅ MERGEADO (2026-04-27 noche) | (cierre PR) |
+| 3 | Healthcheck container endurecido a `/api/internal/check-access` | ✅ MERGEADO (2026-04-27 noche) | (cierre PR) |
+| 4 | Smoke HTTP post-deploy en `deploy-staging.yml` y `deploy-prod.yml` | ✅ MERGEADO (2026-04-27 noche) | (cierre PR) |
+| 5 | Validación staging 24-48h con monolito (no swap aún) | 🟡 PENDIENTE | dispara `deploy-staging.yml` y observa |
+| 6 | Swap v3 a runtime + tag `v2.0.0` + promoción a prod | 🟡 PENDIENTE | tras Etapa 5 verde |
 
-**Rama:** `refactor/modular-architecture-2026-04-22` queda obsoleta (ya mergeada a develop). Nuevas ramas desde develop: `refactor/v3-rollback-en-develop-2026-04-XX` (etapa 0), `refactor/v3-port-internal-routes-2026-04-XX` (etapa 1), etc.
+**Lo que ya está blindado** (no hace falta repetir trabajo):
+- Test de paridad legacy↔v3 corre en CI en cada PR a develop/main. Si una ruta del monolito no se porta al v3, CI rompe → no se mergea.
+- `tests/contracts/api-surface-parity.test.js` extrae 58 rutas del monolito y compara contra el v3 con paridad 1:1 estricta (allowlist vacía).
+- HEALTHCHECK del container apunta a la ruta crítica `/api/internal/check-access`. Whitelist `[200, 403]` → cualquier otro código (incluido 404) marca unhealthy automático.
+- `scripts/smoke-test-http.sh` sourcea `paths.sh`, hace 3 verificaciones HTTP rápidas tras cada deploy. Si `/api/internal/check-access` devuelve 404 → exit 1 con mensaje "INCIDENTE ROUND 16".
 
-`deploy-prod.yml` NO se dispara hasta etapa 6 validada. `main` permanece en `788ff6a` (= v1.1.0 + PR #84 cleanup) hasta la sesión de promoción a `v2.0.0`.
+**Rama del swap (Etapa 6, pendiente)**: `refactor/v3-swap-runtime-2026-XX-XX` desde `develop`. Es la inversa del rollback de Etapa 0 (rename `server.js` ↔ `server.next.js`).
 
 ### Día 1 post-entrega (histórico — ya completado)
 

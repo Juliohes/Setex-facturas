@@ -40,16 +40,32 @@ jobs:
             docker compose up -d backend frontend
 
             echo "── Esperando healthchecks (60s máx) ──"
+            HEALTH_OK=false
             for i in $(seq 1 12); do
               be_health=$(docker inspect setex-staging-backend --format '{{.State.Health.Status}}' 2>/dev/null || echo unknown)
               fe_health=$(docker inspect setex-staging-frontend --format '{{.State.Health.Status}}' 2>/dev/null || echo unknown)
               if [ "$be_health" = "healthy" ] && [ "$fe_health" = "healthy" ]; then
                 echo "── Healthchecks verdes en ${i}x5s ──"
-                exit 0
+                HEALTH_OK=true
+                break
               fi
               echo "  intento $i/12 — backend=$be_health frontend=$fe_health"
               sleep 5
             done
-            echo "::error::Timeout esperando healthchecks"
-            docker compose logs backend --tail 50
-            exit 1
+            if [ "$HEALTH_OK" != "true" ]; then
+              echo "::error::Timeout esperando healthchecks"
+              docker compose logs backend --tail 50
+              exit 1
+            fi
+
+            echo "── Smoke HTTP post-deploy (FASE 1B Etapa 4) ──"
+            cd /opt/setex/staging
+            if [ -x scripts/smoke-test-http.sh ]; then
+              if ! ./scripts/smoke-test-http.sh; then
+                echo "::error::Smoke HTTP falló — la superficie API no está intacta tras el deploy"
+                exit 1
+              fi
+            else
+              echo "::warning::scripts/smoke-test-http.sh no existe o no es ejecutable — saltando smoke"
+            fi
+            echo "── Deploy staging OK ──"

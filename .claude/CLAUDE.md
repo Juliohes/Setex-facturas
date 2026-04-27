@@ -9,26 +9,25 @@ Este documento es la fuente de verdad del producto completo.
 
 ---
 
-## 🎯 SIGUIENTE BLOQUE DE TRABAJO (2026-04-27 → próxima sesión)
+## 🎯 SIGUIENTE BLOQUE DE TRABAJO (2026-04-27 noche → próxima sesión)
 
-**FASE 1B · Descongelado del refactor v3.** El código v3 (Rounds 1-15 + 5 hotfixes) está mergeado en `develop`, pero el SWAP runtime falló el 22-Abr (5 rutas `auth_request` faltantes). Está CONGELADO.
+**FASE 1B Etapas 5+6 · Validación + Swap del v3.** Las Etapas 0-4 están **mergeadas a `develop`**. El descongelado está blindado: paridad CI + healthcheck endurecido + smoke HTTP post-deploy. Solo falta la parte que requiere observación humana / decisión.
 
-**Antes de tocar nada, lee este plan ejecutable autocontenido:**
+**Acciones pendientes** (en este orden):
 
-📄 **`docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md`**
+1. **Disparar `deploy-staging.yml`** (push o `workflow_dispatch`) — staging arranca con monolito (4308 líneas), smoke HTTP debe pasar verde inmediato.
+2. **24-48h validación staging** sin tocar nada — vigilar `docker logs setex-staging-backend`, watchdog, alertas.
+3. **Branch `refactor/v3-swap-runtime-2026-XX-XX`** desde develop con el rename físico:
+   - `mv src/server.js src/server.legacy.js` y `mv src/server.next.js src/server.js`
+   - Ajustar `package.json` y `eslint.config.js` (símil al rollback de Etapa 0 invertido).
+   - PR a develop, CI paridad valida, merge.
+4. **24-48h staging adicional** con v3 en runtime real.
+5. **PR develop → main + tag `v2.0.0` + Deploy a producción manual** con `DESPLEGAR`.
+6. **Monitoring 24h en prod** + reporte de cierre.
 
-6 etapas, 3-4h concentradas:
-- Etapa 0: PR a `develop` con rollback Round 16 (PRE-REQUISITO obligatorio)
-- Etapa 1: portar 5 rutas faltantes al v3
-- Etapa 2: test de paridad legacy↔v3 + integración CI
-- Etapa 3: endurecer healthcheck container
-- Etapa 4: smoke HTTP post-deploy
-- Etapa 5: validación staging 24-48h
-- Etapa 6: swap v3 a runtime + tag v2.0.0
+📄 **Plan ejecutable detallado paso a paso**: `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md` sección 6.
 
-⚠️ **Mina pisada hoy**: `develop` apunta al swap v3 ROTO (`0e48ab3`). Cualquier `deploy-staging.yml` reproduciría el incidente. La Etapa 0 elimina ese riesgo y debe hacerse PRIMERO.
-
-📚 **Contexto adicional**: `docs/plans/MACROPLAN-SETEX-v2.0.md` (sección 5 historial Rounds, sección 17 estado ejecutable, sección 18 riesgos), `docs/INFORME_SISTEMA_COMPLETO.md` (entradas 2026-04-22 y 2026-04-27), `docs/ROADMAP.md` (Q2/Q3/Q4 actualizado).
+📚 **Contexto adicional**: `docs/INFORME_SISTEMA_COMPLETO.md` entrada `2026-04-27 (noche)` con detalle de cada Etapa cerrada y los PRs específicos.
 
 ---
 

@@ -290,6 +290,27 @@ test('updateTimeRestriction: rechaza start === end', () => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
+test('updateTimeRestriction: rechaza start_hour fuera de [0,23]', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const os = require('node:os');
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'setex-test-'));
+  const cfgPath = path.join(tmpDir, 'security.json');
+  fs.writeFileSync(cfgPath, JSON.stringify({ time_restriction: { enabled: true, start_hour: 0, end_hour: 6 } }));
+  const { makeIpListManagerService } = require('../../src/services/security/ip-list-manager.service');
+  const svc = makeIpListManagerService({ configPath: cfgPath });
+
+  assert.throws(
+    () => svc.updateTimeRestriction({ start_hour: 24 }),
+    (err) => err.code === 'INVALID_RANGE' && /start_hour/.test(err.message)
+  );
+  assert.throws(
+    () => svc.updateTimeRestriction({ end_hour: -1 }),
+    (err) => err.code === 'INVALID_RANGE' && /end_hour/.test(err.message)
+  );
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
 test('updateTimeRestriction: actualiza enabled + start + end con backup', () => {
   const fs = require('node:fs');
   const path = require('node:path');

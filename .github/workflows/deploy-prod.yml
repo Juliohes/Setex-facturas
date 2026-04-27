@@ -82,16 +82,34 @@ jobs:
             docker compose up -d backend frontend
 
             echo "── Esperando healthchecks (90s máx) ──"
+            HEALTH_OK=false
             for i in $(seq 1 18); do
               be_health=$(docker inspect setex-prod-backend --format '{{.State.Health.Status}}' 2>/dev/null || echo unknown)
               fe_health=$(docker inspect setex-prod-frontend --format '{{.State.Health.Status}}' 2>/dev/null || echo unknown)
               if [ "$be_health" = "healthy" ] && [ "$fe_health" = "healthy" ]; then
                 echo "── Healthchecks verdes en ${i}x5s ──"
+                HEALTH_OK=true
                 break
               fi
               echo "  intento $i/18 — backend=$be_health frontend=$fe_health"
               sleep 5
             done
+            if [ "$HEALTH_OK" != "true" ]; then
+              echo "::error::Timeout esperando healthchecks en prod"
+              docker compose logs backend --tail 80
+              exit 1
+            fi
+
+            echo "── Smoke HTTP post-deploy (FASE 1B Etapa 4) ──"
+            cd /opt/setex/prod
+            if [ -x scripts/smoke-test-http.sh ]; then
+              if ! ./scripts/smoke-test-http.sh; then
+                echo "::error::Smoke HTTP falló en producción · la superficie API no está intacta. REVISAR INMEDIATAMENTE."
+                exit 1
+              fi
+            else
+              echo "::warning::scripts/smoke-test-http.sh no existe en /opt/setex/prod — saltando smoke (deploy NO bloqueado)"
+            fi
 
             # Smoke test OCR ejecutado por cron diario 04:30 UTC en HOST.
             # NO se incluye en el deploy porque depende de servicios externos
