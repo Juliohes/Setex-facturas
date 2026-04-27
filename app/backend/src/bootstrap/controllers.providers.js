@@ -86,6 +86,9 @@ function registerControllers(container) {
     // admin system
     adminSystemHealthController: asFunction(adminCtrl.makeAdminSystemHealthController).singleton(),
 
+    // admin session refresh (FASE 1B Etapa 1)
+    adminSessionRefreshController: asFunction(adminCtrl.makeAdminSessionRefreshController).singleton(),
+
     // internal (nginx auth_request endpoints — FASE 1B Etapa 1)
     internalCheckAccessController: asFunction(internalCtrl.makeInternalCheckAccessController).singleton(),
     internalCheckAdminPageController: asFunction(internalCtrl.makeInternalCheckAdminPageController).singleton(),

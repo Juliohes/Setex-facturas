@@ -45,6 +45,9 @@ const { makeAdminOcrEngineUpdateController } = require('./ocr-engine/update.cont
 // system (Round 14)
 const { makeAdminSystemHealthController } = require('./system/health.controller');
 
+// session refresh (FASE 1B Etapa 1)
+const { makeAdminSessionRefreshController } = require('./session-refresh.controller');
+
 module.exports = {
   // facturas
   makeAdminFacturasListController,
@@ -82,4 +85,6 @@ module.exports = {
   makeAdminOcrEngineUpdateController,
   // system
   makeAdminSystemHealthController,
+  // session refresh (FASE 1B)
+  makeAdminSessionRefreshController,
 };
