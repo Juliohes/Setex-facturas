@@ -1,13 +1,14 @@
 // Barrel de controllers admin (crece en rounds 12-14).
 'use strict';
 
-// facturas (Round 12)
+// facturas (Round 12 + FASE 1B Etapa 1: retry-failed)
 const { makeAdminFacturasListController } = require('./facturas/list.controller');
 const { makeAdminFacturasUsersListController } = require('./facturas/users-list.controller');
 const { makeAdminFacturasImageController } = require('./facturas/image.controller');
 const { makeAdminFacturasExportXlsxController } = require('./facturas/export-xlsx.controller');
 const { makeAdminFacturasUpdateController } = require('./facturas/update.controller');
 const { makeAdminFacturasDeleteController } = require('./facturas/delete.controller');
+const { makeAdminRetryFailedController } = require('./facturas/retry-failed.controller');
 
 // client-companies (Round 12)
 const { makeAdminClientCompaniesListController } = require('./client-companies/list.controller');
@@ -56,6 +57,7 @@ module.exports = {
   makeAdminFacturasExportXlsxController,
   makeAdminFacturasUpdateController,
   makeAdminFacturasDeleteController,
+  makeAdminRetryFailedController,
   // client-companies
   makeAdminClientCompaniesListController,
   makeAdminClientCompaniesCreateController,

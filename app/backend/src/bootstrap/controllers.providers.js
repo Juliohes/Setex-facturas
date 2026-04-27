@@ -49,6 +49,7 @@ function registerControllers(container) {
     adminFacturasExportXlsxController: asFunction(adminCtrl.makeAdminFacturasExportXlsxController).singleton(),
     adminFacturasUpdateController: asFunction(adminCtrl.makeAdminFacturasUpdateController).singleton(),
     adminFacturasDeleteController: asFunction(adminCtrl.makeAdminFacturasDeleteController).singleton(),
+    adminRetryFailedController: asFunction(adminCtrl.makeAdminRetryFailedController).singleton(),
 
     // admin client-companies
     adminClientCompaniesListController: asFunction(adminCtrl.makeAdminClientCompaniesListController).singleton(),

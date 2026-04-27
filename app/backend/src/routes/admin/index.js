@@ -25,6 +25,9 @@ function makeAdminRouter({ container, middleware = {} } = {}) {
         adminFacturasExportXlsxController: container.resolve('adminFacturasExportXlsxController'),
         adminFacturasUpdateController: container.resolve('adminFacturasUpdateController'),
         adminFacturasDeleteController: container.resolve('adminFacturasDeleteController'),
+        adminRetryFailedController: container.hasRegistration('adminRetryFailedController')
+          ? container.resolve('adminRetryFailedController')
+          : null,
         authenticate: middleware.authenticate,
         requireAdmin: middleware.requireAdmin,
         requireXHR: middleware.requireXHR,
