@@ -9,6 +9,7 @@ const uploadsCtrl = require('../controllers/uploads');
 const meCtrl = require('../controllers/me');
 const companyCtrl = require('../controllers/company');
 const adminCtrl = require('../controllers/admin');
+const internalCtrl = require('../controllers/internal');
 
 function registerControllers(container) {
   container.register({
@@ -84,6 +85,10 @@ function registerControllers(container) {
 
     // admin system
     adminSystemHealthController: asFunction(adminCtrl.makeAdminSystemHealthController).singleton(),
+
+    // internal (nginx auth_request endpoints — FASE 1B Etapa 1)
+    internalCheckAccessController: asFunction(internalCtrl.makeInternalCheckAccessController).singleton(),
+    internalCheckAdminPageController: asFunction(internalCtrl.makeInternalCheckAdminPageController).singleton(),
   });
 }
 
