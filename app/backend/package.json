@@ -43,5 +43,8 @@
   },
   "devDependencies": {
     "dependency-cruiser": "^16.10.4"
+  },
+  "overrides": {
+    "uuid": "^14.0.0"
   }
 }
