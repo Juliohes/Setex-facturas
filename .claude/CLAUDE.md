@@ -9,7 +9,30 @@ Este documento es la fuente de verdad del producto completo.
 
 ---
 
-## 📍 ESTADO ACTUAL DEL PROYECTO (2026-04-21)
+## 🎯 SIGUIENTE BLOQUE DE TRABAJO (2026-04-27 → próxima sesión)
+
+**FASE 1B · Descongelado del refactor v3.** El código v3 (Rounds 1-15 + 5 hotfixes) está mergeado en `develop`, pero el SWAP runtime falló el 22-Abr (5 rutas `auth_request` faltantes). Está CONGELADO.
+
+**Antes de tocar nada, lee este plan ejecutable autocontenido:**
+
+📄 **`docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md`**
+
+6 etapas, 3-4h concentradas:
+- Etapa 0: PR a `develop` con rollback Round 16 (PRE-REQUISITO obligatorio)
+- Etapa 1: portar 5 rutas faltantes al v3
+- Etapa 2: test de paridad legacy↔v3 + integración CI
+- Etapa 3: endurecer healthcheck container
+- Etapa 4: smoke HTTP post-deploy
+- Etapa 5: validación staging 24-48h
+- Etapa 6: swap v3 a runtime + tag v2.0.0
+
+⚠️ **Mina pisada hoy**: `develop` apunta al swap v3 ROTO (`0e48ab3`). Cualquier `deploy-staging.yml` reproduciría el incidente. La Etapa 0 elimina ese riesgo y debe hacerse PRIMERO.
+
+📚 **Contexto adicional**: `docs/plans/MACROPLAN-SETEX-v2.0.md` (sección 5 historial Rounds, sección 17 estado ejecutable, sección 18 riesgos), `docs/INFORME_SISTEMA_COMPLETO.md` (entradas 2026-04-22 y 2026-04-27), `docs/ROADMAP.md` (Q2/Q3/Q4 actualizado).
+
+---
+
+## 📍 ESTADO ACTUAL DEL PROYECTO (2026-04-27)
 
 La aplicación está construida y funcionando en producción. OCR integrado, tag **v1.0.0** entregado al cliente 2026-04-21. **NO es un proyecto OCR en construcción. ES un producto en producción.**
 **Google Drive, Google Sheets y n8n completamente eliminados (2026-04-16).**
@@ -46,11 +69,17 @@ Traefik reverse-proxy compartido (`n8n-traefik-1`) con Let's Encrypt para ambos.
 
 ## ⚠️ PROBLEMAS CONOCIDOS ACTIVOS
 
+### CRÍTICO — Refactor v3 CONGELADO en `develop` (post-incidente Round 16)
+Develop tiene HEAD apuntando al SWAP v3 (PR #83) que SABEMOS roto en runtime: 5 rutas `auth_request` faltantes (`/api/internal/check-access`, `/check-admin-page`, `/admin/refresh-session`, `/admin/retry-failed/:id`, `/admin/security/time`). Cualquier `deploy-staging.yml` reproduce el incidente del 22-Abr. **Mitigación pendiente**: ejecutar Etapa 0 de `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md` antes que cualquier otra cosa.
+
+### MEDIO — Deuda de ownership root:root en /opt/setex/{prod,staging}
+Detectada y mitigada manualmente el 2026-04-27 durante el deploy del PR #84. 195 ficheros del refactor v3 tenían owner `root:root` (contaminación por `git pull` previos como root) y el user `deploy` no podía borrarlos durante `git reset --hard origin/main`. Fix aplicado: `sudo chown -R deploy:deploy app scripts docs tests .husky package*.json commitlint.config.js .gitignore`. **Mitigación permanente pendiente**: añadir un step similar al `scripts/fix-permissions.sh` (cron 1h ya activo) que filtre con `-user root -o -group root` y aplique chown automáticamente. Tarea en ROADMAP Q2.
+
 ### MEDIO — PaddleOCR instalado pero sin usar (~3 GB)
 `paddleocr.js` existe pero `ocr/index.js` NO lo llama. Decisión pendiente: integrarlo o desinstalar. ROADMAP Q3.
 
-### BAJO — Symlink legacy activo
-`/opt/setex-captu-facture → /opt/setex-captu-facture.OLD-2026-04-20`. Pendiente de borrar tras 1 semana de gracia (ROADMAP Q2). Ningún script/cron activo depende del symlink desde 2026-04-21.
+### (Resuelto 2026-04-27) — Symlink legacy y YAML estático Traefik eliminados
+Ya no hay symlink `/opt/setex-captu-facture` ni target `/opt/setex-captu-facture.OLD-2026-04-20` (109 MB liberados, tarball en `/opt/setex/shared/backups/`). El YAML estático `/docker/n8n/traefik-dynamic/setex.yml` también borrado: HSTS migrado a nginx con `max-age=315360000` (10 años) y redirect xanflatest.com a labels Docker en `setex-prod-frontend`. `/etc/logrotate.d/setex` ahora cubre `/opt/setex/{prod,staging}/logs/*.log`. Vulnerabilidad GHSA-w5hq-g745-h8pq cerrada en `package.json` con `"overrides": {"uuid": "^14.0.0"}`. Detalle completo en `docs/INFORME_SISTEMA_COMPLETO.md` entrada 2026-04-27.
 
 ---
 
@@ -195,4 +224,4 @@ source scripts/lib/paths.sh && docker exec "$CONTAINER_PG" psql -U "$PG_USER" -d
 
 ---
 
-*SETEX Captura Facturas · setex-facturas.es · Actualizado 2026-04-21 (watchdog fix + paths.sh autodetect + IRPF hardening + Excel rework + admin delete)*
+*SETEX Captura Facturas · setex-facturas.es · Actualizado 2026-04-27 (cierre Q2 cleanup post-cutover Fase 4 · PR #84 + deploy + uuid override + plan FASE 1B descongelado v3)*

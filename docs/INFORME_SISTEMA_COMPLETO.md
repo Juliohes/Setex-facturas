@@ -578,6 +578,97 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-04-27 (tarde) — PR #84 mergeado a main + deploy a producción · incidente ownership root + lección aprendida
+- **Contexto**: tras cerrar las FASES 1, 2, 3 en runtime el 2026-04-27 mañana, se preparó PR #84 (`chore/cleanup-post-cutover-2026-04-27`) con los 5 ficheros que debían commitearse a `main`: `nginx.conf` (HSTS 10 años), `docker-compose.yml` (labels xanflatest), `INFORME_SISTEMA_COMPLETO.md`, `ROADMAP.md`, `.claude/CLAUDE.md`. PR creado vía `git push origin chore/cleanup-post-cutover-2026-04-27` desde clone temporal en `/tmp/setex-cleanup-pr` (clave SSH de devuser autorizada en GitHub como user Juliohes).
+- **CI bloqueó por vulnerabilidad uuid**: el job `Lint sintaxis + npm audit` falló con `2 moderate severity vulnerabilities` en `uuid <14.0.0` (GHSA-w5hq-g745-h8pq · missing buffer bounds check), llegando como dependencia transitiva de `exceljs@4.4.0` (última versión, sin update upstream). Solución mínima: segundo commit en la rama del PR con `"overrides": {"uuid": "^14.0.0"}` en `app/backend/package.json` + lockfile regenerado. Verificado: `npm audit` → `found 0 vulnerabilities`, `npm ls uuid` → `uuid@14.0.0 overridden`, smoke `exceljs.Workbook.addWorksheet.addRow` con uuid 14 funcional. Re-ejecución del CI: ambos checks verdes.
+- **Squash and merge a main**: commit final `788ff6a chore(ops): cleanup post-cutover Fase 4 · symlink + YAML retirados, HSTS 10 años (#84)`.
+- **Primer intento de deploy a producción FALLÓ**: `Deploy a producción (manual)` con `DESPLEGAR` ejecutado vía workflow_dispatch. Job `validate` ✅, job `deploy` ❌ con error en el step `git reset --hard origin/main`:
+  ```
+  warning: unable to unlink old 'app/backend/src/ports/storage.port.js': Permission denied
+  ... (40+ ficheros similares: ports/, routes/admin/, schemas/auth/, services/security/, tests/architecture.test.js, docs/adr/...)
+  fatal: Could not reset index file to revision 'origin/main'.
+  Process exited with status 128
+  ```
+- **Causa raíz**: 195 ficheros del refactor v3 (Rounds 1-15) tenían `owner=root:root` (`-rw-rw-r-- 1 root root ...`) en `/opt/setex/prod/`. El `git pull` que los trajo en algún momento previo se ejecutó como root, no como deploy. Como el deploy script SSHea como user `deploy`, no pudo `unlink()` esos ficheros durante el reset. **El cleanup del 22-Abr (setgid + g+rw) se aplicó SOLO a ficheros existentes en ese momento; los traídos posteriormente no fueron cubiertos.**
+- **Diagnóstico adicional**: el primer comando de fix propuesto (`find ... -user root -exec chown deploy:deploy {} +`) no funcionó por dos razones: (a) el `\( -user root -o -group root \)` con paréntesis multi-línea se rompió al copy-paste interactivo, y (b) faltaba cubrir el caso "directorio con grupo root + setgid" que bloquea el unlink desde fuera del grupo.
+- **Fix aplicado**: comando único en una línea sin filtros find, atacando rutas conocidas:
+  ```bash
+  sudo chown -R deploy:deploy /opt/setex/prod/app /opt/setex/prod/scripts \
+    /opt/setex/prod/docs /opt/setex/prod/tests /opt/setex/prod/.husky \
+    /opt/setex/prod/package.json /opt/setex/prod/package-lock.json \
+    /opt/setex/prod/commitlint.config.js /opt/setex/prod/.gitignore
+  ```
+  (`.dependency-cruiser.cjs` no existía en main, pequeño warning ignorado.)
+- **Segundo intento de deploy ✅**: re-ejecutado desde Actions. Steps completos: backup pre-despliegue (warning del exit code de `backup-postgres.sh` esperado y tolerado) → `git fetch origin main` → `git reset --hard origin/main` → `docker compose build backend frontend` → `docker compose up -d backend frontend` (recreated). Ambos containers `healthy` en <30 s.
+- **Verificación end-to-end post-deploy**:
+  - `git status` en `/opt/setex/prod`: limpio (HEAD `788ff6a` == origin/main, branch sigue `develop` por compatibilidad con `deploy-prod.yml` que solo usa el ref, no el branch name).
+  - Container `setex-prod-backend` recreado con imagen nueva timestamp `2026-04-27T11:21:57Z`.
+  - `docker exec setex-prod-backend node -e "require('uuid/package.json').version"` → `14.0.0` ✅ (vulnerabilidad cerrada en runtime).
+  - `https://setex-facturas.es/` → 200 con HSTS `max-age=315360000` ✅.
+  - `https://xanflatest.com/` → 302 → `https://setex-facturas.es/` ✅.
+  - `https://staging.setex-facturas.es/` → 401 + basic-auth (no afectado por el deploy a prod, sigue OK).
+  - 8 containers SETEX healthy.
+- **Limpieza filesystem post-deploy**: el `git reset --hard` borró los 9 ficheros que estaban "modificados" (cambios FASE 1 que solo aplicaban sobre develop) y dejó `server.next.js` como untracked. Borrado manual del untracked: `rm /opt/setex/prod/app/backend/src/server.next.js`. `git status` definitivamente limpio. (`develop` mantiene su `server.next.js` mediante el código del refactor v3 que sigue sin commitear en disco staging.)
+- **Lección aprendida (LL-001)**: el cron `fix-permissions.sh` (cada hora) debería incluir un step que prevenga la deuda de ownership root:root para que esto no vuelva a romper deploys futuros. Snippet a añadir:
+  ```bash
+  find "${BASE_DIR}" \
+    -not -path '*/data/postgres/*' \
+    -not -path '*/secrets/*' \
+    -not -path '*/logs/*' \
+    -not -path '*/.git/*' \
+    -not -path '*/node_modules/*' \
+    \( -user root -o -group root \) \
+    -exec chown deploy:deploy {} + 2>/dev/null
+  ```
+  Tarea en ROADMAP Q2 "Tareas operacionales nuevas".
+- **Sudoers acotado autoborrado**: el sudoers temporal `/etc/sudoers.d/devuser-cleanup-2026-04-27` (creado para que devuser ejecutara `apply.sh` y `chown` específicos sin password) se autoborró en el último step del cleanup. `sudo -n -l` confirma que NOPASSWD ya no existe. Sin secretos en chat ni privilegios persistentes.
+- **Sesiones Claude RC reiniciadas**: `Setex-Produccion-Real` (PID 1895807) y `Setex-Staging-Real` (PID 1870223), ambas con 18-19h de zombi sin uso, killed via `systemctl --user restart tmux-setex-{prod,staging}.service`. Nuevos PIDs 2500887 y 2500883 vivos desde 11:42:37 UTC. Disponibles en app móvil de Claude tras refresh.
+- **Documento maestro de la próxima sesión creado**: `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md` (10 KB, autocontenido, 6 etapas con tiempos y verificaciones intermedias). `MACROPLAN-SETEX-v2.0.md`, `ROADMAP.md` y `CLAUDE.md` actualizados para apuntar a este plan como prioridad.
+- **Ficheros tocados en esta sesión vespertina (12 totales)**: `app/backend/package.json` + `package-lock.json` (override uuid, vía PR #84 commit 2) · `/opt/setex/prod/` filesystem masivo via deploy (164 ficheros sincronizados a estado main) · `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md` (creado) · `docs/plans/MACROPLAN-SETEX-v2.0.md` (metadata + secciones 5/17/18 + footer) · `docs/ROADMAP.md` (reescrito completo, sincronizado prod=staging) · `.claude/CLAUDE.md` (sección "Siguiente bloque" + "Problemas conocidos" actualizados, sincronizado prod=staging) · `docs/INFORME_SISTEMA_COMPLETO.md` (esta entrada).
+
+### 2026-04-27 — Cleanup post-cutover Fase 4: legacy symlink eliminado · YAML Traefik retirado · HSTS migrado a nginx · xanflatest a labels Docker
+- **Contexto**: cierre de las 4 tareas críticas pendientes del ROADMAP Q2 derivadas del cutover Fase 4 (2026-04-20). Ejecutado con sudoers acotado y temporal (`/etc/sudoers.d/devuser-cleanup-2026-04-27`) que se autoborró al final — sin password en chat ni privilegios persistentes.
+
+#### A) Symlink y target legacy `/opt/setex-captu-facture*` eliminados
+- **Investigación previa detectó hallazgo no documentado**: el target `/opt/setex-captu-facture.OLD-2026-04-20/logs/` aparecía con fecha 2026-04-26 00:00. Causa real: `/etc/logrotate.d/setex` seguía apuntando al path legacy y rotaba ficheros vacíos (truncate + create) cada semana, aunque ningún cron escribía ya ahí desde el cutover (la última entrada con contenido era de 2026-04-20 10:55). Mientras tanto, **los logs del path nuevo `/opt/setex/{prod,staging}/logs/*.log` NO tenían ninguna rotación**: `watchdog.log` de prod ya en 1.18 MB y creciendo cada 5 min sin techo.
+- **Acción 1 — `/etc/logrotate.d/setex` reemplazado**: nueva config cubre `/opt/setex/prod/logs/*.log` y `/opt/setex/staging/logs/*.log` (comodín *.log para cubrir cualquier nuevo fichero sin tocar la config). Mantiene parámetros previos: weekly · rotate 4 · compress · delaycompress · missingok · notifempty · copytruncate · maxsize 10M · su root root. Backup en `/etc/logrotate.d/setex.bak-2026-04-27`. Validado con `logrotate -d` en dry-run: detecta los 8 logs activos sin errores.
+- **Acción 2 — tarball del legacy** a `/opt/setex/shared/backups/setex-captu-facture.OLD-2026-04-20.tar.gz` (109 MB descomprimido → 33 MB comprimido, deploy:deploy 0644). Trazabilidad histórica preservada por si se necesita auditar contenido pre-cutover.
+- **Acción 3 — symlink `/opt/setex-captu-facture` borrado** + **target `/opt/setex-captu-facture.OLD-2026-04-20` borrado recursivamente** (libera 109 MB). Verificación post: `ls /opt | grep setex-captu` → vacío.
+- **Material de cleanup conservado**: `/opt/setex/shared/cleanup-2026-04-27/` con `apply.sh` (script idempotente con verificaciones intermedias y confirmación interactiva), `setex-logrotate.new`, `kkk.txt` (instrucciones operacionales) y `README.md`. Carpeta auditable.
+
+#### B) YAML estático Traefik `/docker/n8n/traefik-dynamic/setex.yml` eliminado
+- **Análisis previo del contenido del YAML**: definía router `setex` (Host setex-facturas.es), service → setex-prod-frontend:80, middleware `setex-headers` con HSTS 10 años (`stsSeconds: 315360000`) + browserXssFilter + contentTypeNosniff, y los 2 routers de redirect xanflatest.com → setex-facturas.es (HTTP+HTTPS, 302 no permanente). Comparativa con labels Docker en setex-prod-frontend mostró que router/service ya estaban en labels, pero HSTS y xanflatest NO.
+- **Hallazgo clave**: los headers de seguridad (X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, CSP, HSTS) **ya están en `nginx.conf` del frontend**. Traefik solo añadía un HSTS más estricto encima (`max-age=315360000` vs los `max-age=63072000` de nginx). Solución limpia: **subir el HSTS de nginx a los mismos 10 años y eliminar la duplicidad**.
+- **Acción 1 — `nginx.conf` HSTS subido**: `max-age=63072000` → `max-age=315360000` en las 4 ocurrencias de `app/frontend/nginx.conf` de **AMBOS entornos** (server block raíz + locations específicas /service-worker.js, /admin-facturas.html, /api/internal/check-access). Diff post-cambio prod↔staging: idénticos.
+- **Acción 2 — labels xanflatest migradas a `app/docker-compose.yml` de prod** (no en staging: xanflatest.com es solo de prod). 13 labels nuevas en setex-prod-frontend: routers `xanflatest-http` (entrypoint web, middleware redirect, service=${SETEX_ROUTER}) y `xanflatest-https` (entrypoint websecure, TLS letsencrypt, mismo middleware) + middleware `xanflatest-redirect` con `redirectregex` `^https?://xanflatest\.com(.*)` → `https://setex-facturas.es$${1}` (escape `$$` correcto: docker-compose lo convierte a `${1}` en runtime, verificado en `docker inspect`). `permanent=false` mantiene 302/307 (no permanente) por la nota original "xanflatest.com puede reasignarse a otro proyecto".
+- **Acción 3 — backup del YAML** a `/docker/n8n/traefik-dynamic/setex.yml.removed-2026-04-27`, **borrado del YAML original** y **borrado del `setex.yml.bak-2026-04-20`** (legacy del cutover). Carpeta `/docker/n8n/traefik-dynamic/` queda solo con el .removed por trazabilidad.
+- **Acción 4 — rebuild + redeploy** de ambos frontends (`docker compose build frontend && docker compose up -d frontend`). Ambos containers `Recreated` y `healthy` en <30 s. Cero downtime perceptible (Traefik mantuvo el router `setex` mientras llegaba la nueva imagen).
+
+#### C) Verificación end-to-end (post-cambio)
+- **prod `https://setex-facturas.es/`** → 200, `strict-transport-security: max-age=315360000; includeSubDomains; preload` ✅ (ahora desde nginx, antes era Traefik).
+- **prod `https://xanflatest.com/`** → 307 con `location: https://setex-facturas.es/` ✅ (idéntico al comportamiento previo del YAML).
+- **prod `http://xanflatest.com/`** → 308 con `location: https://xanflatest.com/` (doble hop). **Hallazgo investigado**: este doble hop **NO es regresión nuestra**. Causa: Traefik tiene `--entrypoints.web.http.redirections.entryPoint.to=websecure` como redirect global (config preexistente del container `n8n-traefik-1`, no controlable desde labels Docker), que aplica antes de evaluar routers. El comportamiento HTTP era el mismo con el YAML original. La label `xanflatest-http` queda como redundancia defensiva por si un día se quita el redirect global.
+- **staging `https://staging.setex-facturas.es/`** → 401 + `www-authenticate: Basic realm="traefik"` ✅ (basic-auth Traefik intacto). Hit directo al nginx interno (`docker exec setex-staging-frontend curl -sI http://localhost/`) confirma `strict-transport-security: max-age=315360000` ✅.
+- **8 containers SETEX**: todos `healthy` post-cambio. Backends prod (5 días uptime) y staging (4 días) intactos — solo se recrearon los frontends.
+
+#### D) Limpieza final
+- Sudoers temporal `/etc/sudoers.d/devuser-cleanup-2026-04-27` autoborrado tras la última operación. `sudo -n -l` confirma que NOPASSWD ya no existe para devuser.
+- **Pendiente Q2 que cierra esta sesión** (ROADMAP.md): ✅ symlink legacy borrado · ✅ YAML estático Traefik retirado. Sigue abierto: verificar 2FA GitHub (manual de Julio) · promocionar PR #18 develop→main vía deploy-prod.yml.
+- **Material cleanup en disco**: `/opt/setex/shared/cleanup-2026-04-27/` (script + config) + `/opt/setex/shared/backups/setex-captu-facture.OLD-2026-04-20.tar.gz` + `/etc/logrotate.d/setex.bak-2026-04-27` + `/docker/n8n/traefik-dynamic/setex.yml.removed-2026-04-27`. Reversibilidad total documentada por si hay que volver atrás.
+- **Ficheros tocados (8 totales)**: `{prod,staging}/app/frontend/nginx.conf` · `prod/app/docker-compose.yml` · `/etc/logrotate.d/setex` · borrados `/docker/n8n/traefik-dynamic/setex.yml{,.bak-2026-04-20}` · borrado symlink + target legacy.
+
+### 2026-04-27 — Cierre limpio del rollback Round 16: paridad disco staging↔prod + package.json/eslint normalizados
+- **Hallazgo**: revisión post-rollback detectó que **producción tenía el swap aplicado en disco pero el container seguía corriendo la imagen del 2026-04-21** (monolito 4308 líneas embebido por `COPY src/` del Dockerfile). En `/opt/setex/prod/app/backend/src/`, `server.js`=v3 mini (1970 B) y `server.legacy.js`=monolito (204557 B). Cualquier `docker compose build backend` futuro habría empaquetado el v3 ROTO en una nueva imagen y, al `up -d`, reproducido en producción exactamente el mismo 404 masivo del incidente del 2026-04-22 en staging. Mina pisada esperando a un rebuild rutinario, watchdog o reboot.
+- **Hallazgo colateral**: en STAGING, el rollback del 22-Abr renombró ficheros pero dejó `package.json` (script `start:legacy` apuntando a `src/server.legacy.js`) y `eslint.config.js` (excepción `max-lines` aplicada a `src/server.legacy.js`) refiriendo a un fichero ya inexistente. Inconsistencia silenciosa: nadie había corrido eslint desde entonces.
+- **Verificación previa al cambio**: hashes md5 cruzados confirmaron emparejamiento exacto (staging `server.js` == prod `server.legacy.js` = `19c4dd04…`; staging `server.next.js` == prod `server.js` = `bd1ee759…`). Búsqueda en repo: ningún script, cron, CI ni systemd unit consume `npm run start:legacy` ni el path `server.legacy.js`. El runtime del container prod (4308 líneas) confirmado idéntico al monolito en disco.
+- **Acción 1 — prod renombrado en disco** (atomic, sin tocar containers): `mv server.js server.next.js` + `mv server.legacy.js server.js`. Container `setex-prod-backend` no tocado: sigue running 5 días, healthy.
+- **Acción 2 — package.json (ambos entornos)**: `start:legacy` → `start:next`, apuntando ahora a `src/server.next.js`. El v3 congelado se puede arrancar manualmente para debugging con `npm run start:next`; ya no hay scripts apuntando a ficheros inexistentes.
+- **Acción 3 — eslint.config.js (ambos entornos)**: excepción `max-lines: off` y `max-lines-per-function: off` migrada de `src/server.legacy.js` (inexistente) a `src/server.js` (el monolito restaurado de 4308 líneas). Comentario reescrito explicando que el v3 vive en `src/server.next.js` y el plan de descongelado.
+- **Acción 4 — comentario cabecera `src/server.next.js` (ambos entornos)**: reescrito con etiqueta "CONGELADO desde 2026-04-22", explicación del incidente (rutas `auth_request` faltantes), las 4 tareas pendientes para descongelar y cómo arrancarlo manualmente.
+- **Verificación post-cambio**: `diff` byte-a-byte confirma paridad total staging↔prod en `package.json`, `eslint.config.js`, `src/server.js`, `src/server.next.js`. `node --check` ✅ en los 6 ficheros JS. `JSON.parse` ✅ en ambos package.json. `server.legacy.js` no existe en ningún entorno. Container prod sigue 200 en `/health` interno y 200 en `https://setex-facturas.es/health` público.
+- **Estado neto**: el rollback queda quirúrgicamente cerrado en ambos entornos. Un futuro `docker compose build backend` en prod construirá una imagen con el monolito (server.js 4308 líneas) y arrancará en runtime el mismo código que lleva 5 días sirviendo, sin sorpresas. El v3 sigue presente como `src/server.next.js` listo para descongelar cuando se aborden los 5 endpoints faltantes y los tests de paridad.
+- **Ficheros tocados (6 totales en 2 entornos)**: `prod/app/backend/src/{server.js,server.next.js}` (renombrado físico) · `{prod,staging}/app/backend/package.json` · `{prod,staging}/app/backend/eslint.config.js` · `{prod,staging}/app/backend/src/server.next.js` (cabecera).
+
 ### 2026-04-22 (tarde) — Incidente staging: rollback Round 16 · vuelta a `server.legacy.js`
 - **Síntoma**: Julio reporta 404 en toda la app staging (index + admin + /api/*). Traefik basic auth (401) seguía funcionando, pero tras autenticar todo el contenido devolvía 404.
 - **Causa raíz**: el refactor v3 (PR #83) NO portó las rutas `/api/internal/check-access` ni `/api/internal/check-admin-page`. El frontend nginx las usa como `auth_request` en los bloques `location /`, `location /api/`, `location = /admin-facturas.html` y `location = /service-worker.js`. Al devolver 404 el backend v3, nginx mapeaba CUALQUIER petición a `@bloqueado` → 404 genérico "Not Found".

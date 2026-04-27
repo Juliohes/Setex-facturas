@@ -1,12 +1,20 @@
-// SETEX backend · entry point v3.
+// SETEX backend · entry point v3 — CONGELADO desde 2026-04-22 (post-rollback Round 16).
 //
-// Arranca: bootstrap DI (Awilix) → createApp (Express con stack modular) →
-//          listen PORT → SIGTERM/SIGINT graceful shutdown con dispose container.
+// NO arranca por defecto. El runtime activo es src/server.js (monolito legacy de
+// 4308 líneas) tras el incidente del 2026-04-22: el v3 no portaba las rutas
+// /api/internal/check-access ni /api/internal/check-admin-page que nginx usa como
+// auth_request, lo que tiraba 404 en toda la app post-swap.
 //
-// Historia: reemplaza al monolito src/server.js legacy de 4308 líneas tras el
-//           refactor modular v3 (PRs #63-#82, 2026-04-22). El fichero anterior
-//           se conserva como src/server.legacy.js durante un tiempo por rollback
-//           rápido; Round futuro lo eliminará cuando estemos cómodos.
+// Este fichero se mantiene en paralelo para permitir descongelar el v3 con:
+//   1) portar los 5 endpoints faltantes (check-access, check-admin-page,
+//      refresh-session, retry-failed/:id, security/time),
+//   2) test de paridad de superficie API legacy ↔ v3,
+//   3) endurecer healthcheck del container contra /api/internal/check-access,
+//   4) smoke-test post-deploy login + preview + confirm.
+//
+// Stack v3: bootstrap DI (Awilix) → createApp (Express modular) → listen PORT →
+//           SIGTERM/SIGINT graceful shutdown con dispose container.
+// Para arrancarlo manualmente (debugging): npm run start:next
 'use strict';
 
 const { createApp } = require('./app');
