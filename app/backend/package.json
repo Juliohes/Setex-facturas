@@ -26,6 +26,9 @@
     "ioredis": "^5.4.0",
     "exceljs": "^4.4.0"
   },
+  "overrides": {
+    "uuid": "^14.0.0"
+  },
   "engines": {
     "node": ">=20.0.0"
   }
