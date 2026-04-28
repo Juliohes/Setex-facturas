@@ -1389,6 +1389,12 @@ async function init() {
   const ok = await Auth.init();
   if (ok && Auth.isLoggedIn()) {
     try {
+      // Cookie httpOnly setex_admin (8h) renovada en cada apertura → sliding window.
+      // Mientras el RT de 30 días siga válido, el admin no pierde sesión por inactividad.
+      // La ventana 00-06 sigue bloqueando vía isRestrictedHour del backend (intencional).
+      // Errores ignorados: si falla, checkAdminAccess de abajo recoge la excepción.
+      try { await authFetch(`${API_URL}/admin/refresh-session`, { method: 'POST' }); } catch (_) { /* no-op */ }
+
       const authData = await checkAdminAccess(Auth.getToken());
       launchApp(authData);
       return;
