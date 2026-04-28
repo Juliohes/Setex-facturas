@@ -52,13 +52,12 @@ module.exports = [
       'comma-dangle': 'off',
     },
   },
-  // Exención de tamaño para src/server.js — el monolito de 4308 líneas restaurado
-  // tras el rollback del 2026-04-22 (incidente Round 16: el v3 no portaba las
-  // rutas /api/internal/check-access y /api/internal/check-admin-page usadas
-  // por nginx como auth_request). Se eliminará cuando el refactor v3 — vive
-  // en src/server.next.js — sea descongelado y promovido (ROADMAP Q3).
+  // Exención de tamaño para src/server.legacy.js — el monolito 4308 líneas
+  // preservado tras el swap a v3 (FASE 1B Etapa 6, 2026-04-28) por si hay que
+  // hacer rollback rápido. Se eliminará en Q3 tras 30 días de v3 estable
+  // en producción (ROADMAP Q3).
   {
-    files: ['src/server.js'],
+    files: ['src/server.legacy.js'],
     rules: {
       'max-lines': 'off',
       'max-lines-per-function': 'off',
