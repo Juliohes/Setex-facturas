@@ -24,7 +24,12 @@ const path = require('node:path');
 const express = require('express');
 const { createContainer, asValue } = require('awilix');
 
-const SERVER_JS = path.join(__dirname, '..', '..', 'src', 'server.js');
+// Tras FASE 1B Etapa 6 (swap del v3 a runtime, 2026-04-28), el monolito 4308
+// líneas vive en src/server.legacy.js. server.js pasa a ser el entry v3 modular.
+// El test sigue siendo útil: garantiza paridad bidireccional. Si algún hotfix
+// urgente añade una ruta al monolito (y debiéramos rollbackar), CI detecta que
+// el v3 no la tiene y falla antes del merge.
+const SERVER_JS = path.join(__dirname, '..', '..', 'src', 'server.legacy.js');
 
 // Allowlist de rutas del monolito que decidimos NO portar al v3.
 // Vacía a 2026-04-27 (cierre FASE 1B Etapa 1). Si añades una entrada aquí,
