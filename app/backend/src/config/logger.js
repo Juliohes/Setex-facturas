@@ -7,13 +7,38 @@
 'use strict';
 
 const winston = require('winston');
-const { sanitize } = require('../lib/pii-sanitizer');
+const { sanitize, isSensitiveKey } = require('../lib/pii-sanitizer');
+
+// IMPORTANTE: winston.format(fn) requiere que `fn` MUTE el `info` y lo devuelva,
+// o devuelva `false` para descartar. Devolver un objeto NUEVO hace que winston
+// descarte la entrada silenciosamente y el log nunca llegue al transport.
+//
+// Bug detectado en runtime tras Etapa 6 (2026-04-28): el v3 corría sin emitir
+// ningún log porque sanitizeMetaFormat devolvía un objeto fresco. Fix: sanitizar
+// en-place sobre las propias keys de `info`.
+const RESERVED_KEYS = new Set(['level', 'message', 'timestamp']);
+const REDACT = '[REDACTED]';
 
 const sanitizeMetaFormat = winston.format((info) => {
-  const { level, message, timestamp, ...rest } = info;
-  const sanitizedRest = sanitize(rest);
-  const sanitizedMessage = typeof message === 'string' ? message : sanitize(message);
-  return { level, message: sanitizedMessage, timestamp, ...sanitizedRest };
+  // Si el message es un objeto, sanitizarlo recursivamente (los emails se redactan
+  // a nivel string, las keys sensibles a nivel objeto).
+  if (typeof info.message !== 'string') {
+    info.message = sanitize(info.message);
+  }
+  // Top-level meta: cada key de `info` (excepto las reservadas + Symbols internos
+  // de winston) puede ser sensitive (password=...) o contener un objeto con keys
+  // sensitive. Aplicamos doble check:
+  //   - Si la key TOP-level es sensitive → REDACT directo.
+  //   - Si no, el VALOR puede ser un objeto con keys sensitive dentro → sanitize.
+  for (const key of Object.keys(info)) {
+    if (RESERVED_KEYS.has(key)) continue;
+    if (isSensitiveKey(key)) {
+      info[key] = REDACT;
+    } else {
+      info[key] = sanitize(info[key]);
+    }
+  }
+  return info;
 });
 
 function createLogger({ level = 'info', service = 'setex-backend' } = {}) {
