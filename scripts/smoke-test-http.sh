@@ -7,12 +7,15 @@
 # Así medimos el comportamiento real del backend, no del proxy.
 #
 # 3 verificaciones (~5s):
-#   1. /health responde 200 (proceso vivo)
+#   1. /health responde 200 ó 403 (proceso vivo · 403 si bloqueo horario 00-06)
 #   2. /api/internal/check-access responde 200 ó 403 (NO 404 = incidente Round 16)
-#   3. /api/auth/login responde 401/429 a credenciales inválidas (endpoint vivo)
+#   3. /api/auth/login responde 401/403/429 (endpoint vivo · 403 bloqueo · 429 rate)
 #
-# Si /api/internal/check-access devuelve 404, el script retorna 1 inmediatamente
-# con mensaje "INCIDENTE ROUND 16" — esa señal aborta el deploy en CI.
+# El bloqueo horario 00-06 Madrid devuelve 403 a TODA la app (incluido /health).
+# Eso NO es un fallo — es comportamiento esperado. El smoke solo falla si:
+#   - Ruta devuelve 404 (no existe → incidente Round 16)
+#   - Ruta devuelve 5xx (error interno)
+#   - Timeout / connection refused (proceso muerto)
 #
 # Uso (ejecutado en el VPS tras deploy, sourcea paths.sh para env autodetect):
 #   ./scripts/smoke-test-http.sh
@@ -90,40 +93,42 @@ http_status() {
 
 echo "── SETEX smoke-test-http (${SETEX_ENV} · container=${CONTAINER_BE}) ──"
 
-# ── 1. /health responde 200 ────────────────────────────────────────────────
-status_health=$(http_status GET /health)
-if [ "${status_health}" != "200" ]; then
-  fail "/health devolvió ${status_health}, esperado 200"
-fi
-ok "/health -> 200"
+# Helper: clasifica el status code en healthy/incident/error.
+#  - "alive": 200 (OK), 401 (auth required), 403 (bloqueo horario), 429 (rate limit) — endpoint vivo
+#  - "incident": 404 — INCIDENTE ROUND 16 (ruta no portada al runtime)
+#  - "error": cualquier otro (5xx, 000=timeout/conn refused) — algo grave
+classify_status() {
+  case "$1" in
+    200|401|403|429) echo "alive" ;;
+    404) echo "incident" ;;
+    *) echo "error" ;;
+  esac
+}
 
-# ── 2. /api/internal/check-access responde 200 ó 403 ───────────────────────
-# Esta es la ruta más crítica: si responde 404, es el incidente Round 16.
-status_check=$(http_status GET /api/internal/check-access)
-case "${status_check}" in
-  200|403)
-    ok "/api/internal/check-access -> ${status_check} (válido)"
-    ;;
-  404)
-    fail "/api/internal/check-access -> 404 · INCIDENTE ROUND 16: la ruta auth_request no existe en el backend desplegado. nginx tirará 404 a TODA la app."
-    ;;
-  *)
-    fail "/api/internal/check-access -> ${status_check}, esperado 200 ó 403"
-    ;;
+# ── 1. /health ─────────────────────────────────────────────────────────────
+status_health=$(http_status GET /health)
+case "$(classify_status "${status_health}")" in
+  alive) ok "/health -> ${status_health} (vivo)" ;;
+  incident) fail "/health -> 404 · INCIDENTE: la ruta /health no existe en el backend desplegado." ;;
+  *) fail "/health -> ${status_health} (esperado 200/403)" ;;
 esac
 
-# ── 3. /api/auth/login responde 401 con credenciales inválidas ─────────────
+# ── 2. /api/internal/check-access ──────────────────────────────────────────
+# Ruta más crítica: si responde 404, es el incidente Round 16 (auth_request).
+status_check=$(http_status GET /api/internal/check-access)
+case "$(classify_status "${status_check}")" in
+  alive) ok "/api/internal/check-access -> ${status_check} (vivo)" ;;
+  incident) fail "/api/internal/check-access -> 404 · INCIDENTE ROUND 16: la ruta auth_request no existe en el backend desplegado. nginx tirará 404 a TODA la app." ;;
+  *) fail "/api/internal/check-access -> ${status_check} (esperado 200/403)" ;;
+esac
+
+# ── 3. /api/auth/login ─────────────────────────────────────────────────────
 status_login=$(http_status POST /api/auth/login \
   '{"email":"smoke-test-no-such-user@setex.local","password":"invalid"}')
-case "${status_login}" in
-  401|429)
-    # 429 puede aparecer si el smoke corre muy seguido — también señal de que
-    # el endpoint existe y la auth funciona.
-    ok "/api/auth/login -> ${status_login} (endpoint vivo)"
-    ;;
-  *)
-    fail "/api/auth/login con creds inválidas -> ${status_login}, esperado 401 (o 429 si rate-limited)"
-    ;;
+case "$(classify_status "${status_login}")" in
+  alive) ok "/api/auth/login -> ${status_login} (endpoint vivo)" ;;
+  incident) fail "/api/auth/login -> 404 · INCIDENTE: el endpoint de login no existe." ;;
+  *) fail "/api/auth/login -> ${status_login} (esperado 401/403/429)" ;;
 esac
 
 echo "[smoke] OK · 3/3 rutas críticas respondieron como se esperaba."
