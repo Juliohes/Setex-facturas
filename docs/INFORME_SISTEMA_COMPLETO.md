@@ -578,6 +578,55 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-04-28 — 🏷️ v2.0.0 promocionado a `main` · refactor v3 modular Awilix DI en runtime
+- **Hito**: cierre completo del descongelado del refactor v3. Tag `v2.0.0` publicado en `main @ a1cda6d`. PR #93 mergeado (squash). Deploy a producción ejecutado con `DESPLEGAR`.
+- **Cronología de la sesión** (UTC):
+  - **07:18** — Salimos del bloqueo horario. Smoke staging 3/3 verde con monolito (`70f9e86`). Validación previa: 14h estables sin reinicios desde 27-Abr 17:41.
+  - **07:24** — Deploy de staging-watch (PR #89) y swap v3 (PR #90) disparados.
+  - **07:25** — Primer fallo: `paths.sh` root-owned bloquea git reset (LL-001 reproducido). Julio aplicó `sudo chown` manual.
+  - **07:28** — Smoke fallo por basic-auth Traefik 401. Refactor smoke a `docker exec` (PR #88 ya mergeado lo cubría). Re-deploy verde.
+  - **07:40** — PR #89 mergeado (`5048433`) · vigilancia activa.
+  - **07:46** — PR #90 (Etapa 6 swap) mergeado (`5bd668f`). Deploy v3 falla por permisos `.git/objects` (LL-001 segundo síntoma). Julio aplicó `sudo chown -R deploy:deploy /opt/setex/staging/.git`.
+  - **07:54** — Re-deploy verde. v3 CORRIENDO en runtime: `server.js` = 60 líneas, `server.legacy.js` = 4308 líneas.
+  - **07:58** — Smoke 3/3 verde end-to-end pero `docker logs setex-staging-backend` **completamente vacío**. Investigación.
+  - **08:10** — **Bug crítico cazado**: `sanitizeMetaFormat` en `src/config/logger.js` devolvía un objeto NUEVO en lugar de mutar `info`. winston descartaba silenciosamente cada log. El v3 corría sin emitir nada a stdout/stderr ni a fichero.
+  - **08:18** — Hotfix logger + 6 tests dedicados en `tests/unit/logger.test.js` (incluyen test de regresión del silencio). Suite total 50/50 pass.
+  - **08:30** — PR #91 (`b77c852`) mergeado. Re-deploy del hotfix: SSH timeout transitorio en primer intento; éxito en re-disparo.
+  - **08:53** — Verificación final staging post-hotfix:
+    ```
+    SETEX backend (v3) escuchando pid:1 port:3000
+    redis client ready · pg pool ready · SMTP transporter verified
+    Smoke 3/3 verde
+    ```
+  - **09:18** — PR #92 (develop → main) creado pero `mergeable: dirty` por 6 conflicts (`server.js`, `INFORME`, `ROADMAP`, `CLAUDE.md`, `MACROPLAN`, `adr/README`).
+  - **09:25** — Conflicts resueltos en branch `release/v2.0.0` tomando develop's version. Multi-IVA verificado: `domain/validators/iva.js` IDÉNTICO en ambas ramas (`git diff --quiet`). PR #92 cerrado, PR #93 abierto sobre `release/v2.0.0`.
+  - **09:33** — CI verde 3/3 sobre PR #93. Squash merge a main → `a1cda6d`. Tag `v2.0.0` creado annotated.
+  - **09:36** — `Deploy a producción (manual)` disparado con `DESPLEGAR`.
+- **Bug logger silencioso — análisis técnico**:
+  - **Causa**: `winston.format(fn)` requiere que `fn` MUTE el objeto `info` y lo devuelva, o devuelva `false` para descartar la entrada. Devolver un objeto NUEVO hace que winston ignore la transformación y descarte el log silenciosamente.
+  - **Código defectuoso** (pre-fix): `return { level, message: ..., timestamp, ...sanitizedRest };`
+  - **Fix**: mutar `info` en place (`info[key] = sanitize(...)` para cada key no-reserved).
+  - **Mejora adicional**: redacción de keys top-level sensitive (`password`, `token`, `secret`, `jwt`, `csrf`, `cookie`, `apiKey`, `refreshToken`) — antes solo se redactaban dentro de objetos anidados.
+  - **Tests dedicados**: 6 en `tests/unit/logger.test.js` que detectarían cualquier regresión similar (incluido el test del silencio total).
+  - **Lección**: si la Etapa 5 hubiera durado las 24h originales sin bug detectado, el v3 habría ido a prod silencioso 24/7 → diagnóstico de incidencias imposible. La Etapa 5 cumplió su propósito en menos tiempo del previsto.
+- **Defensas activas tras v2.0.0** (cualquier regresión a partir de aquí dispara alarmas automáticas):
+  1. Test paridad legacy↔v3 en CI con allowlist vacía → si una ruta del monolito desaparece o no se porta al v3, CI rompe antes del merge.
+  2. Healthcheck container apunta a `/api/internal/check-access` (whitelist 200/403). 404 → unhealthy → Docker reinicia.
+  3. Smoke HTTP post-deploy en `deploy-staging.yml` y `deploy-prod.yml`. Si rompe → deploy aborta.
+  4. Logger funcional con tests dedicados → silencio total imposible.
+  5. Rollback < 30s: `docker exec -d setex-prod-backend node src/server.legacy.js` arranca el monolito sin redeploy.
+  6. Cron Claude session cada hora (job `754e45ea`) reporta estado al chat.
+- **Estado final post-deploy a prod** (UTC ~09:40, pendiente verificación E2E):
+  - main HEAD: `a1cda6d release: v2.0.0 · refactor v3 modular Awilix DI en runtime (#93)`
+  - tag: `v2.0.0` annotated apuntando a `a1cda6d`
+  - server.js prod: v3 modular 60 líneas (rebuild + recreate del container backend)
+  - server.legacy.js prod: monolito 4308 líneas (rollback rápido)
+- **PRs incluidos en v2.0.0**: #63-#82 (Rounds 1-15 v3 + 5 hotfixes), #85 (rollback Etapa 0), #86 (5 rutas portadas), #87 (paridad+healthcheck+smoke), #88 (LL-001 + smoke docker exec), #89 (vigilancia), #90 (swap), #91 (logger fix), #93 (release).
+- **Deuda no urgente que cierra esta sesión**:
+  - `src/server.legacy.js` borrado en Q3 tras 30 días estable de v3 en prod.
+  - Refactor `sanitizeMetaFormat` con wrapper defensivo (deja el código menos error-prone) — Q3 si Julio lo decide.
+  - Activación cron persistente VPS (`config/crontab.txt` staging) — pendiente acción manual.
+
 ### 2026-04-27 (noche) — FASE 1B Etapas 0-4 cerradas · v3 listo para swap futuro
 - **Contexto**: sesión de descongelado del refactor v3 que estaba congelado en `develop` desde el incidente Round 16 (2026-04-22). Plan ejecutable: `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md`. Ejecutadas las 4 etapas que **se pueden hacer hoy**; las 2 restantes (5: validación 24-48h · 6: swap real) quedan listas para que Julio las dispare cuando decida.
 - **Etapa 0 — Rollback en `develop`** (PR #85, squash `6c9f65b`):

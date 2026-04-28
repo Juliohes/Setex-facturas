@@ -9,25 +9,33 @@ Este documento es la fuente de verdad del producto completo.
 
 ---
 
-## 🎯 SIGUIENTE BLOQUE DE TRABAJO (2026-04-27 noche → próxima sesión)
+## 🎯 SIGUIENTE BLOQUE DE TRABAJO (2026-04-28 → post-v2.0.0)
 
-**FASE 1B Etapas 5+6 · Validación + Swap del v3.** Las Etapas 0-4 están **mergeadas a `develop`**. El descongelado está blindado: paridad CI + healthcheck endurecido + smoke HTTP post-deploy. Solo falta la parte que requiere observación humana / decisión.
+**v2.0.0 PROMOCIONADO A PRODUCCIÓN** ✅ (2026-04-28 09:36 UTC). El refactor v3 modular Awilix DI corre en runtime real. Tag annotated en `main @ a1cda6d`.
 
-**Acciones pendientes** (en este orden):
+**Acciones pendientes** (todas no urgentes, observación pasiva):
 
-1. **Disparar `deploy-staging.yml`** (push o `workflow_dispatch`) — staging arranca con monolito (4308 líneas), smoke HTTP debe pasar verde inmediato.
-2. **24-48h validación staging** sin tocar nada — vigilar `docker logs setex-staging-backend`, watchdog, alertas.
-3. **Branch `refactor/v3-swap-runtime-2026-XX-XX`** desde develop con el rename físico:
-   - `mv src/server.js src/server.legacy.js` y `mv src/server.next.js src/server.js`
-   - Ajustar `package.json` y `eslint.config.js` (símil al rollback de Etapa 0 invertido).
-   - PR a develop, CI paridad valida, merge.
-4. **24-48h staging adicional** con v3 en runtime real.
-5. **PR develop → main + tag `v2.0.0` + Deploy a producción manual** con `DESPLEGAR`.
-6. **Monitoring 24h en prod** + reporte de cierre.
+1. **Monitoring 24-48h prod** — automatizado:
+   - Cron Claude session `754e45ea` cada hora vigila staging.
+   - Watchdog VPS cada 5min (auto-healing containers).
+   - Smoke OCR diario 04:30 UTC (cubre OpenAI + Azure DI).
+   - Para vigilancia HTTP horaria persistente: activar `staging/config/crontab.txt` (acción manual).
 
-📄 **Plan ejecutable detallado paso a paso**: `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md` sección 6.
+2. **Si todo verde 7-30 días** → Q3 cleanup:
+   - Borrar `src/server.legacy.js` (rollback rápido ya no necesario).
+   - Borrar `gemini.js` (266 líneas DESACTIVADO) y `paddleocr.js` (39 líneas sin uso).
+   - Refactor `sanitizeMetaFormat` con wrapper defensivo (winston format silencioso prevention).
+   - Migrar cookie `setex_admin` a Bearer JWT (reduce superficie cookie).
 
-📚 **Contexto adicional**: `docs/INFORME_SISTEMA_COMPLETO.md` entrada `2026-04-27 (noche)` con detalle de cada Etapa cerrada y los PRs específicos.
+3. **Rollback de emergencia** (si algo se tuerce en runtime):
+   ```bash
+   ssh deploy@srv1027670
+   docker exec -d setex-prod-backend node src/server.legacy.js
+   /opt/setex/prod/scripts/smoke-test-http.sh
+   ```
+   < 30 segundos sin redeploy. server.legacy.js es el monolito v1.1.0 con multi-IVA.
+
+📚 **Histórico completo de la sesión**: `docs/INFORME_SISTEMA_COMPLETO.md` entrada `2026-04-28 — v2.0.0 promocionado a main`.
 
 ---
 
