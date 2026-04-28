@@ -26,9 +26,15 @@ backups/
 # Aunque data/ ya cubre data/uploads/, dejamos uploads/ explícito por
 # si en algún entorno se monta fuera de data/. Las facturas reales con
 # datos fiscales no deben llegar nunca al repo bajo ningún path.
-uploads/
-app/uploads/
-data/uploads/
+#
+# IMPORTANTE (fix 2026-04-22): los patrones van ANCLADOS con "/" inicial
+# para evitar que matcheen `src/controllers/uploads/` o cualquier directorio
+# "uploads" dentro del código fuente. La regla antigua `uploads/` sin anclaje
+# bloqueó los controllers del Round 10 del refactor v3.
+/uploads/
+/app/uploads/
+/app/backend/uploads/
+/data/uploads/
 
 # ── LOGS ─────────────────────────────────────────────────────
 logs/

@@ -4,32 +4,50 @@
   "description": "Backend API para SETEX Captura de Facturas",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "start:legacy": "node src/server.legacy.js",
+    "test": "node --test tests/",
+    "test:arch": "node --test tests/architecture.test.js",
+    "depcruise": "depcruise -v .dependency-cruiser.cjs src",
+    "depcruise:graph": "depcruise --output-type dot src"
   },
-  "keywords": ["setex", "facturas", "api"],
+  "keywords": [
+    "setex",
+    "facturas",
+    "api"
+  ],
   "author": "SETEX",
   "license": "MIT",
   "dependencies": {
-    "express": "^4.18.2",
-    "pg": "^8.11.3",
+    "awilix": "^10.0.2",
+    "axios": "^1.6.0",
     "bcrypt": "^6.0.0",
-    "jsonwebtoken": "^9.0.2",
-    "multer": "^2.1.1",
-    "express-rate-limit": "^7.1.5",
-    "helmet": "^7.1.0",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
-    "winston": "^3.11.0",
-    "axios": "^1.6.0",
-    "nodemailer": "^8.0.5",
-    "sharp": "^0.33.2",
+    "exceljs": "^4.4.0",
+    "express": "^4.18.2",
+    "express-rate-limit": "^7.1.5",
+    "helmet": "^7.1.0",
     "ioredis": "^5.4.0",
-    "exceljs": "^4.4.0"
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^2.1.1",
+    "nodemailer": "^8.0.5",
+    "pg": "^8.11.3",
+    "sharp": "^0.33.2",
+    "winston": "^3.11.0",
+    "zod": "^3.25.76"
   },
   "overrides": {
     "uuid": "^14.0.0"
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "dependency-cruiser": "^16.10.4"
+  },
+  "overrides": {
+    "uuid": "^14.0.0"
   }
 }

@@ -112,6 +112,46 @@ class UsersRepository {
     );
     return { user, uploads: uploads.rows };
   }
+
+  // ── Métodos añadidos para controllers v3 (Round 16.1) ──────────────────────
+
+  async listAdmins() {
+    const r = await this.pool.query(
+      `SELECT id, email FROM users WHERE is_admin = true ORDER BY email ASC`
+    );
+    return r.rows;
+  }
+
+  async listAllWithCounts() {
+    const r = await this.pool.query(
+      `SELECT u.id, u.email, u.company_name, u.company_nif, u.is_admin, u.created_at,
+              COALESCE((SELECT COUNT(*)::int FROM uploads WHERE user_id = u.id), 0) AS uploads_count
+       FROM users u
+       ORDER BY u.created_at DESC`
+    );
+    return r.rows;
+  }
+
+  async adminUpdate(id, fields) {
+    const allowed = ['is_admin', 'company_name', 'company_nif'];
+    const sets = [];
+    const values = [];
+    let i = 1;
+    for (const key of allowed) {
+      if (fields[key] !== undefined) {
+        sets.push(`${key} = $${i++}`);
+        values.push(fields[key]);
+      }
+    }
+    if (sets.length === 0) return null;
+    values.push(id);
+    const r = await this.pool.query(
+      `UPDATE users SET ${sets.join(', ')} WHERE id = $${i}
+       RETURNING id, email, company_name, company_nif, is_admin`,
+      values
+    );
+    return r.rows[0] || null;
+  }
 }
 
 module.exports = UsersRepository;

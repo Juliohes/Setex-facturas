@@ -1,23 +1,8 @@
-// Clases de error estandarizadas — todos los errores del backend heredan de AppError.
-// Permite handler de error global que diferencie ValidationError (400),
-// AuthError (401/403), NotFoundError (404), de errores genéricos (500).
+// Errores HTTP con statusCode preasignado. Todos derivan de AppError para que
+// el error-handler global pueda serializar respuestas sin leak de stack trace.
 'use strict';
 
-class AppError extends Error {
-  constructor(message, statusCode = 500, details = null) {
-    super(message);
-    this.name = this.constructor.name;
-    this.statusCode = statusCode;
-    this.details = details;
-    Error.captureStackTrace(this, this.constructor);
-  }
-}
-
-class ValidationError extends AppError {
-  constructor(message, details = null) {
-    super(message, 400, details);
-  }
-}
+const { AppError } = require('./app-error');
 
 class AuthError extends AppError {
   constructor(message = 'No autorizado') {
@@ -49,12 +34,31 @@ class RateLimitError extends AppError {
   }
 }
 
+class UnprocessableEntityError extends AppError {
+  constructor(message = 'Entidad no procesable', details = null) {
+    super(message, 422, details);
+  }
+}
+
+class BadGatewayError extends AppError {
+  constructor(message = 'Error en servicio externo', details = null) {
+    super(message, 502, details);
+  }
+}
+
+class ServiceUnavailableError extends AppError {
+  constructor(message = 'Servicio no disponible', details = null) {
+    super(message, 503, details);
+  }
+}
+
 module.exports = {
-  AppError,
-  ValidationError,
   AuthError,
   ForbiddenError,
   NotFoundError,
   ConflictError,
   RateLimitError,
+  UnprocessableEntityError,
+  BadGatewayError,
+  ServiceUnavailableError,
 };

@@ -9,7 +9,29 @@ Este documento es la fuente de verdad del producto completo.
 
 ---
 
-## 📍 ESTADO ACTUAL DEL PROYECTO (2026-04-21)
+## 🎯 SIGUIENTE BLOQUE DE TRABAJO (2026-04-27 noche → próxima sesión)
+
+**FASE 1B Etapas 5+6 · Validación + Swap del v3.** Las Etapas 0-4 están **mergeadas a `develop`**. El descongelado está blindado: paridad CI + healthcheck endurecido + smoke HTTP post-deploy. Solo falta la parte que requiere observación humana / decisión.
+
+**Acciones pendientes** (en este orden):
+
+1. **Disparar `deploy-staging.yml`** (push o `workflow_dispatch`) — staging arranca con monolito (4308 líneas), smoke HTTP debe pasar verde inmediato.
+2. **24-48h validación staging** sin tocar nada — vigilar `docker logs setex-staging-backend`, watchdog, alertas.
+3. **Branch `refactor/v3-swap-runtime-2026-XX-XX`** desde develop con el rename físico:
+   - `mv src/server.js src/server.legacy.js` y `mv src/server.next.js src/server.js`
+   - Ajustar `package.json` y `eslint.config.js` (símil al rollback de Etapa 0 invertido).
+   - PR a develop, CI paridad valida, merge.
+4. **24-48h staging adicional** con v3 en runtime real.
+5. **PR develop → main + tag `v2.0.0` + Deploy a producción manual** con `DESPLEGAR`.
+6. **Monitoring 24h en prod** + reporte de cierre.
+
+📄 **Plan ejecutable detallado paso a paso**: `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md` sección 6.
+
+📚 **Contexto adicional**: `docs/INFORME_SISTEMA_COMPLETO.md` entrada `2026-04-27 (noche)` con detalle de cada Etapa cerrada y los PRs específicos.
+
+---
+
+## 📍 ESTADO ACTUAL DEL PROYECTO (2026-04-27)
 
 La aplicación está construida y funcionando en producción. OCR integrado, tag **v1.0.0** entregado al cliente 2026-04-21. **NO es un proyecto OCR en construcción. ES un producto en producción.**
 **Google Drive, Google Sheets y n8n completamente eliminados (2026-04-16).**
@@ -46,11 +68,17 @@ Traefik reverse-proxy compartido (`n8n-traefik-1`) con Let's Encrypt para ambos.
 
 ## ⚠️ PROBLEMAS CONOCIDOS ACTIVOS
 
+### CRÍTICO — Refactor v3 CONGELADO en `develop` (post-incidente Round 16)
+Develop tiene HEAD apuntando al SWAP v3 (PR #83) que SABEMOS roto en runtime: 5 rutas `auth_request` faltantes (`/api/internal/check-access`, `/check-admin-page`, `/admin/refresh-session`, `/admin/retry-failed/:id`, `/admin/security/time`). Cualquier `deploy-staging.yml` reproduce el incidente del 22-Abr. **Mitigación pendiente**: ejecutar Etapa 0 de `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md` antes que cualquier otra cosa.
+
+### MEDIO — Deuda de ownership root:root en /opt/setex/{prod,staging}
+Detectada y mitigada manualmente el 2026-04-27 durante el deploy del PR #84. 195 ficheros del refactor v3 tenían owner `root:root` (contaminación por `git pull` previos como root) y el user `deploy` no podía borrarlos durante `git reset --hard origin/main`. Fix aplicado: `sudo chown -R deploy:deploy app scripts docs tests .husky package*.json commitlint.config.js .gitignore`. **Mitigación permanente pendiente**: añadir un step similar al `scripts/fix-permissions.sh` (cron 1h ya activo) que filtre con `-user root -o -group root` y aplique chown automáticamente. Tarea en ROADMAP Q2.
+
 ### MEDIO — PaddleOCR instalado pero sin usar (~3 GB)
 `paddleocr.js` existe pero `ocr/index.js` NO lo llama. Decisión pendiente: integrarlo o desinstalar. ROADMAP Q3.
 
 ### (Resuelto 2026-04-27) — Symlink legacy y YAML estático Traefik eliminados
-Ya no hay symlink `/opt/setex-captu-facture` ni target `/opt/setex-captu-facture.OLD-2026-04-20` (109 MB liberados, tarball en `/opt/setex/shared/backups/`). El YAML estático `/docker/n8n/traefik-dynamic/setex.yml` también borrado: HSTS migrado a nginx con `max-age=315360000` (10 años) y redirect xanflatest.com a labels Docker en `setex-prod-frontend`. `/etc/logrotate.d/setex` ahora cubre `/opt/setex/{prod,staging}/logs/*.log`. Detalle en `docs/INFORME_SISTEMA_COMPLETO.md` entrada 2026-04-27.
+Ya no hay symlink `/opt/setex-captu-facture` ni target `/opt/setex-captu-facture.OLD-2026-04-20` (109 MB liberados, tarball en `/opt/setex/shared/backups/`). El YAML estático `/docker/n8n/traefik-dynamic/setex.yml` también borrado: HSTS migrado a nginx con `max-age=315360000` (10 años) y redirect xanflatest.com a labels Docker en `setex-prod-frontend`. `/etc/logrotate.d/setex` ahora cubre `/opt/setex/{prod,staging}/logs/*.log`. Vulnerabilidad GHSA-w5hq-g745-h8pq cerrada en `package.json` con `"overrides": {"uuid": "^14.0.0"}`. Detalle completo en `docs/INFORME_SISTEMA_COMPLETO.md` entrada 2026-04-27.
 
 ---
 
@@ -195,4 +223,4 @@ source scripts/lib/paths.sh && docker exec "$CONTAINER_PG" psql -U "$PG_USER" -d
 
 ---
 
-*SETEX Captura Facturas · setex-facturas.es · Actualizado 2026-04-21 (watchdog fix + paths.sh autodetect + IRPF hardening + Excel rework + admin delete)*
+*SETEX Captura Facturas · setex-facturas.es · Actualizado 2026-04-27 (cierre Q2 cleanup post-cutover Fase 4 · PR #84 + deploy + uuid override + plan FASE 1B descongelado v3)*

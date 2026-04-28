@@ -578,44 +578,357 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
-### 2026-04-27 — Cleanup post-cutover Fase 4: legacy symlink + YAML Traefik retirados, HSTS a 10 años en nginx, xanflatest a labels Docker
-- **Contexto**: cierre de las dos tareas críticas pendientes del ROADMAP Q2 derivadas del cutover Fase 4 (2026-04-20). Operación a nivel de host (sudoers acotado y temporal, autoborrado al final) + cambios en repo (este PR).
+### 2026-04-27 (noche) — FASE 1B Etapas 0-4 cerradas · v3 listo para swap futuro
+- **Contexto**: sesión de descongelado del refactor v3 que estaba congelado en `develop` desde el incidente Round 16 (2026-04-22). Plan ejecutable: `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md`. Ejecutadas las 4 etapas que **se pueden hacer hoy**; las 2 restantes (5: validación 24-48h · 6: swap real) quedan listas para que Julio las dispare cuando decida.
+- **Etapa 0 — Rollback en `develop`** (PR #85, squash `6c9f65b`):
+  - `develop` apuntaba al swap v3 roto (`0e48ab3`, PR #83). Cualquier `deploy-staging.yml` reproducía el incidente.
+  - Aplicado el rollback equivalente al de disco del 22-Abr: `server.js` = monolito 4308 líneas, `server.next.js` = v3 mini congelado, `server.legacy.js` borrado, `package.json` con `start:next` + `overrides.uuid ^14.0.0`, `eslint.config.js` con excepción `max-lines` migrada al monolito.
+  - Documentación masiva incluida: `PLAN-FASE-4-DESCONGELADO-V3.md` (NUEVO), `MACROPLAN-SETEX-v2.0.md`, `ROADMAP.md`, `.claude/CLAUDE.md`, este `INFORME`.
+  - CI ROJO inicial por `npm audit` con `uuid<14`: regenerado lockfile completo + `overrides` explícito en lockfile root → CI verde.
+- **Etapa 1 — Portar 5 rutas faltantes** (PR #86, squash `5513b5f`):
+  - Las 5 rutas que tiraron staging en 404 masivo el 22-Abr ya están en el v3:
+    - `GET /api/internal/check-access` (auth_request crítica)
+    - `GET /api/internal/check-admin-page` (auth_request admin)
+    - `POST /api/admin/refresh-session` (cookie `setex_admin` 8h httpOnly)
+    - `POST /api/admin/retry-failed/:id` (panel admin · failed_jobs)
+    - `PATCH /api/admin/security/time` (edita time_restriction)
+  - Decisiones técnicas: reutilizado `tokenVerificationService.verify()` (timeout 500ms fail-secure ya existente) en `check-admin-page`. `req.cookies` (cookie-parser ya montado). `ipListManagerService` extendido con `updateTimeRestriction(patch)` en vez de crear `securityConfigService` nuevo (DRY).
+  - Tests unitarios: 20 tests nuevos en `tests/contracts/internal-routes.test.js`, suite total 39/39 pass.
+- **Etapa 2 — Test paridad legacy↔v3 + CI integration** (PR pendiente squash al cerrar esta sesión):
+  - `tests/contracts/api-surface-parity.test.js`: regex sobre `server.js` extrae rutas del monolito (58 detectadas), `mountRoutes(app, { container: mockContainer })` con stubs Awilix `asValue` extrae rutas del v3, comparación 1:1 estricta. Allowlist vacía. Si el v3 deja de portar una ruta, CI rompe.
+  - Workflow `.github/workflows/ci.yml`: nuevo job `tests` que corre `node --test tests/` + `npm run depcruise` (boundaries entre capas). Si la paridad rompe en una PR, no se mergea.
+  - Bump `actions/checkout@v4 → @v5` y `actions/setup-node@v4 → @v5` para silenciar warning "Node.js 20 actions deprecated" (válidos hasta junio 2026, mejor pre-empt).
+  - Endurecimiento adicional `ipListManager.updateTimeRestriction`: validación rangos `[0,23]` para `start_hour`/`end_hour` (antes solo se rechazaba `start === end`).
+  - Suite total: 44/44 pass. depcruise: 0 errors, 0 warnings, 181 modules.
+- **Etapa 3 — Healthcheck container endurecido**:
+  - `app/backend/Dockerfile`: HEALTHCHECK ahora apunta a `/api/internal/check-access` (no `/health` trivial). Whitelist de status codes "healthy": 200 (todo OK) y 403 (hora bloqueada, comportamiento esperado). Cualquier otro (404, 5xx, conn refused, timeout) → unhealthy → Docker reinicia container automáticamente.
+  - Esto detecta el incidente Round 16 EN RUNTIME: si el v3 no porta la ruta, el healthcheck devuelve 404 → unhealthy → recuperación automática (en lugar de servir 404 a usuarios durante horas).
+  - El monolito ya tiene la ruta (línea 700 server.js), así que el cambio es transparente para el runtime actual.
+- **Etapa 4 — Smoke HTTP post-deploy en workflows**:
+  - `scripts/smoke-test-http.sh` (NUEVO, idempotente, sin OCR real). 3 verificaciones (~5s):
+    1. `GET /health` → 200 (proceso vivo)
+    2. `GET /api/internal/check-access` → 200 ó 403 (un 404 = INCIDENTE ROUND 16 → exit 1 inmediato con mensaje explícito)
+    3. `POST /api/auth/login` con creds inválidas → 401/429 (endpoint vivo)
+  - `deploy-staging.yml` y `deploy-prod.yml`: step `Smoke HTTP post-deploy` tras los healthchecks verdes. Si falla, deploy aborta. En prod el mensaje es prefijo "REVISAR INMEDIATAMENTE".
+  - El smoke se sourcea con `paths.sh` para autodetectar entorno y BASE_URL — un solo script para ambos entornos.
+- **PR adicional** (mismo branch): HSTS staging `max-age=63072000` (2 años) → `315360000` (10 años) en las 4 ocurrencias de `app/frontend/nginx.conf`. Equipara con prod (que ya tiene 10 años desde el cleanup post-cutover Fase 4). Sin downside funcional. Suma puntos para HSTS preload list.
+- **Etapas pendientes** (no automatizables hoy):
+  - **Etapa 5**: validación staging 24-48h tras deploy de develop con todo este plumbing. Requiere observación humana de logs/watchdog.
+  - **Etapa 6**: swap final del v3 a runtime (rename `server.js` ↔ `server.next.js`) + tag `v2.0.0` + promoción manual a prod (`deploy-prod.yml` con `DESPLEGAR`). El plan PLAN-FASE-4-DESCONGELADO-V3.md sección 6 detalla los pasos exactos.
+- **Estado neto del descongelado a 2026-04-27 23:55 UTC**: el v3 modular está totalmente listo para arrancar en runtime. Cualquier deploy a staging desde develop reproduce el monolito (no el v3) porque el swap es un cambio explícito de Etapa 6. El plumbing de seguridad alrededor del swap (test paridad CI + healthcheck + smoke post-deploy) garantiza que un v3 incompleto NO puede llegar a producción sin que CI/deploy lo bloqueen.
 
-#### Symlink y target legacy `/opt/setex-captu-facture*` eliminados
-- **Hallazgo proactivo**: investigación previa al borrado detectó que `/etc/logrotate.d/setex` apuntaba a paths legacy (`/opt/setex-captu-facture/logs/*`) y rotaba ficheros vacíos cada semana, mientras que **los logs activos en `/opt/setex/{prod,staging}/logs/*.log` NO tenían ninguna rotación** — `watchdog.log` de prod ya en 1.18 MB y creciendo cada 5 min sin techo.
-- **`/etc/logrotate.d/setex` reemplazado**: nueva config cubre `/opt/setex/prod/logs/*.log` y `/opt/setex/staging/logs/*.log` (comodín *.log). Mantiene parámetros previos (weekly, rotate 4, compress, copytruncate, maxsize 10M, su root root). Backup en `/etc/logrotate.d/setex.bak-2026-04-27`. Validado con `logrotate -d`: detecta los 8 logs activos sin errores.
-- **Tarball del legacy** a `/opt/setex/shared/backups/setex-captu-facture.OLD-2026-04-20.tar.gz` (109 MB descomprimido → 33 MB comprimido). Trazabilidad histórica.
-- **Symlink + target borrados** (109 MB liberados). Verificación post: `ls /opt | grep setex-captu` → vacío.
+### 2026-04-27 (tarde) — PR #84 mergeado a main + deploy a producción · incidente ownership root + lección aprendida
+- **Contexto**: tras cerrar las FASES 1, 2, 3 en runtime el 2026-04-27 mañana, se preparó PR #84 (`chore/cleanup-post-cutover-2026-04-27`) con los 5 ficheros que debían commitearse a `main`: `nginx.conf` (HSTS 10 años), `docker-compose.yml` (labels xanflatest), `INFORME_SISTEMA_COMPLETO.md`, `ROADMAP.md`, `.claude/CLAUDE.md`. PR creado vía `git push origin chore/cleanup-post-cutover-2026-04-27` desde clone temporal en `/tmp/setex-cleanup-pr` (clave SSH de devuser autorizada en GitHub como user Juliohes).
+- **CI bloqueó por vulnerabilidad uuid**: el job `Lint sintaxis + npm audit` falló con `2 moderate severity vulnerabilities` en `uuid <14.0.0` (GHSA-w5hq-g745-h8pq · missing buffer bounds check), llegando como dependencia transitiva de `exceljs@4.4.0` (última versión, sin update upstream). Solución mínima: segundo commit en la rama del PR con `"overrides": {"uuid": "^14.0.0"}` en `app/backend/package.json` + lockfile regenerado. Verificado: `npm audit` → `found 0 vulnerabilities`, `npm ls uuid` → `uuid@14.0.0 overridden`, smoke `exceljs.Workbook.addWorksheet.addRow` con uuid 14 funcional. Re-ejecución del CI: ambos checks verdes.
+- **Squash and merge a main**: commit final `788ff6a chore(ops): cleanup post-cutover Fase 4 · symlink + YAML retirados, HSTS 10 años (#84)`.
+- **Primer intento de deploy a producción FALLÓ**: `Deploy a producción (manual)` con `DESPLEGAR` ejecutado vía workflow_dispatch. Job `validate` ✅, job `deploy` ❌ con error en el step `git reset --hard origin/main`:
+  ```
+  warning: unable to unlink old 'app/backend/src/ports/storage.port.js': Permission denied
+  ... (40+ ficheros similares: ports/, routes/admin/, schemas/auth/, services/security/, tests/architecture.test.js, docs/adr/...)
+  fatal: Could not reset index file to revision 'origin/main'.
+  Process exited with status 128
+  ```
+- **Causa raíz**: 195 ficheros del refactor v3 (Rounds 1-15) tenían `owner=root:root` (`-rw-rw-r-- 1 root root ...`) en `/opt/setex/prod/`. El `git pull` que los trajo en algún momento previo se ejecutó como root, no como deploy. Como el deploy script SSHea como user `deploy`, no pudo `unlink()` esos ficheros durante el reset. **El cleanup del 22-Abr (setgid + g+rw) se aplicó SOLO a ficheros existentes en ese momento; los traídos posteriormente no fueron cubiertos.**
+- **Diagnóstico adicional**: el primer comando de fix propuesto (`find ... -user root -exec chown deploy:deploy {} +`) no funcionó por dos razones: (a) el `\( -user root -o -group root \)` con paréntesis multi-línea se rompió al copy-paste interactivo, y (b) faltaba cubrir el caso "directorio con grupo root + setgid" que bloquea el unlink desde fuera del grupo.
+- **Fix aplicado**: comando único en una línea sin filtros find, atacando rutas conocidas:
+  ```bash
+  sudo chown -R deploy:deploy /opt/setex/prod/app /opt/setex/prod/scripts \
+    /opt/setex/prod/docs /opt/setex/prod/tests /opt/setex/prod/.husky \
+    /opt/setex/prod/package.json /opt/setex/prod/package-lock.json \
+    /opt/setex/prod/commitlint.config.js /opt/setex/prod/.gitignore
+  ```
+  (`.dependency-cruiser.cjs` no existía en main, pequeño warning ignorado.)
+- **Segundo intento de deploy ✅**: re-ejecutado desde Actions. Steps completos: backup pre-despliegue (warning del exit code de `backup-postgres.sh` esperado y tolerado) → `git fetch origin main` → `git reset --hard origin/main` → `docker compose build backend frontend` → `docker compose up -d backend frontend` (recreated). Ambos containers `healthy` en <30 s.
+- **Verificación end-to-end post-deploy**:
+  - `git status` en `/opt/setex/prod`: limpio (HEAD `788ff6a` == origin/main, branch sigue `develop` por compatibilidad con `deploy-prod.yml` que solo usa el ref, no el branch name).
+  - Container `setex-prod-backend` recreado con imagen nueva timestamp `2026-04-27T11:21:57Z`.
+  - `docker exec setex-prod-backend node -e "require('uuid/package.json').version"` → `14.0.0` ✅ (vulnerabilidad cerrada en runtime).
+  - `https://setex-facturas.es/` → 200 con HSTS `max-age=315360000` ✅.
+  - `https://xanflatest.com/` → 302 → `https://setex-facturas.es/` ✅.
+  - `https://staging.setex-facturas.es/` → 401 + basic-auth (no afectado por el deploy a prod, sigue OK).
+  - 8 containers SETEX healthy.
+- **Limpieza filesystem post-deploy**: el `git reset --hard` borró los 9 ficheros que estaban "modificados" (cambios FASE 1 que solo aplicaban sobre develop) y dejó `server.next.js` como untracked. Borrado manual del untracked: `rm /opt/setex/prod/app/backend/src/server.next.js`. `git status` definitivamente limpio. (`develop` mantiene su `server.next.js` mediante el código del refactor v3 que sigue sin commitear en disco staging.)
+- **Lección aprendida (LL-001)**: el cron `fix-permissions.sh` (cada hora) debería incluir un step que prevenga la deuda de ownership root:root para que esto no vuelva a romper deploys futuros. Snippet a añadir:
+  ```bash
+  find "${BASE_DIR}" \
+    -not -path '*/data/postgres/*' \
+    -not -path '*/secrets/*' \
+    -not -path '*/logs/*' \
+    -not -path '*/.git/*' \
+    -not -path '*/node_modules/*' \
+    \( -user root -o -group root \) \
+    -exec chown deploy:deploy {} + 2>/dev/null
+  ```
+  Tarea en ROADMAP Q2 "Tareas operacionales nuevas".
+- **Sudoers acotado autoborrado**: el sudoers temporal `/etc/sudoers.d/devuser-cleanup-2026-04-27` (creado para que devuser ejecutara `apply.sh` y `chown` específicos sin password) se autoborró en el último step del cleanup. `sudo -n -l` confirma que NOPASSWD ya no existe. Sin secretos en chat ni privilegios persistentes.
+- **Sesiones Claude RC reiniciadas**: `Setex-Produccion-Real` (PID 1895807) y `Setex-Staging-Real` (PID 1870223), ambas con 18-19h de zombi sin uso, killed via `systemctl --user restart tmux-setex-{prod,staging}.service`. Nuevos PIDs 2500887 y 2500883 vivos desde 11:42:37 UTC. Disponibles en app móvil de Claude tras refresh.
+- **Documento maestro de la próxima sesión creado**: `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md` (10 KB, autocontenido, 6 etapas con tiempos y verificaciones intermedias). `MACROPLAN-SETEX-v2.0.md`, `ROADMAP.md` y `CLAUDE.md` actualizados para apuntar a este plan como prioridad.
+- **Ficheros tocados en esta sesión vespertina (12 totales)**: `app/backend/package.json` + `package-lock.json` (override uuid, vía PR #84 commit 2) · `/opt/setex/prod/` filesystem masivo via deploy (164 ficheros sincronizados a estado main) · `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md` (creado) · `docs/plans/MACROPLAN-SETEX-v2.0.md` (metadata + secciones 5/17/18 + footer) · `docs/ROADMAP.md` (reescrito completo, sincronizado prod=staging) · `.claude/CLAUDE.md` (sección "Siguiente bloque" + "Problemas conocidos" actualizados, sincronizado prod=staging) · `docs/INFORME_SISTEMA_COMPLETO.md` (esta entrada).
 
-#### YAML estático Traefik `/docker/n8n/traefik-dynamic/setex.yml` retirado
-- **Análisis del contenido del YAML**: definía router `setex` (ya en labels Docker), service → setex-prod-frontend:80 (ya en labels), middleware `setex-headers` con HSTS 10 años + browserXssFilter + contentTypeNosniff (HSTS único exclusivo del YAML — el resto ya estaba en nginx), y los 2 routers de redirect xanflatest.com → setex-facturas.es (302 no permanente).
-- **Hallazgo clave**: los headers de seguridad (X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, CSP, HSTS) **ya estaban en `nginx.conf` del frontend**. Traefik solo añadía un HSTS más estricto encima (`max-age=315360000` 10 años vs los `max-age=63072000` 2 años de nginx). Solución limpia: subir el HSTS de nginx a los mismos 10 años y eliminar la duplicidad.
-- **`app/frontend/nginx.conf`**: HSTS `max-age=63072000` → `max-age=315360000` en las 4 ocurrencias (server block raíz + locations específicas /service-worker.js, /admin-facturas.html, /api/internal/check-access).
-- **`app/docker-compose.yml`**: 13 labels nuevas en setex-prod-frontend para xanflatest. Routers `xanflatest-http` (entrypoint web) y `xanflatest-https` (entrypoint websecure, TLS letsencrypt) + middleware `xanflatest-redirect` con `redirectregex` `^https?://xanflatest\.com(.*)` → `https://setex-facturas.es$${1}` (escape `$$` correcto en docker-compose: se convierte a `${1}` en runtime). `permanent=false` mantiene 302/307 según la nota original "xanflatest.com puede reasignarse en el futuro".
-- **YAML borrado**: backup en `/docker/n8n/traefik-dynamic/setex.yml.removed-2026-04-27` por trazabilidad. También borrado el `setex.yml.bak-2026-04-20` (legacy del cutover).
-- **Rebuild + redeploy** de frontends prod y staging (`docker compose build frontend && docker compose up -d frontend`). Cero downtime perceptible.
+### 2026-04-27 — Cleanup post-cutover Fase 4: legacy symlink eliminado · YAML Traefik retirado · HSTS migrado a nginx · xanflatest a labels Docker
+- **Contexto**: cierre de las 4 tareas críticas pendientes del ROADMAP Q2 derivadas del cutover Fase 4 (2026-04-20). Ejecutado con sudoers acotado y temporal (`/etc/sudoers.d/devuser-cleanup-2026-04-27`) que se autoborró al final — sin password en chat ni privilegios persistentes.
 
-#### Verificación end-to-end (post-cambio)
-- **prod `https://setex-facturas.es/`** → 200, `strict-transport-security: max-age=315360000; includeSubDomains; preload` ✅ (ahora desde nginx).
+#### A) Symlink y target legacy `/opt/setex-captu-facture*` eliminados
+- **Investigación previa detectó hallazgo no documentado**: el target `/opt/setex-captu-facture.OLD-2026-04-20/logs/` aparecía con fecha 2026-04-26 00:00. Causa real: `/etc/logrotate.d/setex` seguía apuntando al path legacy y rotaba ficheros vacíos (truncate + create) cada semana, aunque ningún cron escribía ya ahí desde el cutover (la última entrada con contenido era de 2026-04-20 10:55). Mientras tanto, **los logs del path nuevo `/opt/setex/{prod,staging}/logs/*.log` NO tenían ninguna rotación**: `watchdog.log` de prod ya en 1.18 MB y creciendo cada 5 min sin techo.
+- **Acción 1 — `/etc/logrotate.d/setex` reemplazado**: nueva config cubre `/opt/setex/prod/logs/*.log` y `/opt/setex/staging/logs/*.log` (comodín *.log para cubrir cualquier nuevo fichero sin tocar la config). Mantiene parámetros previos: weekly · rotate 4 · compress · delaycompress · missingok · notifempty · copytruncate · maxsize 10M · su root root. Backup en `/etc/logrotate.d/setex.bak-2026-04-27`. Validado con `logrotate -d` en dry-run: detecta los 8 logs activos sin errores.
+- **Acción 2 — tarball del legacy** a `/opt/setex/shared/backups/setex-captu-facture.OLD-2026-04-20.tar.gz` (109 MB descomprimido → 33 MB comprimido, deploy:deploy 0644). Trazabilidad histórica preservada por si se necesita auditar contenido pre-cutover.
+- **Acción 3 — symlink `/opt/setex-captu-facture` borrado** + **target `/opt/setex-captu-facture.OLD-2026-04-20` borrado recursivamente** (libera 109 MB). Verificación post: `ls /opt | grep setex-captu` → vacío.
+- **Material de cleanup conservado**: `/opt/setex/shared/cleanup-2026-04-27/` con `apply.sh` (script idempotente con verificaciones intermedias y confirmación interactiva), `setex-logrotate.new`, `kkk.txt` (instrucciones operacionales) y `README.md`. Carpeta auditable.
+
+#### B) YAML estático Traefik `/docker/n8n/traefik-dynamic/setex.yml` eliminado
+- **Análisis previo del contenido del YAML**: definía router `setex` (Host setex-facturas.es), service → setex-prod-frontend:80, middleware `setex-headers` con HSTS 10 años (`stsSeconds: 315360000`) + browserXssFilter + contentTypeNosniff, y los 2 routers de redirect xanflatest.com → setex-facturas.es (HTTP+HTTPS, 302 no permanente). Comparativa con labels Docker en setex-prod-frontend mostró que router/service ya estaban en labels, pero HSTS y xanflatest NO.
+- **Hallazgo clave**: los headers de seguridad (X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, CSP, HSTS) **ya están en `nginx.conf` del frontend**. Traefik solo añadía un HSTS más estricto encima (`max-age=315360000` vs los `max-age=63072000` de nginx). Solución limpia: **subir el HSTS de nginx a los mismos 10 años y eliminar la duplicidad**.
+- **Acción 1 — `nginx.conf` HSTS subido**: `max-age=63072000` → `max-age=315360000` en las 4 ocurrencias de `app/frontend/nginx.conf` de **AMBOS entornos** (server block raíz + locations específicas /service-worker.js, /admin-facturas.html, /api/internal/check-access). Diff post-cambio prod↔staging: idénticos.
+- **Acción 2 — labels xanflatest migradas a `app/docker-compose.yml` de prod** (no en staging: xanflatest.com es solo de prod). 13 labels nuevas en setex-prod-frontend: routers `xanflatest-http` (entrypoint web, middleware redirect, service=${SETEX_ROUTER}) y `xanflatest-https` (entrypoint websecure, TLS letsencrypt, mismo middleware) + middleware `xanflatest-redirect` con `redirectregex` `^https?://xanflatest\.com(.*)` → `https://setex-facturas.es$${1}` (escape `$$` correcto: docker-compose lo convierte a `${1}` en runtime, verificado en `docker inspect`). `permanent=false` mantiene 302/307 (no permanente) por la nota original "xanflatest.com puede reasignarse a otro proyecto".
+- **Acción 3 — backup del YAML** a `/docker/n8n/traefik-dynamic/setex.yml.removed-2026-04-27`, **borrado del YAML original** y **borrado del `setex.yml.bak-2026-04-20`** (legacy del cutover). Carpeta `/docker/n8n/traefik-dynamic/` queda solo con el .removed por trazabilidad.
+- **Acción 4 — rebuild + redeploy** de ambos frontends (`docker compose build frontend && docker compose up -d frontend`). Ambos containers `Recreated` y `healthy` en <30 s. Cero downtime perceptible (Traefik mantuvo el router `setex` mientras llegaba la nueva imagen).
+
+#### C) Verificación end-to-end (post-cambio)
+- **prod `https://setex-facturas.es/`** → 200, `strict-transport-security: max-age=315360000; includeSubDomains; preload` ✅ (ahora desde nginx, antes era Traefik).
 - **prod `https://xanflatest.com/`** → 307 con `location: https://setex-facturas.es/` ✅ (idéntico al comportamiento previo del YAML).
-- **prod `http://xanflatest.com/`** → 308 con `location: https://xanflatest.com/` (doble hop). **NO es regresión nuestra**: causa `--entrypoints.web.http.redirections.entryPoint.to=websecure` como redirect global del container `n8n-traefik-1` (config preexistente, no controlable desde labels Docker). El comportamiento HTTP era el mismo con el YAML original.
-- **staging `https://staging.setex-facturas.es/`** → 401 + basic-auth Traefik intacto. Hit directo al nginx interno confirma `strict-transport-security: max-age=315360000` ✅.
-- **8 containers SETEX healthy**: backends prod/staging intactos (5 días/4 días uptime), solo se recrearon los frontends.
+- **prod `http://xanflatest.com/`** → 308 con `location: https://xanflatest.com/` (doble hop). **Hallazgo investigado**: este doble hop **NO es regresión nuestra**. Causa: Traefik tiene `--entrypoints.web.http.redirections.entryPoint.to=websecure` como redirect global (config preexistente del container `n8n-traefik-1`, no controlable desde labels Docker), que aplica antes de evaluar routers. El comportamiento HTTP era el mismo con el YAML original. La label `xanflatest-http` queda como redundancia defensiva por si un día se quita el redirect global.
+- **staging `https://staging.setex-facturas.es/`** → 401 + `www-authenticate: Basic realm="traefik"` ✅ (basic-auth Traefik intacto). Hit directo al nginx interno (`docker exec setex-staging-frontend curl -sI http://localhost/`) confirma `strict-transport-security: max-age=315360000` ✅.
+- **8 containers SETEX**: todos `healthy` post-cambio. Backends prod (5 días uptime) y staging (4 días) intactos — solo se recrearon los frontends.
 
-#### Backups y reversibilidad
-- `/opt/setex/shared/backups/setex-captu-facture.OLD-2026-04-20.tar.gz` (33 MB)
-- `/docker/n8n/traefik-dynamic/setex.yml.removed-2026-04-27` (1418 B)
-- `/etc/logrotate.d/setex.bak-2026-04-27` (449 B)
-- Material de cleanup en `/opt/setex/shared/cleanup-2026-04-27/` (script `apply.sh`, config `setex-logrotate.new`, `kkk.txt`, `README.md`)
+#### D) Limpieza final
+- Sudoers temporal `/etc/sudoers.d/devuser-cleanup-2026-04-27` autoborrado tras la última operación. `sudo -n -l` confirma que NOPASSWD ya no existe para devuser.
+- **Pendiente Q2 que cierra esta sesión** (ROADMAP.md): ✅ symlink legacy borrado · ✅ YAML estático Traefik retirado. Sigue abierto: verificar 2FA GitHub (manual de Julio) · promocionar PR #18 develop→main vía deploy-prod.yml.
+- **Material cleanup en disco**: `/opt/setex/shared/cleanup-2026-04-27/` (script + config) + `/opt/setex/shared/backups/setex-captu-facture.OLD-2026-04-20.tar.gz` + `/etc/logrotate.d/setex.bak-2026-04-27` + `/docker/n8n/traefik-dynamic/setex.yml.removed-2026-04-27`. Reversibilidad total documentada por si hay que volver atrás.
+- **Ficheros tocados (8 totales)**: `{prod,staging}/app/frontend/nginx.conf` · `prod/app/docker-compose.yml` · `/etc/logrotate.d/setex` · borrados `/docker/n8n/traefik-dynamic/setex.yml{,.bak-2026-04-20}` · borrado symlink + target legacy.
 
-#### Ficheros tocados en este PR (5)
-- `app/frontend/nginx.conf` (HSTS 4 ocurrencias)
-- `app/docker-compose.yml` (+13 labels xanflatest)
-- `docs/INFORME_SISTEMA_COMPLETO.md` (esta entrada)
-- `docs/ROADMAP.md` (2 tareas Q2 cerradas)
-- `.claude/CLAUDE.md` (sección "problemas conocidos" actualizada)
+### 2026-04-27 — Cierre limpio del rollback Round 16: paridad disco staging↔prod + package.json/eslint normalizados
+- **Hallazgo**: revisión post-rollback detectó que **producción tenía el swap aplicado en disco pero el container seguía corriendo la imagen del 2026-04-21** (monolito 4308 líneas embebido por `COPY src/` del Dockerfile). En `/opt/setex/prod/app/backend/src/`, `server.js`=v3 mini (1970 B) y `server.legacy.js`=monolito (204557 B). Cualquier `docker compose build backend` futuro habría empaquetado el v3 ROTO en una nueva imagen y, al `up -d`, reproducido en producción exactamente el mismo 404 masivo del incidente del 2026-04-22 en staging. Mina pisada esperando a un rebuild rutinario, watchdog o reboot.
+- **Hallazgo colateral**: en STAGING, el rollback del 22-Abr renombró ficheros pero dejó `package.json` (script `start:legacy` apuntando a `src/server.legacy.js`) y `eslint.config.js` (excepción `max-lines` aplicada a `src/server.legacy.js`) refiriendo a un fichero ya inexistente. Inconsistencia silenciosa: nadie había corrido eslint desde entonces.
+- **Verificación previa al cambio**: hashes md5 cruzados confirmaron emparejamiento exacto (staging `server.js` == prod `server.legacy.js` = `19c4dd04…`; staging `server.next.js` == prod `server.js` = `bd1ee759…`). Búsqueda en repo: ningún script, cron, CI ni systemd unit consume `npm run start:legacy` ni el path `server.legacy.js`. El runtime del container prod (4308 líneas) confirmado idéntico al monolito en disco.
+- **Acción 1 — prod renombrado en disco** (atomic, sin tocar containers): `mv server.js server.next.js` + `mv server.legacy.js server.js`. Container `setex-prod-backend` no tocado: sigue running 5 días, healthy.
+- **Acción 2 — package.json (ambos entornos)**: `start:legacy` → `start:next`, apuntando ahora a `src/server.next.js`. El v3 congelado se puede arrancar manualmente para debugging con `npm run start:next`; ya no hay scripts apuntando a ficheros inexistentes.
+- **Acción 3 — eslint.config.js (ambos entornos)**: excepción `max-lines: off` y `max-lines-per-function: off` migrada de `src/server.legacy.js` (inexistente) a `src/server.js` (el monolito restaurado de 4308 líneas). Comentario reescrito explicando que el v3 vive en `src/server.next.js` y el plan de descongelado.
+- **Acción 4 — comentario cabecera `src/server.next.js` (ambos entornos)**: reescrito con etiqueta "CONGELADO desde 2026-04-22", explicación del incidente (rutas `auth_request` faltantes), las 4 tareas pendientes para descongelar y cómo arrancarlo manualmente.
+- **Verificación post-cambio**: `diff` byte-a-byte confirma paridad total staging↔prod en `package.json`, `eslint.config.js`, `src/server.js`, `src/server.next.js`. `node --check` ✅ en los 6 ficheros JS. `JSON.parse` ✅ en ambos package.json. `server.legacy.js` no existe en ningún entorno. Container prod sigue 200 en `/health` interno y 200 en `https://setex-facturas.es/health` público.
+- **Estado neto**: el rollback queda quirúrgicamente cerrado en ambos entornos. Un futuro `docker compose build backend` en prod construirá una imagen con el monolito (server.js 4308 líneas) y arrancará en runtime el mismo código que lleva 5 días sirviendo, sin sorpresas. El v3 sigue presente como `src/server.next.js` listo para descongelar cuando se aborden los 5 endpoints faltantes y los tests de paridad.
+- **Ficheros tocados (6 totales en 2 entornos)**: `prod/app/backend/src/{server.js,server.next.js}` (renombrado físico) · `{prod,staging}/app/backend/package.json` · `{prod,staging}/app/backend/eslint.config.js` · `{prod,staging}/app/backend/src/server.next.js` (cabecera).
 
-> **Nota sobre `develop`**: la rama `develop` contiene el refactor v3 (Rounds 1-15 + swap PR #83) que sufrió un incidente el 2026-04-22 — el v3 no portaba las rutas `auth_request` que usa nginx (`/api/internal/check-access`, `/api/internal/check-admin-page`, etc.). Ese trabajo queda **congelado en develop** hasta sesión dedicada que aborde: portar los 5 endpoints faltantes, test de paridad de superficie API legacy↔v3, healthcheck endurecido y smoke-test post-deploy. Detalle del incidente y plan de descongelado documentado en develop. Este PR a `main` NO incluye nada del v3 — main sigue siendo el monolito v1.1.0 que corre estable en prod desde el cutover.
+### 2026-04-22 (tarde) — Incidente staging: rollback Round 16 · vuelta a `server.legacy.js`
+- **Síntoma**: Julio reporta 404 en toda la app staging (index + admin + /api/*). Traefik basic auth (401) seguía funcionando, pero tras autenticar todo el contenido devolvía 404.
+- **Causa raíz**: el refactor v3 (PR #83) NO portó las rutas `/api/internal/check-access` ni `/api/internal/check-admin-page`. El frontend nginx las usa como `auth_request` en los bloques `location /`, `location /api/`, `location = /admin-facturas.html` y `location = /service-worker.js`. Al devolver 404 el backend v3, nginx mapeaba CUALQUIER petición a `@bloqueado` → 404 genérico "Not Found".
+- **Gaps detectados v3 vs legacy (5 rutas)**: `/api/internal/check-access`, `/api/internal/check-admin-page`, `/api/admin/refresh-session`, `/api/admin/retry-failed/:id`, `/api/admin/security/time`. Los 19 tests del swap no cubrían contrato nginx↔backend.
+- **Acción**: invertido el swap — `src/server.js` (v3 53 líneas) renombrado a `src/server.next.js`; `src/server.legacy.js` (monolito 4308) renombrado a `src/server.js`. Rebuild imagen + `docker compose stop backend && up -d backend`.
+- **Verificación post-rollback**: `/api/internal/check-access` responde 200 internamente; `POST /api/auth/login` devuelve `{"error":"Credenciales inválidas"}` 401 (ruteo OK); `/api/admin/facturas` 401 sin JWT (auth middleware OK). Backend healthy, logs limpios.
+- **Estado del refactor v3**: tag `v2.0.0-rc1` sigue en develop pero el runtime v3 queda CONGELADO hasta sesión dedicada a (1) portar los 5 endpoints faltantes, (2) añadir test de paridad de superficie API legacy↔v3, (3) endurecer healthcheck del container con `/api/internal/check-access` en lugar de solo `/health`, (4) añadir smoke-test HTTP post-deploy con login+preview+confirm.
+- **Impacto producción**: NULO — prod corre v1.1.0 con el monolito, no fue tocado en ningún momento.
+- **Ficheros afectados**: `app/backend/src/server.js` (ahora legacy), `app/backend/src/server.next.js` (ahora v3 congelado). package.json/Dockerfile intactos (el CMD `["node", "src/server.js"]` vuelve a arrancar el monolito al renombrar).
+
+### 2026-04-22 — DevOps/Seguridad: Claude Code Remote Control operativo (devuser@srv1027670)
+- **Migración a devuser**: `usermod -aG sudo,docker,deploy`; VS Code Remote-SSH ya no entra como root. `authorized_keys` + `CLAUDE.md` copiados desde root con `install -m 600 -o devuser -g devuser`.
+- **Fix HOME devuser**: `/home/devuser` pasó de `root:root` a `devuser:devuser` (defecto del provisioning inicial); dotfiles `.bashrc/.profile/.bash_logout` copiados desde `/etc/skel`. Sin esto, VS Code Server no podía crear `~/.vscode-server` (error `Permission denied`).
+- **Permisos grupo en /opt/setex (Opción B acotada)**: `setgid + g+rw` solo en `{prod,staging}/{app,scripts,docs}` y `shared/` (142 dirs + 561 ficheros). Excluidos: `data/postgres` (evita romper modo 0700 validado por Postgres al arrancar), `secrets/`, `node_modules/`, `.git/`, `logs/`. Dry-run previo detectó el riesgo postgres y motivó el scope acotado vs. el runbook original que proponía `find /opt/setex`.
+- **Claude CLI para devuser**: `~/.local/bin/claude` 2.1.117 (user-native, PATH preferente) junto a `/usr/local/bin/claude` 2.1.87 (sistema, preexistente). OAuth Claude Max autenticado (juliohesuni@gmail.com Organization). `~/.claude` endurecido a 700/600.
+- **Sandbox RC validado end-to-end**: `~/sandbox-rc` + tmux + `claude rc` → URL/QR → app móvil → detach (Ctrl+b d) + cierre VS Code + mensaje desde móvil → reattach con conversación intacta.
+- **Alias cc-* en ~/.bashrc**: `cc-setex-staging`, `cc-setex-prod`, `cc-sandbox`, `cc-list`, `cc-attach`, `cc-kill`. No existe `cc-setex` genérico a propósito (diseño fuerza elección consciente entorno).
+- **Runbook operacional**: `/home/devuser/docs/claude-rc-runbook.md` con flujo diario, conexión móvil, troubleshooting y principios de seguridad permanentes (no commits como root, secretos intocables, postgres data intocable, no `--dangerously-skip-permissions` en prod).
+- **Auto-arranque post-reboot**: `loginctl enable-linger devuser` + systemd --user units `tmux-setex-{staging,prod}.service` arrancan `tmux + claude rc --spawn=same-dir --remote-control-session-name-prefix=setex-{env}` al boot. Trust dialog pre-aceptado en `~/.claude.json` para ambos paths (evita bloqueo interactivo en boot).
+- **Ficheros nuevos o modificados**: `/home/devuser/{.bashrc,.claude.json,.config/systemd/user/tmux-setex-*.service,docs/claude-rc-runbook.md,.ssh/,.claude/,.local/,sandbox-rc/}`; `/opt/setex/{prod,staging}/{app,scripts,docs}` + `/opt/setex/shared/` (solo modos de grupo; ownership intacto).
+- **Docker sin impacto**: los 8 contenedores (prod+staging: backend, frontend, postgres, redis) permanecieron healthy durante TODO el proceso, sin reinicios ni degradación.
+- **Runbook maestro fuente**: `/opt/setex/claude-code-rc-plan-maestro.md`. Incluye BLOQUES A→G + 2 bloques fuera de plan (chown HOME, Opción B acotada del BLOQUE C).
+
+### 2026-04-22 — Fase 1 refactor v3 · Round 16 · SWAP v2.0.0-rc1 (PR #83)
+- **Swap runtime**: `src/server.js` (monolito 4308 líneas) renombrado a `src/server.legacy.js` por rollback; `src/server.next.js` renombrado a `src/server.js` (53 líneas, entry v3 con DI container)
+- **Dockerfile CMD `["node", "src/server.js"]` intacto** — ahora arranca el v3 post-swap
+- `package.json` — scripts ajustados: `start` → nuevo server.js (v3), `start:legacy` fallback al legacy para rollback rápido
+- `eslint.config.js` — exención `max-lines` migrada de `src/server.js` a `src/server.legacy.js`
+- **Validación staging previa (5 hotfixes Round 16 resolvieron gaps runtime):**
+  - #78 fix gitignore anclaje + recupera 7 controllers/uploads perdidos
+  - #79 fix bootstrap jwtSecret registration
+  - #80 fix repos 22 métodos faltantes (uploads +11, client-companies +8, users +3) con dual signatures
+  - #81 fix container paths (storageBase/uploadsDir/securityConfigPath)
+  - #82 fix container deps opcionales asValue(null) (excelService/fileUploader/limiters)
+- **Smoke staging en puerto 3100**: server.next.js arranca sin crash, `/health` → 200, `/health/ready` → 200 con `db:true, cache:true`
+- Tag `v2.0.0-rc1` en develop post-merge (major por refactor arquitectónico completo)
+- Refactor v3 cerrado: **15 rounds + 5 hotfixes + swap final**. Total 20 PRs (#63-#83)
+
+### 2026-04-22 — Fase 1 refactor v3 · Round 15: bootstrap providers + app.js + server.next.js (PR #77)
+- `src/bootstrap/repositories.providers.js` — registra los 9 repos con `asClass(...).classic()` (patrón constructor(pool) clásico) en SINGLETON
+- `src/bootstrap/services.providers.js` — registra 15+ services con `asFunction(...).singleton()`: audit, token-verification, refresh-token, password-reset-token, deduplication, counterparty, invoice-persist, ocrEngines + ocrOrchestration (Strategy), mail port (from factory), password-reset-email, approval-notification, ipListManager + loadSecurityConfig (closure), autoBlockService, viesValidator, adminEmailsProvider (factory)
+- `src/bootstrap/middleware.providers.js` — registra authenticate/requireActiveCompany/requireAdmin/requireXHR/securityIp/securityAutoblock/csrf/sanitizeBody como providers
+- `src/bootstrap/controllers.providers.js` — registra los 35 controllers como `asFunction(make*).singleton()` (auth 6 + uploads 6 + me 8 + company 1 + admin 22 + 2 helpers)
+- `src/bootstrap/index.js` — encadena registros en orden por capa: infra → repos → services → middleware → controllers
+- `src/app.js` (50) — `createApp({ withInfra })` compose Express: setupSecurityHeaders + body parsers + cookie-parser + requestId + attachRequestScope + mountRoutes con middleware resuelto + notFoundHandler + makeErrorHandler
+- `src/server.next.js` (49) — entry v3 con `createApp({ withInfra: true })` + listen + SIGTERM/SIGINT graceful shutdown (10s grace + forceExit) + unhandledRejection handler. **Permanece en paralelo a `server.js` legacy hasta validación Round 16**
+- `src/adapters/queue/inmemory.adapter.js` — stub QueuePort in-memory con setImmediate worker dispatch
+- `src/adapters/storage/fs.adapter.js` — StoragePort filesystem con path-traversal guard intrínseco
+- `src/adapters/auth-token/pg.adapter.js` — AuthTokenPort wrappea AuthTokensRepository
+- `package.json` — script `start:next` para poder arrancar el v3 en staging sin tocar docker-compose
+- `tests/architecture.test.js` v2 — 7 invariantes (añadidas: "cada *Port tiene adapter" + "controllers no importan pg/ioredis/openai/nodemailer/@azure"). **19/19 tests verdes** (5 arquitectura + 12 contracts + 2 enforcement v3)
+- cookie-parser instalado como dep backend
+- 11 ficheros nuevos/modificados · total refactor v3 ~100 ficheros · todos los nuevos ≤94 líneas
+- **server.js legacy intacto** (4308) — validación staging 24-48h en Round 16 antes del swap final
+
+### 2026-04-22 — Fase 1 refactor v3 · Round 14: admin catalog/security/ocr-engine/system + services/security (PR #76)
+- `src/services/security/ip-list-manager.service.js` — load/save con backup atómico (`.bak` + `.tmp` + rename), cache 30s TTL, DEFAULT_CONFIG congelado, addToList/removeFromList anti-duplicado (Set)
+- `src/services/security/auto-block.service.js` — listBlocked/unblock/countBlocked via ports/cache. Delete atómico block+count keys en unblock
+- `src/services/security/restricted-hour.service.js` — función pura `isRestrictedHour(cfg, { now })` con TZ Intl + guardia start=end
+- `src/controllers/admin/catalog/` — 3 controllers CRUD catálogo proveedores (list paginado, create con normalizeNombre NFKD + notas slice 500, delete)
+- `src/controllers/admin/security/` — 3 controllers: config GET (+blocked_count), list-update parametrizado (4 handlers addBlacklist/removeBlacklist/addWhitelist/removeWhitelist; whitelist-add auto-unblock IP), blocked (list + remove con query ?ip=)
+- `src/controllers/admin/ocr-engine/` — 2 controllers: get con healthcheck por engine, update con allowlist {mode, primary_engine, enabled} + atomic write features.json (`.tmp` + rename) + reloadFeatures()
+- `src/controllers/admin/system/health.controller.js` — BD + Redis + pool counts + process.memoryUsage + disk stat + uptime + Node version
+- `src/routes/admin/{catalog,security,ocr-engine,system}.routes.js` — 13 endpoints con adminGuard + CSRF en mutaciones
+- barrels controllers/admin/index.js (+11 factories) y routes/admin/index.js (+4 sub-routers) extendidos
+- 17 ficheros nuevos · controllers 12-52 líneas · services 37-91 · routes 17-34
+- server.js intacto (4308) · 17/17 tests verdes
+
+### 2026-04-22 — Fase 1 refactor v3 · Round 13: admin companies + users + CSRF cableado (PR #75)
+- `src/middleware/csrf.js` — `makeCsrfMiddleware({ skipPaths })` wrapper sobre `services/auth/csrf.service` (double-submit pattern); skip automático `/api/internal/*` (nginx auth_request compat)
+- `src/controllers/admin/companies/` — 7 controllers approval workflow: list-pending, detail (con audit_log JOIN), approve (+ attachCompanyByCif para uploads, fix 2026-04-21), reject (con reason 1000 chars + quarantine), link (pending→target + redirectToTargetCompany), audit-log, count-pending
+- `src/controllers/admin/users/` — 2 controllers: list con counts + update con **guard anti-lockout** (admin no puede quitarse is_admin a sí mismo)
+- `src/routes/admin/companies.routes.js` — 7 endpoints con mutGuard = authenticate + requireAdmin + requireXHR + **csrf**
+- `src/routes/admin/users.routes.js` — CRUD con mismo mutGuard
+- barrel controllers/admin/index.js y routes/admin/index.js extendidos con 9 factories + 2 routes
+- **P1.2 cerrado**: CSRF double-submit cableado en todas las mutaciones admin (companies + users)
+- 12 ficheros nuevos/modificados · controllers 16-52 líneas · routes 30-37 · middleware csrf 17
+- server.js intacto · 17/17 tests verdes
+
+### 2026-04-22 — Fase 1 refactor v3 · Round 12: admin facturas + admin client-companies (PR #74)
+- `src/controllers/admin/facturas/` — 6 controllers thin DI: list con filtros user_id/cif/fecha/status (limit 500, max 2000) · users-list distinct · image con owner-agnostic + path-traversal guard · export-xlsx delegando excelService · update con allowlist 15 campos + recalcule hook · delete con `safeUnlink(storageBase,...)` best-effort
+- `src/controllers/admin/client-companies/` — 4 controllers: list full, create con unique violation 409 (código 23505), update con allowlist (nombre/codigo_cliente/activa/notas), delete soft-default + `?hard=true` opcional (409 si FK constraint 23503)
+- `src/routes/admin/facturas.routes.js` — 6 endpoints tras `authenticate` + `requireAdmin`; mutaciones (PUT/DELETE) exigen `requireXHR` (mitigación CSRF low-cost previo a Round 13)
+- `src/routes/admin/client-companies.routes.js` — CRUD completo con mismos guards
+- `src/routes/admin/index.js` — `makeAdminRouter({ container, middleware })` resuelve controllers y compone router `/api/admin`
+- `src/routes/index.js` — siempre monta admin router (los sub-routers aparecen cuando container tiene sus controllers)
+- 14 ficheros nuevos. Controllers entre 16-54 líneas. Routes 29-34 líneas
+- server.js intacto · 17/17 tests verdes
+
+### 2026-04-22 — Fase 1 refactor v3 · Round 11: me + company + controllers (PR #73)
+- `src/controllers/me/` — 8 controllers thin: profile-get (~22), profile-update (~41, valida NIF regex + normaliza), settings-get (~16), settings-update (~26), export-rgpd (~35, art.15+20 sin password_hash), delete-account (~38, art.17 con confirm literal "DELETE MY ACCOUNT" en transacción), client-companies-list (~16), vies (~24) + index barrel
+- `src/controllers/company/status.controller.js` (41) — status con diferenciación `active|pending|not_found|no_company|admin`, fiel a server.js pero con repos DI
+- `src/routes/me.routes.js` (54) — 8 endpoints: profile get/put, settings get/post, export, delete, client-companies, vies con viesLimiter. Todas tras authenticate
+- `src/routes/company.routes.js` (19) — GET /api/company/status sin requireActiveCompany (para que "pending" pueda consultar)
+- `src/routes/index.js` — mount condicional me + company cuando container tiene los controllers registrados
+- 13 ficheros nuevos · 359 líneas · máx 54 líneas (target Round 11 <100 cumplido con amplio margen)
+- server.js intacto · 17/17 tests verdes
+
+### 2026-04-22 — Fase 1 refactor v3 · Round 10: uploads + services/invoices + Builder (PR #72)
+- `src/services/invoices/deduplication.service.js` — `check()` normaliza NIF/fecha/total y consulta `uploadsRepo.findDuplicate` (índice unique BD). Devuelve `{ duplicate, existingId, uploadedAt }`
+- `src/services/invoices/counterparty-resolver.service.js` — Capa 3 anti-fallo CIF. `resolve({ userId, ocrNombre, ocrNif })` consulta cache usuario → catálogo global → fuzzy (threshold 0.4). `remember()` incrementa confirmations. `normalizeNombre` NFKD + alphanum
+- `src/services/invoices/invoice-persist.service.js` — orquesta `confirm()`: required check → deduplication → uploadsRepo.createOrUpdate → remember counterparty + upsert catalog (fire-and-forget) → audit UPLOAD_CONFIRMED
+- `src/services/invoices/invoice.builder.js` — **patrón Builder** con `fromOcr()`, `withUserOverrides()`, `withIvaValidation()`, `withProveedor()`, `withInvoiceType()`, `build()` defensivo. Reemplaza el objeto gigante construido inline en server.js
+- `src/controllers/uploads/preview.controller.js` (63) — invoca `ocrOrchestration.extract` + `InvoiceBuilder` + resolver counterparty + cache preview Redis TTL 30min
+- `src/controllers/uploads/confirm.controller.js` (60) — resuelve preview de Redis + merge con overrides user + `invoicePersistService.confirm` → 409 duplicate / 400 missing / 200 ok; borra preview tras éxito
+- `src/controllers/uploads/list-mine.controller.js` (20) — paginated default 50/7días, límites 200/90
+- `src/controllers/uploads/image.controller.js` (40) — guard owner (userId match) + guardia path-traversal (`path.resolve` + `startsWith(storageBase)`), stream file
+- `src/controllers/uploads/proveedor.controller.js` (38) — lookup user_cache → global_catalog → 404
+- `src/controllers/uploads/export-xlsx.controller.js` (31) — delega en `excelService.buildUserWorkbook` (a extraer en Round 15); fallback JSON si no cableado
+- `src/routes/uploads.routes.js` (82) — 6 endpoints con authenticate + requireActiveCompany + rate-limiters + fileUploader por DI
+- `src/routes/index.js` — añade mount uploads cuando container tiene controllers registrados
+- 12 ficheros nuevos · 787 líneas · controller máx 63 · services máx 90 (target Round 10 <200 cumplido con margen)
+- server.js intacto (4308) · ocr/* intacto · 17/17 tests verdes
+
+### 2026-04-22 — Fase 1 refactor v3 · Round 9: routes/health + routes/auth + controllers/auth DI (PR #71)
+- `src/controllers/auth/login.controller.js` — factory DI. Fiel al monolito: findByEmail → bcrypt.compare → verifica empresa activa/pending/no-encontrada con 3 mensajes distintos → emite AT 15m + RT cookie httpOnly SameSite=Strict + audit. 94 líneas
+- `src/controllers/auth/register.controller.js` — email unique check → bcrypt hash cost 12 → createUser → si CIF no catalogado crea registro `pending` + dispara `approvalNotificationService.notifyPending` a lista admins (fire-and-forget). 76 líneas
+- `src/controllers/auth/logout.controller.js` — `refreshTokenService.logout(userId)` revoca todos los RT + clearCookie. 16 líneas
+- `src/controllers/auth/refresh.controller.js` — lee cookie `rt` → `refreshTokenService.rotate` (con reuse detection del Round 8) → nueva cookie + nuevo AT. Si reuse: audit `REFRESH_REUSE_DETECTED` + 401. 75 líneas
+- `src/controllers/auth/forgot-password.controller.js` — **respuesta idempotente** (200 siempre) para mitigar user enumeration. Si usuario existe: emite token reset + dispara email fire-and-forget. Audit diferencia `UNKNOWN` vs `ISSUED`. 49 líneas
+- `src/controllers/auth/reset-password.controller.js` — `passwordResetTokenService.consume` atómico → bcrypt.hash → updatePassword (incrementa token_version) → **logout todas las sesiones** del usuario. 45 líneas
+- `src/controllers/auth/index.js` — barrel con 6 factories
+- `src/routes/health.routes.js` — GET /health (200 uptime+pid) + GET /health/ready (ping BD + Redis con `Promise.allSettled`, 503 si falla)
+- `src/routes/auth.routes.js` — factory que recibe controllers + middleware (validate, rate-limit, authenticate). Monta las 6 rutas con Zod schemas correctos
+- `src/routes/index.js` — `mountRoutes(app, { container, middleware })` monta health siempre + auth si container tiene los controllers registrados
+- 10 ficheros nuevos · 542 líneas · máx 94 líneas/controller (target Round 9 <180 cumplido con margen)
+- Smoke verificado: 6 controllers + 2 routers instancian con mocks; auth router tiene 6 rutas; health router tiene 2. 17/17 tests siguen verdes
+- `server.js` intacto — Round 9 prepara el stack completo auth listo para cablear en Round 15
+
+### 2026-04-22 — Fase 1 refactor v3 · Round 8: services auth/email + mail adapter/factory (PR #70)
+- `src/services/auth/token-verification.service.js` — verificación JWT + token_version BD con **queryWithTimeout 500ms** (fail-secure: si pool no responde rechaza token con `db_unavailable retriable:true`)
+- `src/services/auth/refresh-token.service.js` — rotación RT con **reuse detection**: si llega RT ya revocado con `replaced_by_hash ≠ null` → revoca toda la familia (cierra sesión atacante y usuario); `issue/rotate/logout/cleanupExpired/hashToken`; JWT TTL 7d + SHA-256 en BD
+- `src/services/auth/password-reset-token.service.js` — token raw 32 bytes (64 hex) al email, hash SHA-256 en BD; `issue/verify/consume` con TTL 30min
+- `src/adapters/mail/nodemailer.adapter.js` — implementa MailPort. Healthcheck via `transport.verify()`. Send valida to/subject/text obligatorios. assertMailPort runtime check
+- `src/factories/email-transport.factory.js` — `createMailPort()` encadena `createMailTransport` (config) → `createNodemailerAdapter` (adapter) → devuelve MailPort listo para DI
+- `src/services/email/templates/base-layout.template.js` — HTML mínimo compatible (Outlook/Apple Mail) con escapeHtml en call-site
+- `src/services/email/templates/password-reset.template.js` — texto + HTML con CTA, enlace fallback, TTL explícito, escapado de email y URL
+- `src/services/email/templates/approval-pending.template.js` — notificación admin con datos empresa pendiente + CTA panel admin
+- `src/services/email/password-reset.service.js` — `send()` compone URL + invoca template + mail.send. Logs PII-safe vía sanitizer
+- `src/services/email/approval-notification.service.js` — `notifyPending()` envía a lista de adminEmails, devuelve `{ ok, sent, results }` con status por destinatario
+- 10 ficheros nuevos · 439 líneas · máx 83 líneas (target Round 8 <150)
+- Smoke local verificado: hashToken determinístico, templates escapan `<script>` → `&lt;script&gt;`, adapter con transport null rechaza con error claro, tokens servicios instancian OK. 17/17 tests siguen verdes
+- `server.js` intacto — todos los services/adapters listos para cablear en Round 9+
+
+### 2026-04-22 — Fase 1 refactor v3 · Round 7: adapters/ocr + factory + orchestration Strategy (PR #69)
+- `src/adapters/ocr/openai.adapter.js` — implementa OcrPort delegando en `ocr/openai.js`. Normaliza output: engine/emisor/receptor/fecha/totales/IRPF/tramos_iva/lineas_iva/confidence/duration_ms. Healthcheck vía `GET /v1/models` con timeout 3s
+- `src/adapters/ocr/azure.adapter.js` — implementa OcrPort delegando en `ocr/azure.js`. Healthcheck vía `/formrecognizer/info`. Normalización homogénea con openai
+- `src/adapters/ocr/gemini.adapter.js` — stub deshabilitado (decisión producto 2026-04-16). healthcheck siempre false, extract throw. Documenta el patrón OCP para futuro motor
+- `src/adapters/ocr/paddle.adapter.js` — stub hook para integración ROADMAP Q3
+- `src/factories/ocr-engine.factory.js` — `createOcrEngines({ features, readSecret, logger })` lee secrets openai_api_key + azure_di_{endpoint,key}, construye adapters según `ocr_mode` ∈ {dual,openai,azure}. Soporta `ocr_experimental_engines: ['gemini','paddle']` en features.json. `pickPrimary()` selecciona según `ocr_primary_engine`
+- `src/services/invoices/ocr-orchestration.service.js` — Strategy: **consensus** (paralelo + dual_confirmed si NIF+fecha+total coinciden), **weighted** (paralelo + primary = max confidence), **fallback** (serial con threshold 0.5). Default: consensus si ≥2 engines, fallback si 1. Timeout 45s por engine + filtro healthcheck inicial con timeout 3s
+- `tests/contracts/ocr-port.test.js` — **12 tests LSP**: cada adapter (openai/azure/gemini/paddle) cumple `assertOcrPort`, `healthcheck()` devuelve boolean sin lanzar, `extract()` sin credenciales rechaza en lugar de devolver undefined
+- `tests/architecture.test.js` (5 tests) + contracts (12 tests) = **17/17 pass**
+- 7 ficheros nuevos · 457 líneas · orchestration service 140 líneas (target Round 7 <180), resto ≤76
+- `server.js` intacto (4308 líneas) · `ocr/*` legacy intacto — los adapters delegan durante refactor; Round 15 moverá el código engine y eliminará `ocr/*`
+
+### 2026-04-22 — Fase 1 refactor v3 · Round 6: 5 repos nuevos + tests arquitectura + depcruise (PR #68)
+- `src/repositories/auth-tokens.repo.js` — refresh_tokens (save/find/rotate/revokeFamily/revokeAllForUser/deleteExpired) + password_reset_tokens (save/find/consume). Rotación de refresh con transacción (revoca antigua + crea nueva + replaced_by_hash)
+- `src/repositories/known-cifs.repo.js` — findByUserAndNombreNorm/findByUserAndNif/listByUser/upsert (ON CONFLICT incrementa confirmations)/deleteByUser
+- `src/repositories/company-catalog.repo.js` — findByNif/findByNombreFuzzy (pg_trgm similarity con threshold 0.3)/upsert/listAll/deleteById
+- `src/repositories/company-audit-log.repo.js` — log/findByCompany/findLatest (JOIN client_companies + users)/countByAction con filtro since
+- `src/repositories/failed-jobs.repo.js` — create/findById/incrementAttempts/markRetried/listPending/deleteOlderThan
+- Los 10 repos (5 existentes + 5 nuevos) siguen patrón `class XxxRepository { constructor(pool) { ... } }`. Cableado en container via asClass(...).classic() en Round 7+
+- `tests/architecture.test.js` — 5 invariantes en node:test nativo (sin deps): controllers sin pool.query, repos sin res.*, nadie importa server.js, lib/ sin deps internas, ports/ sin deps internas. 5/5 pass
+- `.dependency-cruiser.cjs` — policy: no-circular warn, not-to-server error, not-to-spec error, not-to-dev-dep error. Baseline 0 errors/warnings (24 infos orphans = código no cableado aún, esperado)
+- `eslint.config.js` — eslint-plugin-boundaries@4 descartado por incompatibilidad con ESLint 10 flat config (TypeError getFilename). La arquitectura por capas queda enforced por architecture.test.js (linter Node puro)
+- `package.json` — nuevos scripts: `test` / `test:arch` / `depcruise` / `depcruise:graph`. Dep `dependency-cruiser@^16.10.4` en devDependencies
+- 10 ficheros nuevos/modificados · repos todos ≤114 líneas · npm audit prod 0 CVE
+- `server.js` intacto (4308 líneas). Todos los repos/tests aditivos sin consumidores (aún)
+
+### 2026-04-22 — Fase 1 refactor v3 · Round 5: Zod validate + sanitize XSS + error-handler + schemas/auth (PR #67)
+- Instalada `zod@^3.25.76` (0 vulnerabilidades moderate+, ~57KB)
+- `src/middleware/validate.js` — `validate(schema, target)` donde target ∈ {body,query,params,headers}; reemplaza target con output parseado (coerciones aplicadas); errores → `ValidationError` vía `next(err)`
+- `src/middleware/sanitize.js` — `makeSanitizeBody({ skipPaths })` + `sanitizeDeep` recursivo con guarda anti-DoS (profundidad máx 20), strippea `<tags>` y null bytes; solo req.body
+- `src/middleware/error-handler.js` — `makeErrorHandler({ logger, isProduction })`: AppError → statusCode + payload tipado; ZodError → 400 + detail estructurado; SyntaxError body parse → 400 JSON inválido; otros → 500 genérico SIN stack trace en prod (con `requestId` incluido si `x-request-id` presente). `notFoundHandler` para rutas no montadas
+- `src/middleware/async-handler.js` — re-export de `lib/async-handler` (DX)
+- `src/schemas/auth/` — `login` (email normalizado + password ≤256), `register` (email + password ≥10 con may/min/num + NIF uppercase regex + company_name + consent_rgpd literal true), `forgot-password` (solo email, strict), `reset-password` (token ≥20 + password requisitos), `index` barrel
+- 8 ficheros nuevos · 271 líneas · máx 68 líneas/fichero (target Round 5 <80)
+- `server.js` intacto — todos los módulos aditivos listos para cablear en Round 9+
+
+### 2026-04-22 — Fase 1 refactor v3 · Round 4: middleware parte 1 + helmet extendida (PR #66)
+- `src/middleware/auth.js` — factories DI: `makeAuthenticate({ pool, jwtSecret, logger })` con verificación JWT + `token_version` DB check fail-secure, `requireAdmin` (function), `makeRequireActiveCompany({ pool, logger })`, `requireXHR`
+- `src/middleware/security-ip.js` — `makeSecurityIpMiddleware({ loadSecurityConfig, logger })` + helpers puros `ipInList` (CIDR via lib/ip-utils) + `isRestrictedHour` (TZ Europe/Madrid, guardia anti lockout si start=end)
+- `src/middleware/security-autoblock.js` — `makeSecurityAutoBlockMiddleware({ loadSecurityConfig, redisClient, logger })` con exención `/api/internal/*` (compat nginx auth_request) + fail-open si Redis no responde
+- `src/middleware/setup.js` — `setupSecurityHeaders(app, { corsOrigin, helmetOverrides })` con helmet extendida: CSP estricta con `upgradeInsecureRequests` + HSTS preload 2y + frameguard deny + noSniff + referrerPolicy strict-origin-when-cross-origin + COOP same-origin + CORP same-origin + originAgentCluster + permittedCrossDomainPolicies none. **Permissions-Policy** inyectado a mano (no soportado por helmet): accelerometer/camera/geolocation/gyroscope/magnetometer/microphone/payment/usb = none. `setupBodyParsers` con límite 1MB en json y urlencoded
+- Los 4 middleware son **aditivos** — `server.js` sigue usando su lógica inline actual; se cablearán desde el container en Round 9+
+- 4 ficheros nuevos · 306 líneas totales · máx 95 líneas/fichero (target Round 4 <100)
+
+### 2026-04-22 — Fase 1 refactor v3 · Round 3: config/ split + adapters infra + bootstrap providers (PR #65)
+- `src/config/database.js` — factoría `createPool()` con statement_timeout 5s default, query_timeout 10s, pool max 30, idleTimeout 30s, connectionTimeout 5s + healthcheck inicial `SELECT 1` + `closePool()` graceful con timeout 10s
+- `src/config/redis.js` — factoría `createRedisClient()` con retry backoff exponencial (máx 3s), reconnectOnError READONLY, ping inicial + `closeRedisClient()` con fallback disconnect
+- `src/config/email.js` — factoría `createMailTransport()` con pool SMTP (max 3 conexiones, 100 msgs) + verify() + cierre limpio
+- `src/config/logger.js` — winston JSON con PII sanitizer en format pipeline (redacta emails + keys sensibles ANTES de serializar), handleExceptions + handleRejections
+- `src/config/features.js` — loader de features.json con cache + `reloadFeatures()` para hot-reload; defaults seguros si parseo falla
+- `src/config/index.js` — barrel que re-exporta los 18 helpers de config (env, secrets, factorías, close*)
+- `src/adapters/db/pg-pool.adapter.js` — wrapper sobre Pool con `.query()`, `.connect()`, `.healthcheck()` + `queryWithTimeout(sql, params, { timeoutMs, label })` con transacción + SET LOCAL statement_timeout para queries críticas (auth 500ms)
+- `src/adapters/cache/ioredis.adapter.js` — implementa CachePort (get/set/del/has/incr/expire/keys) con normalización (null vs undefined, TTL opcional)
+- `src/bootstrap/infra.providers.js` — `registerInfraProviders(container)` registra logger, pool, db (adapter), redisClient, cache (adapter), mailTransport, env, features como SINGLETON + `disposeInfraProviders()` para graceful shutdown (Round 15)
+- `src/bootstrap/index.js` — `bootstrapContainer({ withInfra })` opcional + `disposeContainer()`
+- `server.js` intacto (4308 líneas). Todos los nuevos módulos son aditivos: nadie los importa todavía, se cablearán en Rounds 9-15
+- 10 ficheros nuevos/modificados · todos ≤70 líneas (muy por debajo del target <150 Round 3)
+
+### 2026-04-22 — Fase 1 refactor v3 · Round 2: lib/ + ports/ + container DI (PR #64)
+- Instalada dependencia `awilix@^10.0.2` (container DI JS puro, 0 CVE moderate+, ~30KB)
+- `src/lib/errors/` creada — `app-error.js` (raíz + toJSON), `http-error.js` (Auth/Forbidden/NotFound/Conflict/RateLimit/UnprocessableEntity/BadGateway/ServiceUnavailable), `validation-error.js` (con `ValidationError.fromZod()`), `index.js` (barrel). Reemplaza el antiguo `lib/errors.js` (huérfano, 0 importers)
+- `src/lib/async-handler.js` — wrapper para handlers async Express (captura rechazos → next(err))
+- `src/lib/html-escape.js` — escapado HTML para templates email (defense-in-depth anti XSS en server-side render)
+- `src/lib/ip-utils.js` — `extractClientIp` (Traefik-aware), `isValidIp`, `ipInCidr`, `normalizeIp`
+- `src/lib/pii-sanitizer.js` — redacta emails (`ju***@dominio`) + keys sensibles (password/token/secret/session/authorization/csrf) en estructuras recursivas antes de logs
+- `src/lib/file-cleanup.js` — `safeUnlink` con guardia anti path-traversal + `cleanupOlderThan` con mtime
+- `src/ports/` creada — 6 contratos JSDoc typedef + `assert*Port()` guards: `ocr.port.js`, `mail.port.js`, `cache.port.js`, `queue.port.js`, `storage.port.js`, `auth-token.port.js`
+- `src/container.js` — factoría `createAppContainer()` (Awilix PROXY strict) + middleware `attachRequestScope` per-request con `requestId`/`userAgent`/`clientIp`
+- `src/bootstrap/index.js` — esqueleto del bootstrap por capas (infra → adapters → factories → repos → services → controllers). Providers reales se añadirán en rounds 3-14
+- Smoke: container inicia OK, `assertOcrPort` rechaza inválido y acepta válido, `sanitize` redacta, `asyncHandler` delega err
+- `server.js` intacto (4308 líneas) — container aún no cableado. Round 2 solo añade módulos sin romper el monolito
+
+### 2026-04-22 — Fase 1 refactor v3: ADR-0004 + ADR-0005 (Round 1 · PR #63)
+- `docs/adr/0004-modular-architecture-solid-patterns.md` — decisión de arquitectura modular v3 con SOLID explícito + patrones canónicos (Repository, Service Layer, Controller thin, Ports & Adapters, Factory, Strategy, Builder). Mapeo SOLID→solución + enforcement CI (eslint-plugin-boundaries + dependency-cruiser + tests/architecture.test.js)
+- `docs/adr/0005-dependency-injection-awilix.md` — adopción de Awilix 10.x como contenedor DI (scopes SINGLETON/SCOPED). Patrón factory `make*Controller({ ... })` con destructuring. Bootstrap modular por capa (infra, adapters, factories, repositories, services, controllers)
+- `docs/adr/README.md` — índice actualizado con ADR-0004 y ADR-0005
+- Rama `refactor/modular-architecture-2026-04-22` desde `develop` · 16 rounds planificados · deploy solo staging hasta Round 16
 
 ### 2026-04-21 — Backend: `client_company_id` en approve/reject + limpieza repo (post-presentación)
 
@@ -2312,6 +2625,46 @@ Añade esta línea (backup cada día a las 3:00 AM):
 **Pendiente menor:**
 - D3: limpieza `kk.txt` + symlink legacy (tras rotación de credencial y semana de gracia).
 - Mejoras cliente SETEX (pendientes de lista por Julio).
+
+---
+
+### 2026-04-21 (noche) — v1.1.0: super-tarea SETEX multi-IVA completa en 7 partes
+
+**Contexto:** cliente SETEX pidió en reunión 2026-04-21 PM que el desglose por tramos de IVA sea coherente en todas las capas del sistema. Sesión nocturna: 7 partes entregadas en ~3h35min + deploy y tag.
+
+**Patrón early-branch:** OCR decide primero si la factura es mono-IVA (90% casos, flujo simple) o multi-IVA (flujo nuevo con productos agrupados por tramo). Ambiguo → campos null, usuario rellena manual.
+
+**Capas cubiertas (PR #59, rama `feat/multi-iva-ocr-backend-parte1-2026-04-21`):**
+
+1. **OCR backend (parte 1/7)** — `ocr/openai.js` prompt con bloque `DECISIÓN PREVIA` + schema strict con `productos:[{descripcion, importe}]`. `ocr/azure.js` nueva `extractProductosFromItems()` asocia Items a tramos por TaxRate normalizado. `domain/validators/iva.js` `mergeLineasIva()` fusión por porcentaje + dedup productos.
+2. **Endpoint confirm (parte 2/7)** — helper `normalizeConfirmedLineasIva()` valida + recalcula agregados (Σ bases, Σ cuotas, pct dominante). `/api/upload-confirm` acepta `confirmed_lineas_iva` y sincroniza columnas agregadas con sumas. Backward compat total.
+3. **Modal comprobación (parte 3/7)** — `index.html` dos vistas conmutables `#confirm-iva-mono` / `-multi`. `app.js` `renderLineasIvaMulti()` con bloques editables + productos (add/remove/add-tramo). Resumen auto-calculado en tiempo real. Cache-buster `app.js?v=20260421-004`.
+4. **Panel admin (parte 4/7)** — `GET /api/admin/facturas` incluye `lineas_iva`. `PUT` acepta `lineas_iva` y recalcula agregados. Columna "Desglose" con badge `🧾 N tramos` clickable. Modal `#desglose-modal` con bloques editables + `row.update()` sin recargar. Cache-buster `admin-facturas.js?v=20260421-003`.
+5. **Excel export (parte 5/7)** — hoja secundaria "Desglose IVA" en workbook xlsx. Una fila por tramo (solo multi-IVA). Columnas: ID, Empresa, CIF, Cliente/Prov, CIF, Nº Factura, Fecha, IVA%, Base tramo, Cuota tramo, Total tramo, Productos del tramo.
+6. **Testing (parte 6/7)** — `tests/multi-iva/test-helper-unit.js` (25 tests unitarios Node puros, 0 fallos). `tests/e2e/specs/04-admin-desglose.spec.js` (3 tests Playwright). `tests/multi-iva/README.md` documentación smoke manual.
+7. **Deploy + tag (parte 7/7)** — PR #59 squash a develop (commit `e7c8f31`). PR #61 sync main→develop absorbido (merge commit `befda3b`). PR #60 squash a main (commit `628a230`). `deploy-prod.yml` con DESPLEGAR: success en 1m10s. Tag anotado `v1.1.0` sobre `befda3b` pusheado.
+
+**Incidencias durante el deploy:**
+- `deploy-staging.yml` falló en primer intento por `Permission denied` en `tests/multi-iva/*` — mismo patrón del 2026-04-21 AM (ficheros creados como root, workflow SSH usa user deploy). Resuelto con `chown -R deploy:deploy`.
+- PR #60 salió CONFLICTING por squash de PR #51 en main — resuelto con reverse merge PR #61 (HEAD=develop en 5 ficheros afectados, develop es superset funcional).
+
+**Estado final prod (2026-04-21 ~19:00 UTC):**
+- `main @ 628a230` (Release v1.1.0 — Desglose multi-IVA coherente en 5 capas)
+- containers `setex-prod-{backend,frontend,postgres,redis}` healthy tras swap
+- `https://setex-facturas.es/health` → HTTP 200
+- Tag anotado `v1.1.0` publicado en GitHub
+- 25/25 tests unitarios del helper pasan
+- Watchdog 9/9 verde
+
+**Pendiente validación manual por Julio (mañana):**
+- Smoke con factura real multi-IVA (hostelería / ferretería / servicios mixtos).
+  Julio no tenía foto disponible al cerrar release. Validará el flujo completo
+  end-to-end mañana: subir factura → modal bloques → admin panel → Excel → BD.
+- Si regresión visual/funcional detectada: parche v1.1.1 en caliente o revert.
+
+**Pendientes generales (retomar tras validación cliente):**
+- Fase 1 MACROPLAN pausada (P1.2 CSRF, P1.3 Strangler-Fig, P1.5b lint-staged + OpenAPI, P1.1b CI e2e workflow).
+- Item loose ends: eliminar symlink legacy `/opt/setex-captu-facture` tras semana de gracia (~2026-04-27), desinstalar PaddleOCR 3GB sin uso, activar BetterStack externo.
 
 ---
 

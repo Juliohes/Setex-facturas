@@ -50,22 +50,29 @@ class ClientCompaniesRepository {
     return r.rows[0];
   }
 
-  async approve(id, reviewedByUserId) {
+  async approve(arg1, arg2) {
+    // Dual signature: approve(id, userId) (legacy) | approve({ id, adminId }) (v3)
+    const id = typeof arg1 === 'object' ? arg1.id : arg1;
+    const adminId = typeof arg1 === 'object' ? arg1.adminId : arg2;
     const r = await this.pool.query(
       `UPDATE client_companies
        SET pendiente = false, activa = true, reviewed_by = $1, reviewed_at = NOW()
        WHERE id = $2 RETURNING *`,
-      [reviewedByUserId, id]
+      [adminId, id]
     );
     return r.rows[0] || null;
   }
 
-  async reject(id, reviewedByUserId, reason = null) {
+  async reject(arg1, arg2, arg3) {
+    // Dual signature: reject(id, userId, reason?) | reject({ id, adminId, reason })
+    const id = typeof arg1 === 'object' ? arg1.id : arg1;
+    const adminId = typeof arg1 === 'object' ? arg1.adminId : arg2;
+    const reason = typeof arg1 === 'object' ? (arg1.reason ?? null) : (arg3 ?? null);
     const r = await this.pool.query(
       `UPDATE client_companies
        SET pendiente = false, activa = false, reviewed_by = $1, reviewed_at = NOW(), rejection_reason = $2
        WHERE id = $3 RETURNING *`,
-      [reviewedByUserId, reason, id]
+      [adminId, reason, id]
     );
     return r.rows[0] || null;
   }
@@ -95,6 +102,79 @@ class ClientCompaniesRepository {
     );
     return r.rows;
   }
+
+  // ── Alias y variantes añadidas para controllers v3 (Round 16.1) ────────────
+
+  async listActive() { return this.findActiveAll(); }
+  async listPending() { return this.findPending(); }
+
+  async listAllForAdmin() {
+    const r = await this.pool.query(
+      `SELECT * FROM client_companies ORDER BY nombre ASC`
+    );
+    return r.rows;
+  }
+
+  async createPending({ nombre, cif, requestedByEmail }) {
+    return this.create({ nombre, cif, requestedByEmail, pendiente: true });
+  }
+
+  async update(id, fields) {
+    const allowed = ['nombre', 'codigo_cliente', 'activa', 'notas'];
+    const sets = [];
+    const values = [];
+    let i = 1;
+    for (const key of allowed) {
+      if (fields[key] !== undefined) {
+        sets.push(`${key} = $${i++}`);
+        values.push(fields[key]);
+      }
+    }
+    if (sets.length === 0) return null;
+    values.push(id);
+    const r = await this.pool.query(
+      `UPDATE client_companies SET ${sets.join(', ')}, updated_at = NOW()
+       WHERE id = $${i} RETURNING *`,
+      values
+    );
+    return r.rows[0] || null;
+  }
+
+  async softDelete(id) {
+    const r = await this.pool.query(
+      `UPDATE client_companies SET activa = false, updated_at = NOW()
+       WHERE id = $1 RETURNING *`,
+      [id]
+    );
+    return r.rows[0] || null;
+  }
+
+  async hardDelete(id) {
+    const r = await this.pool.query(
+      `DELETE FROM client_companies WHERE id = $1 RETURNING id`,
+      [id]
+    );
+    return r.rows[0] || null;
+  }
+
+  async linkToExisting({ pendingId, targetId, adminId }) {
+    const r = await this.pool.query(
+      `UPDATE client_companies
+       SET linked_to_company_id = $1, pendiente = false, activa = false,
+           reviewed_by = $2, reviewed_at = NOW()
+       WHERE id = $3 RETURNING *`,
+      [targetId, adminId, pendingId]
+    );
+    return r.rows[0] || null;
+  }
+
+  async countPending() {
+    const r = await this.pool.query(
+      `SELECT COUNT(*)::int AS total FROM client_companies WHERE pendiente = true`
+    );
+    return r.rows[0].total;
+  }
+
 }
 
 module.exports = ClientCompaniesRepository;

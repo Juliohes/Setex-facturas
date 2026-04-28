@@ -16,10 +16,10 @@
 | Mantenedor | Julio |
 | Versión del plan | 2.0 (plan híbrido — combina lo mejor del Plan A externo y del Plan B interno basado en estado real) |
 | Fecha creación | 2026-04-20 |
-| Última actualización | **2026-04-21 17:40 UTC** (post-v1.0.2 + arranque Fase 1 + super-tarea cliente entrando) |
-| Estado global | 🟢 **Entregado v1.0.2 al cliente SETEX (aprobado en reunión)** · Fase 1 arrancada con PR #56 · pausa para super-tarea cliente ultra importante |
-| Release activo | **v1.0.2** en `main @ 0b15200` (deploy-prod.yml 2026-04-21 16:52 UTC, success 1m9s) |
-| Tags publicados | v1.0.0 (entrega inicial), v1.0.1 (fix watchdog + IRPF + Excel), v1.0.2 (fix modales + sync histórico + deploy formal) |
+| Última actualización | **2026-04-27 23:55 UTC** (FASE 1B Etapas 0-4 cerradas y mergeadas a develop · v3 listo para swap pendiente solo de validación staging 24-48h) |
+| Estado global | 🟢 **v1.1.0 + PR #84 en prod · monolito estable**. 🟢 **Refactor v3 DESCONGELADO en `develop`** — 5 rutas portadas + paridad CI + healthcheck endurecido + smoke HTTP post-deploy. 🟡 Pendiente: validación staging 24-48h (Etapa 5) y swap a runtime + tag v2.0.0 (Etapa 6). Plan: `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md`. |
+| Release activo | **v1.1.0 + PR #84** en `main @ 788ff6a` (deploy-prod.yml 2026-04-27 11:21 UTC). Backend container con `uuid@14.0.0` override (GHSA-w5hq-g745-h8pq cerrada). El swap a v3 (Etapa 6) cambiará el release a v2.0.0. |
+| Tags publicados | v1.0.0, v1.0.1, v1.0.2, **v1.1.0**, v2.0.0-rc1 (rollback 22-Abr). Próximo tag previsto: **v2.0.0** tras swap v3 estable 7+ días en prod. |
 
 ### Reglas del documento
 
@@ -407,12 +407,75 @@ Matriz de 11 checks (sección 4.6 abajo).
 
 ## 5. FASE 1 — Semana 1
 
-### Día 1 post-entrega
+### 🏗️ Plan ejecutivo v3 — Refactor modular SOLID + Patrones (2026-04-22)
 
-- [ ] Verificar staging completo operativo (ya existe — solo confirmar parity)
-- [ ] ADR-0001: "Git + ESLint + Prettier + Husky obligatorio"
-- [ ] ADR-0002: "Estructura modular — Strangler-Fig target"
-- [ ] ADR-0003: "TypeScript gradual allowJs en Fase 2"
+El plan originalmente Strangler-Fig (ADR-0002) se **eleva a v3** con SOLID explícito, patrones canónicos (Repository, Service Layer, Controller thin, Ports & Adapters, Factory, Strategy, Builder, DI) y enforcement por CI. Referencias:
+
+- **ADR-0004** — `docs/adr/0004-modular-architecture-solid-patterns.md`
+- **ADR-0005** — `docs/adr/0005-dependency-injection-awilix.md` (Awilix)
+
+### Rounds v3 (16 rounds · ~15h trabajo · 5-6 sesiones) — **HISTÓRICO**
+
+| # | Scope | Min | PR | Estado |
+|---|---|---|---|---|
+| 1 | Rama refactor + ADR-0004 + ADR-0005 | 25 | #63 | ✅ 2026-04-22 |
+| 2 | `lib/` + `ports/` + `container.js` | 60 | #64 | ✅ 2026-04-22 |
+| 3 | `config/` split + `adapters/{db,cache}` + bootstrap infra | 70 | #65 | ✅ 2026-04-22 |
+| 4 | `middleware/` parte 1 + helmet extendida | 60 | #66 | ✅ 2026-04-22 |
+| 5 | `middleware/` parte 2 Zod + `schemas/auth/` | 50 | #67 | ✅ 2026-04-22 |
+| 6 | `repositories/` completados + eslint-plugin-boundaries + `architecture.test.js` | 70 | #68 | ✅ 2026-04-22 |
+| 7 | `adapters/ocr/*` + factory + OCR orchestration Strategy | 60 | #69 | ✅ 2026-04-22 |
+| 8 | `services/{auth,email,security}` + mail adapter/factory | 60 | #70 | ✅ 2026-04-22 |
+| 9 | `routes/health` + `routes/auth` + `controllers/auth/*` DI | 60 | #71 | ✅ 2026-04-22 |
+| 10 | `routes/uploads` + `controllers/uploads/*` + `services/invoices/*` | 90 | #72 | ✅ 2026-04-22 |
+| 11 | `routes/me` + `routes/company` + controllers | 60 | #73 | ✅ 2026-04-22 |
+| 12 | `routes/admin/{facturas,client-companies}` + controllers | 60 | #74 | ✅ 2026-04-22 |
+| 13 | `routes/admin/{companies,users}` + CSRF P1.2 | 70 | #75 | ✅ 2026-04-22 |
+| 14 | `routes/admin/{catalog,security,ocr-engine,system}` + `services/security` | 60 | #76 | ✅ 2026-04-22 |
+| 15 | `app.js` + `server.js` finales + quitar exención ESLint + architecture.test.js v2 | 50 | #77 | ✅ 2026-04-22 |
+| 15.5 | 5 hotfixes container/bootstrap/repos/storage/optional-deps | — | #78 #79 #80 #81 #82 | ✅ 2026-04-22 |
+| 16 | SWAP runtime v3 (renombrado server.next.js → server.js) | 30 | #83 | ❌ **FALLIDO** 2026-04-22 tarde |
+
+**Tag intermedio**: `v2.0.0-rc1` publicado tras merge de Round 16 (#83). NO promovido a `v2.0.0` por el incidente.
+
+#### ⚠️ Incidente Round 16 (2026-04-22 tarde) · ROLLBACK ejecutado mismo día
+
+- **Síntoma**: tras swap del SWAP en staging, 404 masivo en `/`, `/admin-facturas.html`, `/api/*`. Basic-auth Traefik 401 funcionaba pero el contenido autenticado devolvía Not Found.
+- **Causa raíz**: el v3 NO portó **5 rutas** que `frontend/nginx.conf` usa como `auth_request` antes de servir cualquier location: `/api/internal/check-access`, `/api/internal/check-admin-page`, `/api/admin/refresh-session`, `/api/admin/retry-failed/:id`, `/api/admin/security/time`. Cuando el v3 devolvía 404 a `auth_request`, nginx mapeaba TODA la petición a `@bloqueado` → 404 genérico.
+- **Acción**: rollback en disco mismo día — `server.legacy.js` → `server.js` (vuelve el monolito), `server.js` (v3 mini) → `server.next.js`. Container rebuild + `up -d`.
+- **Estado v3 hoy**: CONGELADO. Todo el código v3 sigue en `develop` y disponible como `src/server.next.js`. No corre en runtime.
+- **Lección documentada**: los 19 tests del swap NO cubrían contrato `nginx ↔ backend`. Hace falta **test de paridad de superficie API** automático en CI.
+
+#### 🎯 FASE 1B · Descongelado del v3 — **EN CURSO · Etapas 0-4 cerradas, 5-6 pendientes acción manual**
+
+Plan ejecutable autocontenido en `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md`. Estado de las 6 etapas:
+
+| Etapa | Objetivo | Estado | PR / Squash |
+|---|---|---|---|
+| 0 | PR a `develop` con rollback Round 16 | ✅ MERGEADO (2026-04-27) | #85 / `6c9f65b` |
+| 1 | Portar 5 rutas `auth_request` + admin faltantes al v3 | ✅ MERGEADO (2026-04-27) | #86 / `5513b5f` |
+| 2 | Test paridad legacy↔v3 + integración CI + bump actions @v5 | ✅ MERGEADO (2026-04-27 noche) | (cierre PR) |
+| 3 | Healthcheck container endurecido a `/api/internal/check-access` | ✅ MERGEADO (2026-04-27 noche) | (cierre PR) |
+| 4 | Smoke HTTP post-deploy en `deploy-staging.yml` y `deploy-prod.yml` | ✅ MERGEADO (2026-04-27 noche) | (cierre PR) |
+| 5 | Validación staging 24-48h con monolito (no swap aún) | 🟡 PENDIENTE | dispara `deploy-staging.yml` y observa |
+| 6 | Swap v3 a runtime + tag `v2.0.0` + promoción a prod | 🟡 PENDIENTE | tras Etapa 5 verde |
+
+**Lo que ya está blindado** (no hace falta repetir trabajo):
+- Test de paridad legacy↔v3 corre en CI en cada PR a develop/main. Si una ruta del monolito no se porta al v3, CI rompe → no se mergea.
+- `tests/contracts/api-surface-parity.test.js` extrae 58 rutas del monolito y compara contra el v3 con paridad 1:1 estricta (allowlist vacía).
+- HEALTHCHECK del container apunta a la ruta crítica `/api/internal/check-access`. Whitelist `[200, 403]` → cualquier otro código (incluido 404) marca unhealthy automático.
+- `scripts/smoke-test-http.sh` sourcea `paths.sh`, hace 3 verificaciones HTTP rápidas tras cada deploy. Si `/api/internal/check-access` devuelve 404 → exit 1 con mensaje "INCIDENTE ROUND 16".
+
+**Rama del swap (Etapa 6, pendiente)**: `refactor/v3-swap-runtime-2026-XX-XX` desde `develop`. Es la inversa del rollback de Etapa 0 (rename `server.js` ↔ `server.next.js`).
+
+### Día 1 post-entrega (histórico — ya completado)
+
+- [x] Verificar staging completo operativo (2026-04-21)
+- [x] ADR-0001: "Git + ESLint + Prettier + Husky obligatorio"
+- [x] ADR-0002: "Estructura modular — Strangler-Fig target"
+- [x] ADR-0003: "TypeScript gradual allowJs en Fase 2"
+- [x] ADR-0004: "Arquitectura modular · SOLID + Patrones" (2026-04-22)
+- [x] ADR-0005: "Dependency Injection con Awilix" (2026-04-22)
 
 ### Día 2-3 · Primeros tests E2E
 
@@ -1196,19 +1259,25 @@ docker compose start backend
 
 ---
 
-### 🛑 PAUSADO PARA SUPER-TAREA CLIENTE ULTRA IMPORTANTE (2026-04-21 17:40 UTC)
+### ✅ SUPER-TAREA CLIENTE COMPLETADA (2026-04-21 19:00 UTC) — v1.1.0
 
-Julio pausa Fase 1 para introducir una **super-tarea** que el cliente SETEX pidió en la reunión de hoy. La tarea se describirá en detalle a continuación y se añadirá en esta sección cuando Julio la comunique.
+Cliente SETEX pidió en la reunión 2026-04-21 PM: **desglose por tramos de IVA coherente en todas las capas del sistema** (OCR, pantalla comprobación, BD, admin, Excel). Entregada en 7 partes + deploy a prod.
 
-> **🆕 SUPER-TAREA (placeholder — Julio dictará descripción/alcance/deadline)**
->
-> **Estado:** pendiente de especificación por parte de Julio.
->
-> **Planificación esperada:**
-> - Julio describirá la tarea con detalle (objetivo, alcance, criterios de aceptación)
-> - Al recibirla, se añadirá un bloque estructurado debajo de esta línea con: qué, por qué, cómo, estimación, riesgos, plan de ejecución
-> - Se prioriza antes que cualquier otro item de Fase 1
-> - Se commitea su ejecución contra una rama `feat/super-tarea-<titulo>-2026-04-21` y se promociona por el flujo estándar (PR → develop → main → deploy-prod.yml)
+**Resumen ejecutivo:**
+
+| # | Parte | Entregable | Tiempo |
+|---|---|---|---|
+| 1/7 | OCR backend | Prompt early-branch + schema `productos:[{desc, importe}]` + Azure Items→tramo + merger con dedup | ~35 min |
+| 2/7 | Endpoint confirm | Helper `normalizeConfirmedLineasIva` + `/api/upload-confirm` acepta array editado + sincroniza agregados | ~20 min |
+| 3/7 | Modal comprobación | Vista mono/multi conmutable + `renderLineasIvaMulti` + productos editables + resumen tiempo real | ~35 min |
+| 4/7 | Panel admin | Columna "Desglose" con badge + modal editable + `PUT` admin recalcula | ~55 min |
+| 5/7 | Excel export | Hoja secundaria "Desglose IVA" con fila por tramo + productos concatenados | ~15 min |
+| 6/7 | Testing | 25 tests unitarios Node (0 fallos) + spec Playwright + doc smoke manual | ~25 min |
+| 7/7 | Deploy + tag | PR #59 → develop → sync → main → deploy-prod.yml success 1m10s → tag v1.1.0 | ~35 min |
+
+**Total:** ~3h 35min. PR #59 en GitHub: `feat/multi-iva-ocr-backend-parte1-2026-04-21` → develop → main.
+
+**Pendiente validación manual por cliente (2026-04-22):** Julio probará flujo completo end-to-end con factura real multi-IVA (hostelería/ferretería). Si regresión detectada → parche v1.1.1 en caliente o revert según gravedad.
 
 ---
 
@@ -1337,16 +1406,47 @@ Julio pausa Fase 1 para introducir una **super-tarea** que el cliente SETEX pidi
 - [x] **P0-10** Go/No-Go formal — **GO** (2026-04-20 19:45 UTC)
   - Ver sección 4.6: 9/11 verde, 1 pospuesto documentado (CSRF → F1), 1 diferido a mañana (credenciales cliente)
 
+### Cierre Q2 cleanup post-cutover Fase 4 — 2026-04-27 ✅
+
+Sesión de cierre del trabajo legacy del cutover Fase 4. Ejecutado con sudoers acotado y temporal (autoborrado al final). PR #84 mergeado a main, deploy a producción ejecutado tras fix de ownership.
+
+- [x] **FASE 1 swap-en-disco prod corregido** — paridad staging↔prod en `package.json`/`eslint.config.js`/`server.next.js`. Sin tocar runtime (container backend prod intacto, lo recogió todo el rebuild post-PR).
+- [x] **FASE 2 symlink legacy `/opt/setex-captu-facture*` eliminado** — 109 MB liberados, tarball backup en `/opt/setex/shared/backups/`. Hallazgo proactivo: `/etc/logrotate.d/setex` apuntaba a paths legacy mientras los logs activos en `/opt/setex/{prod,staging}/logs/*.log` no tenían rotación (`watchdog.log` en 1.18 MB y creciendo). Reemplazado.
+- [x] **FASE 3 YAML estático Traefik retirado** — `/docker/n8n/traefik-dynamic/setex.yml` borrado (backup `.removed-2026-04-27`). HSTS migrado a `nginx.conf` con `max-age=315360000` (10 años) en ambos entornos. Redirect xanflatest.com → setex-facturas.es portado a labels Docker en `setex-prod-frontend` (13 labels nuevas, regex `redirectregex` con escape `$$` correcto).
+- [x] **2FA GitHub verificado** — Authenticator app + GitHub Mobile activos.
+- [x] **PR #18 paths cerrado como superseded** — PR #51 ya tiene `scripts/lib/paths.sh` en main (md5 idéntico develop/main/filesystem `c691ddc3...`).
+- [x] **PR #84 mergeado a main** (squash, commit `788ff6a`) — 5 ficheros modificados sobre main: `nginx.conf` HSTS · `docker-compose.yml` xanflatest · `INFORME` historial · `ROADMAP` Q2 cerrado · `CLAUDE.md` problema resuelto. Más un commit adicional en la rama: **fix uuid override @14** (vulnerabilidad GHSA-w5hq-g745-h8pq cerrada en CI npm audit).
+- [x] **Deploy a producción ejecutado tras fix de ownership** — primer intento falló porque 195 ficheros en `/opt/setex/prod` tenían owner `root:root` (contaminación por `git pull` previos como root) y el user `deploy` no podía borrarlos durante `git reset --hard origin/main`. Fix manual con `sudo chown -R deploy:deploy app/ scripts/ docs/ tests/ .husky/ package*.json commitlint.config.js .gitignore`. Segundo deploy ✅. Container backend recreado con imagen nueva, `uuid@14.0.0` confirmado en runtime, HSTS verificado público.
+- [x] **Documentación actualizada en ambos entornos** — `INFORME_SISTEMA_COMPLETO.md` con dos entradas del 2026-04-27 (FASE 1 + Cleanup completo), `ROADMAP.md` con Q2 críticas todas marcadas, `CLAUDE.md` proyecto con sección "(Resuelto 2026-04-27)".
+- [x] **Sesiones Claude RC reiniciadas** — `Setex-Produccion-Real` y `Setex-Staging-Real` levantadas frescas tras 18-19h de zombie. systemd user units `tmux-setex-{prod,staging}.service` operativos.
+- [ ] **PENDIENTE Q2 (no urgente)**: añadir chown automatizado al `scripts/fix-permissions.sh` (cron 1h) para que la deuda de ownership root no vuelva a romper deploys futuros — se puede integrar en la sesión FASE 1B etapa 0 o como tarea independiente.
+- [ ] **PENDIENTE housekeeping (vencimiento 2026-05-27)**: borrar `/opt/setex/shared/cleanup-2026-04-27/` + `/opt/setex/shared/backups/setex-captu-facture.OLD-2026-04-20.tar.gz` (33 MB) + `/docker/n8n/traefik-dynamic/setex.yml.removed-2026-04-27` + `/etc/logrotate.d/setex.bak-2026-04-27`. 30 días de gracia desde 2026-04-27.
+
 ### Fase 1 — Semana 1 (2026-04-21 a 2026-04-27)
-- [ ] Verificar staging operativo (parity con prod)
-- [ ] ADR-0001 Git + ESLint + Prettier + Husky obligatorio
-- [ ] ADR-0002 Estructura modular Strangler-Fig target
-- [ ] ADR-0003 TypeScript gradual Fase 3
-- [ ] Playwright instalado + 3 tests E2E verdes
-- [ ] CI ejecuta Playwright contra staging
-- [ ] OpenAPI 3.1 yaml canónico
-- [ ] Conventional commits + commitlint hook
-- [ ] Pasos 1-12 Strangler-Fig completados
+- [x] Verificar staging operativo (parity con prod)
+- [x] ADR-0001 Git + ESLint + Prettier + Husky obligatorio
+- [x] ADR-0002 Estructura modular Strangler-Fig target
+- [x] ADR-0003 TypeScript gradual Fase 3
+- [x] **ADR-0004 Arquitectura modular SOLID + patrones** (2026-04-22)
+- [x] **ADR-0005 Dependency Injection con Awilix** (2026-04-22)
+- [x] **Refactor v3 Rounds 1-15 + 5 hotfixes mergeados a develop** (PRs #63-#82, 2026-04-22)
+- [x] Conventional commits + commitlint hook
+- [x] Pasos 1-12 Strangler-Fig completados (vía Rounds v3, no como Strangler-Fig clásico — superado por la arquitectura DI/ports/adapters)
+- [ ] **SWAP runtime v3 — FALLIDO 2026-04-22 tarde, rollback ejecutado** (5 rutas auth_request faltantes; v3 CONGELADO en develop, ver PLAN-FASE-4-DESCONGELADO-V3.md)
+- [ ] Playwright instalado + 3 tests E2E verdes (pospuesto a Fase 1B etapa 2 como test de paridad legacy↔v3)
+- [ ] CI ejecuta Playwright contra staging (idem)
+- [ ] OpenAPI 3.1 yaml canónico (sin cambio, pendiente)
+
+### Fase 1B — Descongelado v3 (2026-04-XX) · **PRIORITARIA · siguiente sesión**
+
+Plan ejecutable autocontenido en `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md`.
+- [ ] Etapa 0: PR a `develop` con rollback Round 16 (que develop deje de apuntar al swap roto)
+- [ ] Etapa 1: portar 5 rutas faltantes al v3 (check-access, check-admin-page, refresh-session, retry-failed/:id, security/time)
+- [ ] Etapa 2: test de paridad legacy↔v3 + integración CI (auto-extracción de rutas + smoke HTTP)
+- [ ] Etapa 3: endurecer healthcheck container (apuntar a `/api/internal/check-access`)
+- [ ] Etapa 4: smoke HTTP post-deploy en `deploy-staging.yml` (login + preview + confirm)
+- [ ] Etapa 5: validación staging 24-48h con monolito (no swap aún)
+- [ ] Etapa 6: swap v3 a runtime + promoción `v2.0.0` + monitoring 24h en prod
 
 ### Fase 2 — Semanas 2-4 (2026-04-28 a 2026-05-18)
 - [ ] TypeScript instalado `allowJs: true`
@@ -1390,8 +1490,13 @@ Julio pausa Fase 1 para introducir una **super-tarea** que el cliente SETEX pidi
 | API key agotada OpenAI/Azure | Media | Medio | Dual OCR (el otro responde) | **F3**: alertas consumo + fallback |
 | Cliente demanda Verifactu | Baja→Alta | Medio | — | **F3**: implementación completa |
 | Pérdida secrets | Baja | Catastrófico | /run/secrets/, backup local | **F1**: Vault / Doppler |
-| Monolito imposible de mantener | Alta | Alto | — | **F2**: Strangler-Fig |
-| 0 tests → regresión invisible | Alta | Alto | — | **F1-F2**: pirámide tests |
+| Monolito imposible de mantener | Alta | Alto | Refactor v3 código existe en develop | **F1B**: descongelado v3 (PLAN-FASE-4) |
+| 0 tests → regresión invisible | Alta | Alto | — | **F1B etapa 2**: test paridad legacy↔v3 + smoke HTTP en CI |
+| **Refactor v3 congelado en develop** (post-incidente Round 16) | Cierta | Alto si deploy-staging fallido | `develop` apunta al swap roto, mina pisada | **F1B etapa 0**: PR a develop con rollback Round 16 antes de cualquier otra cosa |
+| **Deuda ownership root:root en /opt/setex/{prod,staging}** | Cierta | Medio (rompe deploys) | Detectado y arreglado 2026-04-27 manualmente | **F1B etapa 0** o tarea aparte: añadir chown automatizado a `scripts/fix-permissions.sh` (cron 1h) |
+| **Sesiones Claude RC zombi** (sin uso > 24h) | Media | Bajo (confunde al operador en móvil) | Reinicio manual via `systemctl --user restart tmux-setex-*.service` | Considerar timer systemd que reinicie sesiones inactivas, o documentar que el operador limpie cuando vuelva tras varios días |
+| **Doble hop HTTP→HTTPS en xanflatest.com** | Cierta | Mínimo (UX 1 hop extra) | Causa: `--entrypoints.web.http.redirections.entryPoint.to=websecure` en `n8n-traefik-1` (preexistente) | Aceptado. Si en algún momento se reconfigura Traefik n8n, el redirect xanflatest queda como labels Docker en `setex-prod-frontend` |
+| **Logs de prod sin rotación previa** | Resuelto 2026-04-27 | Era Alto (disco lleno a futuro) | `/etc/logrotate.d/setex` actualizado a `/opt/setex/{prod,staging}/logs/*.log` | Vigilar próximo ciclo de rotación domingo |
 
 ---
 
@@ -1580,6 +1685,14 @@ Antes de cada fase, necesitamos respuestas:
 
 ---
 
-**Documento vivo. Versión 2.0 — 2026-04-20.**
-**Próxima revisión**: tras Fase 0 cerrada (hoy noche).
-**Revisión completa**: cada 2 semanas.
+**Documento vivo. Versión 2.0 — última revisión 2026-04-27.**
+
+## 🎯 Siguiente bloque del proyecto
+
+**FASE 1B · Descongelado del refactor v3** — el código está hecho (Rounds 1-15 + 5 hotfixes mergeados a develop) pero el SWAP runtime falló por 5 rutas `auth_request` faltantes. Plan ejecutable autocontenido:
+
+📄 **`docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md`** — leerlo primero en la próxima sesión. 6 etapas, 3-4 horas concentradas, todo en staging hasta tag `v2.0.0`.
+
+**Antes de cualquier otra cosa que toque `develop`**: ejecutar etapa 0 del PLAN-FASE-4 (PR a develop con el rollback equivalente al de prod). Hoy `develop` apunta al swap v3 roto — cualquier `deploy-staging.yml` reproduciría el incidente del 22-Abr.
+
+**Revisión completa**: cada 2 semanas o tras cierre de cada FASE.

@@ -11,5 +11,14 @@ COPY --chown=appuser:appgroup src/ ./src/
 RUN mkdir -p /app/uploads /app/logs && chown -R appuser:appgroup /app/uploads /app/logs
 USER appuser
 EXPOSE 3000
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 CMD node -e "require('http').get('http://localhost:3000/health')"
+# Healthcheck endurecido (FASE 1B Etapa 3) — apunta a /api/internal/check-access
+# en lugar de /health trivial. Razón: detecta el incidente Round 16 (2026-04-22)
+# automáticamente. Si la ruta crítica de auth_request devuelve 404 (no portada
+# en el v3), el container se marca unhealthy y Docker lo reinicia.
+# Códigos válidos:
+#   200 = ruta responde y horario permitido        → healthy
+#   403 = ruta responde y dentro de bloqueo 00-06  → healthy (comportamiento esperado)
+#   *   = cualquier otro (incluido 404, 5xx, conn refused, timeout) → unhealthy
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:3000/api/internal/check-access', r => process.exit([200,403].includes(r.statusCode) ? 0 : 1)).on('error', () => process.exit(1))"
 CMD ["node", "src/server.js"]
