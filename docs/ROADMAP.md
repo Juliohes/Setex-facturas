@@ -50,6 +50,8 @@
 - [ ] **FASE 1B Etapa 5 — Validación staging 24-48h** (acción manual de Julio)
 - [ ] **FASE 1B Etapa 6 — Swap v3 a runtime + tag `v2.0.0` + promoción a prod** (acción manual de Julio, post-Etapa 5)
 
+> Plan ejecutable detallado: [PLAN-FASE-4-DESCONGELADO-V3.md](plans/PLAN-FASE-4-DESCONGELADO-V3.md)
+
 ### 🔧 Tareas operacionales nuevas (detectadas durante el cleanup 2026-04-27)
 
 - [ ] **Añadir chown automatizado al `scripts/fix-permissions.sh`** (cron 1h ya activo). Motivo: el deploy del 27-Abr falló porque 195 ficheros en `/opt/setex/prod` tenían `owner=root:root` (contaminación por `git pull` previos como root) y el user `deploy` no podía borrarlos durante `git reset --hard origin/main`. Añadir un step similar a:
