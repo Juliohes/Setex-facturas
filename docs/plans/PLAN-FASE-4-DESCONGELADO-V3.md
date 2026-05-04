@@ -540,10 +540,3 @@ curl -skI https://setex-facturas.es/ | grep -i strict-transport
 | Fecha | Autor | Cambio |
 |---|---|---|
 | 2026-04-27 | Claude (Julio) | Creación tras cierre de Q2 cleanup post-cutover Fase 4 (FASES 1-3 + PR #84 + deploy) |
-
----
-
-## Trazabilidad
-
-Este plan implementa la línea Q2-2026 del [ROADMAP](../ROADMAP.md).
-Decisiones arquitectónicas de soporte: ver [DECISIONS.md](../DECISIONS.md).
