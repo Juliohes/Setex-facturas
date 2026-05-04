@@ -1,37 +1,28 @@
 # SETEX — Roadmap trimestral 2026
 
-Última actualización: **2026-04-27 23:55 UTC** — tras cierre FASE 1B Etapas 0-4 (PRs #85, #86 + PR cierre pendiente squash).
+Última actualización: **2026-04-28 09:40 UTC** — tras promoción **v2.0.0 a producción** ✅ (refactor v3 modular Awilix DI en runtime).
 
 ---
 
-## 🎯 Siguiente acción del proyecto · FASE 1B Etapas 5-6 (validación + swap)
+## 🎯 Siguiente bloque del proyecto · post-v2.0.0 estabilización + Q3 cleanup
 
-**Estado**: el descongelado del refactor v3 está **listo para swap**. Plumbing completo en `develop`:
-- 5 rutas `auth_request` portadas y testadas (PR #86 mergeado).
-- Test de paridad legacy↔v3 corre en CI (cada PR a develop/main valida que no regresamos).
-- Healthcheck container apunta a la ruta crítica → unhealthy automático si falta.
-- Smoke HTTP post-deploy bloquea promoción si la superficie API se rompe.
+**Q2 está cerrado al 100%**. v3 modular en runtime en prod desde 2026-04-28 09:36 UTC. Lo siguiente:
 
-**Acciones manuales que faltan** (no automatizables hoy):
+1. **Monitoring 24-48h post-deploy prod** (cron Claude session `754e45ea` cada hora + watchdog cada 5min):
+   - `docker logs setex-prod-backend` sin errores nuevos.
+   - Smoke HTTP horario verde.
+   - Sin reinicios container.
+   - Sin alertas en logs/watchdog.
 
-1. **Etapa 5 — Validación staging 24-48h**:
-   - Disparar `deploy-staging.yml` (push a develop o `workflow_dispatch`).
-   - Staging arranca con monolito (server.js = 4308 líneas, NO el v3 todavía).
-   - Smoke post-deploy debe pasar verde inmediato.
-   - Dejar correr 24-48h vigilando: `docker logs setex-staging-backend`, watchdog, alertas.
-   - Si todo verde → seguir a Etapa 6.
-
-2. **Etapa 6 — Swap final del v3 a runtime + tag v2.0.0**:
-   - Branch nuevo `refactor/v3-swap-runtime-2026-XX-XX` desde develop.
-   - `mv src/server.js src/server.legacy.js` y `mv src/server.next.js src/server.js`.
-   - Ajustar `package.json` (`start:next` → `start:legacy`) y `eslint.config.js` (excepción `max-lines` a `server.legacy.js`).
-   - PR a develop, CI paridad seguirá pasando, merge.
-   - Deploy a staging automático, smoke verde.
-   - 24-48h adicionales en staging.
-   - Si todo OK: PR develop → main + tag `v2.0.0` + `Deploy a producción (manual)` con `DESPLEGAR`.
-   - Plan detallado: `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md` sección 6.
+2. **Si todo verde 7 días** → considerar Q3 cleanup:
+   - Borrar `src/server.legacy.js` (PR de limpieza, post-30 días estable).
+   - Borrar `gemini.js` (266 líneas DESACTIVADO) y `paddleocr.js` (39 líneas sin uso).
+   - Refactor `sanitizeMetaFormat` con wrapper defensivo que prevenga regresiones silenciosas similares al bug del 28-Abr.
+   - Migrar cookie `setex_admin` a Bearer JWT (reduce superficie cookie).
 
 ---
+
+## Q2 2026 (abril–junio) — CERRADO ✅
 
 ## Q2 2026 (abril–junio)
 
@@ -44,11 +35,14 @@
 - [x] **PR #84 cleanup post-cutover mergeado a main + deploy a producción** ✅ (2026-04-27 11:21 UTC)
 - [x] **FASE 1B Etapa 0 — Rollback en `develop`** ✅ (PR #85, squash `6c9f65b`, 2026-04-27 15:55 UTC)
 - [x] **FASE 1B Etapa 1 — Portar 5 rutas `auth_request` faltantes al v3** ✅ (PR #86, squash `5513b5f`, 2026-04-27)
-- [x] **FASE 1B Etapa 2 — Test paridad legacy↔v3 + integración CI** ✅ (PR cierre, 2026-04-27)
-- [x] **FASE 1B Etapa 3 — Healthcheck container endurecido** ✅ (PR cierre, 2026-04-27)
-- [x] **FASE 1B Etapa 4 — Smoke HTTP post-deploy en workflows staging+prod** ✅ (PR cierre, 2026-04-27)
-- [ ] **FASE 1B Etapa 5 — Validación staging 24-48h** (acción manual de Julio)
-- [ ] **FASE 1B Etapa 6 — Swap v3 a runtime + tag `v2.0.0` + promoción a prod** (acción manual de Julio, post-Etapa 5)
+- [x] **FASE 1B Etapa 2-4 — Paridad CI + healthcheck + smoke HTTP + HSTS staging** ✅ (PR #87, squash `214a357`, 2026-04-27)
+- [x] **LL-001 + smoke docker exec** ✅ (PR #88, squash `70f9e86`, 2026-04-27)
+- [x] **FASE 1B Etapa 5 — Vigilancia staging-watch + smoke tolerante bloqueo horario** ✅ (PR #89, squash `5048433`, 2026-04-28)
+- [x] **FASE 1B Etapa 6 — Swap v3 a runtime** ✅ (PR #90, squash `5bd668f`, 2026-04-28)
+- [x] **Hotfix logger silencioso** ✅ (PR #91, squash `b77c852`, 2026-04-28 — bug crítico cazado en runtime de Etapa 6)
+- [x] **🏷️ v2.0.0 promocionado a `main`** ✅ (PR #93, squash `a1cda6d`, 2026-04-28 09:33 UTC, tag annotated)
+- [x] **🚀 Deploy a producción ejecutado** ✅ (workflow_dispatch DESPLEGAR, 2026-04-28 09:36 UTC)
+- [x] **Verificación E2E producción** ✅ (server.js v3 60 líneas, 4/4 containers healthy, smoke 3/3, HSTS 10 años, login Zod-validated 400/401 correcto)
 
 > Plan ejecutable detallado: [PLAN-FASE-4-DESCONGELADO-V3.md](plans/PLAN-FASE-4-DESCONGELADO-V3.md)
 
