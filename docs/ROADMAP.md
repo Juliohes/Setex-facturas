@@ -44,6 +44,8 @@
 - [x] **🚀 Deploy a producción ejecutado** ✅ (workflow_dispatch DESPLEGAR, 2026-04-28 09:36 UTC)
 - [x] **Verificación E2E producción** ✅ (server.js v3 60 líneas, 4/4 containers healthy, smoke 3/3, HSTS 10 años, login Zod-validated 400/401 correcto)
 
+> Plan ejecutable detallado: [PLAN-FASE-4-DESCONGELADO-V3.md](plans/PLAN-FASE-4-DESCONGELADO-V3.md)
+
 ### 🔧 Tareas operacionales nuevas (detectadas durante el cleanup 2026-04-27)
 
 - [ ] **Añadir chown automatizado al `scripts/fix-permissions.sh`** (cron 1h ya activo). Motivo: el deploy del 27-Abr falló porque 195 ficheros en `/opt/setex/prod` tenían `owner=root:root` (contaminación por `git pull` previos como root) y el user `deploy` no podía borrarlos durante `git reset --hard origin/main`. Añadir un step similar a:
