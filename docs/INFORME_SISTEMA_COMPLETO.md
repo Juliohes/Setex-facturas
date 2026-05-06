@@ -578,6 +578,124 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-05-06 (mañana-2) — UX admin: columnas "IVA %" y "Desglose" unificadas en una sola
+- **Cambio**: la tabla del panel admin (`/admin-facturas.html`) tenía dos columnas separadas que mostraban información parcial:
+  - **"IVA %"** (`field: iva_porcentaje`): mostraba el porcentaje en mono-IVA y `—` en multi-IVA.
+  - **"Desglose"** (`field: lineas_iva`): mostraba `1 tramo` (gris, sin valor) en mono-IVA y `🧾 N tramos` (badge azul clickable) en multi-IVA.
+- **Resultado nuevo**: una única columna **"IVA %"** (ancho 110px, sin sort) que fusiona ambos comportamientos:
+  - **Mono-IVA** (sin `lineas_iva` o length < 2) → muestra el porcentaje (`21 %`, `10 %`, etc.) editable con lápiz como antes.
+  - **Multi-IVA** (length ≥ 2) → muestra el badge `🧾 N tramos` clickable que abre el modal de desglose, igual que antes hacía la columna "Desglose".
+- **Helpers**:
+  - `formatIvaPctUnified(cell)` reemplaza al antiguo `formatIvaPctMulti`.
+  - `ivaPctUnifiedCellClick(_e, cell)` reemplaza al antiguo `ivaPctCellClick`. En multi-IVA cualquier click sobre el badge abre `openDesgloseModal(row)`. En mono-IVA solo el click sobre `.edit-cell-btn` abre `openEditModal(row, 'iva_porcentaje')`.
+  - `formatDesglose(cell)` eliminado (código muerto tras la fusión).
+- **`persistenceID` bumpeado** de `setex-admin-facturas-v8` a `v9`: necesario porque Tabulator persiste anchos de columna en `localStorage`. Sin bump, los usuarios ya activos verían un hueco vacío donde estaba la columna "Desglose" hasta forzar un reset manual.
+- **Cache-buster**: `admin-facturas.js?v=20260506-002`.
+- **Deploy**: rebuild frontend + stop/up. Sintaxis verificada con `node -c`. Health-check 5/5 verde. Backend no tocado.
+
+### 2026-05-06 — Fix: resumen general no se renderizaba en mono-IVA al abrir el modal
+- **Síntoma**: tras eliminar el bloque `confirm-iva-calc` (iteración 2026-04-30 tarde-5), el cuadro "RESUMEN" aparecía vacío al abrir el modal de confirmación con facturas mono-IVA.
+- **Causa raíz**: `updateLineasIvaSummary()` solo se invocaba (a) desde `renderLineasIvaMulti()` para multi-IVA, o (b) desde el listener `input` de los campos mono — que **no se dispara cuando se asigna `.value =`** programáticamente al cargar el preview. Resultado: el `#confirm-lineas-iva-summary` quedaba vacío en mono-IVA hasta que el usuario tecleaba algo.
+- **Fix**: añadida llamada explícita a `updateLineasIvaSummary()` al final de `renderUploadPreview` en `app/frontend/src/app.js`, justo después de `updateIVACalc()`. Ahora el resumen aparece poblado desde el primer render.
+- **Cache-buster**: `app.js?v=20260506-001`. Health-check 5/5 verde.
+
+### 2026-04-30 (tarde-5) — UX: limpieza visual del modal (placeholder IRPF, textos auxiliares y verificador final)
+- **Placeholder de RETENCIÓN IRPF %**: cambiado de `15,0` a `0,00` en `app/frontend/src/index.html`. Coherente con el placeholder del input "CUOTA IRPF (€)" que ya era `0,00`.
+- **Texto auxiliar eliminado**: el `<div>` "Solo se admiten 21, 10, 4 o 0." que aparecía bajo el input IVA % en mono-IVA. Eliminado en `index.html`.
+- **Tooltip eliminado**: atributo `title="Solo se admiten 21, 10, 4 o 0"` quitado de los inputs IVA % de tramo en `app.js` (`renderLineasIvaMulti`) y `admin-facturas.js` (`renderDesgloseBlocks`). El snap automático sigue activo, pero sin texto explicativo visible.
+- **Bloque verificador final eliminado**: `<div id="confirm-iva-calc">` (mostraba "✓ Base × IVA = ..." en tiempo real justo antes del botón "Confirmar y guardar") quitado del `index.html`. La función `updateIVACalc()` no se elimina porque hace early return si el elemento no existe (`if (!calcEl) return;`) — sigue siendo invocada desde varios sitios pero no produce output visible. Los avisos de descuadre por tramo (`tramo-warning`) y la apertura automática de cuadros con anomalía siguen cumpliendo el rol de validación.
+- **Cache-busters**: `app.js?v=20260430-009`, `admin-facturas.js?v=20260430-009`.
+- **Deploy**: rebuild frontend. Sintaxis verificada con `node -c`. Health-check 5/5 verde. Backend no tocado.
+
+### 2026-04-30 (tarde-4) — Alta de empresa cliente "INGENIERIA TERMOACUSTICA DBK SLU"
+- **Datos**: CIF `B06533277` (validado por `validateCIF.js`, dígito control 7 correcto), email principal `administracion@itdbk.es`.
+- **`client_companies`** (id=66): insertada con `activa=true`, `pendiente=false`, `registration_source='admin'`. `codigo_cliente=NULL` (admin puede asignarlo después desde el panel `/admin-facturas.html`).
+- **`allowed_emails`** (id=10): email autorizado para registro.
+- Operación atómica en una sola transacción (`BEGIN`/`COMMIT`). Cero impacto en código o despliegue. Backend sin tocar.
+
+### 2026-04-30 (tarde-3) — Aviso visual por tramo cuando no cuadra CUOTA = BASE × IVA% / 100
+- **Banner rojo dentro de cada tramo descuadrado**: el bloque del tramo incluye un `<div class="tramo-warning">` (`.desg-tramo-warning` en admin) oculto por defecto que se muestra cuando los 3 campos están rellenos pero no cumplen la regla `CUOTA ≈ BASE × IVA% / 100` (tolerancia 0,02€). Texto: "⚠ Revisar este tramo: la cuota no cuadra con BASE × IVA % ÷ 100."
+- **Helpers nuevos**:
+  - `tramoCuadra(base, pct, cuota)` / `tramoCuadraAdmin(...)`: devuelve true/false/null (null si algún valor no es numérico).
+  - `updateTramoWarning(block)` / `updateAdminTramoWarning(...)`: muestra/oculta el banner del bloque pasado.
+  - `updateAllTramosWarnings()` / `updateAllAdminTramosWarnings()`: itera todos los bloques visibles.
+- **Conexión a eventos**: tras cualquier `oninput` (BASE/CUOTA) o `focusout` (IVA % con snap+recalc) se reevalúa el aviso del bloque afectado. Al renderizar tramos (incluido tras OCR) se evalúan todos los bloques.
+- **Comportamiento**: cuando OCR detecta valores incoherentes (p.ej. BASE=100, IVA%=21, CUOTA=18 detectados como tres lecturas independientes), el banner aparece en ese tramo concreto y `tieneAnomaliaTramos()` devuelve true, lo que abre automáticamente el cuadro `box-tramos`. Cuando el usuario edita un campo, la coherencia automática (`recalcCoherenciaTramo`) ajusta el campo derivado y el banner desaparece.
+- **Cuadros plegables (recordatorio)**: ambos cuadros (`box-tramos` y `box-irpf`) plegados por defecto. Solo se abren si `tieneAnomaliaTramos()` o `tieneAnomaliaIrpf()` devuelven true.
+- **Cache-busters**: `app.js?v=20260430-008`, `admin-facturas.js?v=20260430-008`.
+- **Deploy**: rebuild frontend. Sintaxis verificada con `node -c`. Health-check 5/5 verde. Backend no tocado.
+
+### 2026-04-30 (tarde-2) — Coherencia matemática CUOTA = BASE × IVA% / 100 + cuadros plegados por anomalía
+- **Regla matemática estricta en cada tramo** (`app/frontend/src/app.js` y `admin-facturas.js`): siempre debe cumplirse `CUOTA = BASE × IVA% / 100`. La UI fuerza la coherencia automáticamente:
+  - Editar **BASE** o **IVA %** → se recalcula CUOTA al instante.
+  - Editar **CUOTA** → se recalcula BASE (`BASE = CUOTA × 100 / IVA%`), asumiendo que el usuario corrige el agregado.
+  - Listener `oninput` en BASE y CUOTA del tramo (delegation por contenedor) y `focusout` en IVA % (tras el snap).
+  - Guard `document.activeElement` para no sobreescribir el campo que tiene el foco del usuario.
+  - Aplicado en multi-IVA (tramos), modal admin (`recalcCoherenciaAdminTramo`), y mono-IVA (`recalcCoherenciaMono` sobre `confirm-base`/`confirm-iva-pct`/`confirm-cuota-iva`).
+- **Política nueva de cuadros plegables**: ambos cuadros (`box-tramos` y `box-irpf`) aparecen **plegados por defecto**. Solo se abren si hay anomalía detectada, llamando la atención del usuario al problema:
+  - **`tieneAnomaliaTramos()`**: cubre multi-IVA (algún tramo con cuota ≠ base × pct/100, tolerancia 0,02€, o campo vacío) y mono-IVA (incoherencia entre Base/IVA%/Cuota).
+  - **`tieneAnomaliaIrpf()`**: hay valor parcial (solo IRPF % o solo Cuota IRPF), no parseable, o `cuota_irpf ≠ base_total × irpf%/100` (tolerancia 0,02€).
+  - `renderUploadPreview` evalúa ambas tras pintar los datos del OCR y abre/pliega cada cuadro en consecuencia.
+  - Resultado UX: si OCR lee la factura correctamente, el usuario solo ve el resumen (Base/Cuota IVA/Cuota IRPF/Total) y los dos cuadros plegados con flecha. Si OCR falló o el usuario debe corregir algo, los cuadros se abren automáticamente para mostrar el problema.
+- **Tolerancia**: `COHERENCIA_TOL_EUR = 0.02`. Permite redondeos de céntimos sin marcar falsa anomalía.
+- **Helper `round2(n)`** y `_round2Admin(n)` para redondeos consistentes a 2 decimales.
+- **Cache-busters**: `app.js?v=20260430-007`, `admin-facturas.js?v=20260430-007`.
+- **Deploy**: rebuild frontend + stop/up. Sintaxis verificada con `node -c`. Health-check 5/5 verde. Backend no tocado.
+
+### 2026-04-30 (mediodía) — UX admin: columna "IVA %" muestra — en facturas multi-IVA
+- **Tabla del panel admin** (`app/frontend/src/admin-facturas.js`): la columna `iva_porcentaje` ahora muestra `—` (gris claro) cuando la factura es multi-IVA (`lineas_iva.length >= 2`). Razón: en multi-IVA, el porcentaje agregado almacenado en la columna `iva_porcentaje` es solo el "tipo dominante" calculado por el backend, no representa la realidad de la factura. El detalle real está en la columna "Desglose" y se edita en el modal de tramos.
+- **Edición bloqueada en multi-IVA**: el lápiz `✏️` desaparece y `cellClick` no abre el modal de edición de IVA %. Para cambiar el IVA % de una factura multi-IVA hay que abrir el modal de Desglose (badge `🧾 N tramos` en la columna Desglose) y editar los tramos individuales.
+- **Mono-IVA sin cambios**: las facturas mono-IVA (sin `lineas_iva` o con `length < 2`) siguen mostrando el porcentaje y el lápiz como antes.
+- **Helpers añadidos**: `formatIvaPctMulti` y `ivaPctCellClick`. La columna usa estos en lugar de `makeEditableFormatter('iva_porcentaje', formatPct)` / `makeEditableCellClick('iva_porcentaje')`.
+- **Cache-buster**: `admin-facturas.js?v=20260430-006`.
+- **Deploy**: rebuild frontend. Health-check 5/5 verde. Backend no tocado.
+
+### 2026-04-30 (mañana) — UX: dedupe de tramos por IVA % + máximo 4 tramos
+- **Nueva regla**: en multi-IVA, **nunca pueden aparecer dos tramos con el mismo IVA %**, y **como máximo 4 tramos** (uno por cada valor de {21, 10, 4, 0}). Caso típico que motiva la regla: el OCR a veces lee dos veces el mismo tramo y devuelve líneas duplicadas con valores idénticos.
+- **Nuevos helpers** en `app/frontend/src/app.js`: `dedupeAndCapTramos(lineas)` (snap IVA % + dedupe por % conservando el primero + cap a 4) y `firstAvailableRate(lineas)` (devuelve el primer % de los 4 que aún no está en uso). Mismos helpers `dedupeAndCapAdminTramos` / `firstAvailableAdminRate` en `app/frontend/src/admin-facturas.js`.
+- **Aplicado en 4 puntos**:
+  1. **Render inicial** (`renderLineasIvaMulti` y `renderDesgloseBlocks`): se deduplica antes de pintar — los tramos duplicados del OCR desaparecen al cargar el modal.
+  2. **`focusout`** de un input de IVA % de tramo: si tras snappear el valor coincide con otro tramo existente, se elimina el duplicado y se re-renderiza.
+  3. **Botón "Añadir tramo"**: ahora calcula el primer % libre y crea el tramo con ese %, p.ej. "➕ Añadir tramo al 10%". Si los 4 tipos ya están presentes, el botón se sustituye por un mensaje "Ya tienes los 4 tipos de IVA posibles (21, 10, 4 y 0)" y no se permite añadir más.
+  4. **Antes de enviar al backend** (`confirmUpload` y `saveDesglose`): salvaguarda final con `dedupeAndCapTramos`.
+- **Cache-busters**: `app.js?v=20260430-005`, `admin-facturas.js?v=20260430-005`.
+- **Deploy**: rebuild frontend + stop/up. Sintaxis verificada con `node -c`. Health-check 5/5 verde. Backend no tocado.
+
+### 2026-04-30 (madrugada) — UX: 3 cuadros (Tramos plegable / IRPF plegable / Resumen no plegable) · snap IVA % {21,10,4,0}
+- **Modal de comprobación reestructurado** (`app/frontend/src/index.html`): el bloque "DESGLOSE IVA" se sustituye por 3 cuadros independientes:
+  1. **`<details id="box-tramos">`** (plegable, abierto si OCR detectó datos): contiene la vista mono (Base/IVA%/Cuota directos) o la vista multi (lista de tramos editables).
+  2. **`<details id="box-irpf">`** (plegable, abierto si OCR detectó IRPF o el proveedor parece persona física): contiene los inputs de "RETENCIÓN IRPF %" y "CUOTA IRPF (€)".
+  3. **`<div id="box-resumen">`** (no plegable, siempre al final): los 4 valores Base / Cuota IVA / Cuota IRPF / Total.
+- **CSS añadido** en `<head>` para `details.box-collapsible` con flecha custom (`▾` que rota -90° al plegar). Marcador nativo oculto multi-navegador (`::-webkit-details-marker { display:none; }` y `::marker { content:'' }`).
+- **Snap de IVA % a {21, 10, 4, 0}** (`snapToValidIvaRate` en `app.js` y `snapAdminIvaRate` en `admin-facturas.js`): España solo admite estos 4 tipos. Si OCR lee "211" → 21; "9,5" → 10; "3" → 4; "0,21" → 21. Aplicado en 3 momentos: (a) al renderizar tramos (corrige errores OCR en pantalla), (b) en `focusout` del input de IVA % (delegation por contenedor), (c) antes de enviar al backend en `confirmUpload` y `saveDesglose`. Mismo snap también en el input mono `confirm-iva-pct` (blur).
+- **Resumen General**: `summary-base` y `summary-cuota-iva` ahora son **readonly** (siempre coinciden con la suma de los tramos en multi-IVA, o con `confirm-base`/`confirm-cuota-iva` en mono). Cumple la restricción del usuario "Cuota IVA del final debe coincidir con la suma de Cuota TRAMO". `summary-cuota-irpf` y `summary-total` siguen editables y bidireccionales con `confirm-cuota-irpf` y `confirm-total`.
+- **Estado plegado por defecto**: en `renderUploadPreview` se marca `box-tramos.open = isMultiIva || hasMonoData` y `box-irpf.open = !!showIrpf`. Si la factura no tiene tramos ni IRPF, ambos cuadros llegan plegados. `showIRPFSection`/`hideIRPFSection` actualizadas para abrir/plegar `box-irpf`.
+- **Lectura unificada mono/multi del resumen**: `updateLineasIvaSummary` detecta qué vista está visible y lee desde tramos o desde los inputs mono. El resumen aparece SIEMPRE (también en mono).
+- **Cache-busters bumpeados**: `app.js?v=20260430-004`, `admin-facturas.js?v=20260430-004`.
+- **Deploy**: rebuild frontend + stop/up. Sintaxis verificada con `node -c`. Health-check 5/5 verde. Backend no tocado.
+
+### 2026-04-30 (noche) — UX: resumen multi-IVA con 4 inputs editables y linkado bidireccional
+- **Resumen multi-IVA reescrito a inputs editables** en `app/frontend/src/app.js` (`updateLineasIvaSummary` + nuevo `wireSummaryInputs`) y `app/frontend/src/admin-facturas.js` (`updateDesgloseSummary` + nuevo `wireDesgSummaryInputs`). Cuatro filas: **Base** · **Cuota IVA** · **Cuota IRPF** (siempre con signo negativo, p.ej. `-25,00`) · **Total**. La identidad `Base + Cuota IVA − Cuota IRPF = Total` se mantiene en cada cambio.
+- **Linkado bidireccional** (modal usuario): `summary-cuota-irpf` ↔ `confirm-cuota-irpf` y `summary-total` ↔ `confirm-total`. Al editar IRPF en el resumen se propaga al campo de arriba y se recalcula Total. Al editar IRPF/Total arriba se refleja en el resumen. Anti-bucle con flag `_summarySyncing` y guarda `_topLevelSummaryListenersWired` para no duplicar listeners en `confirm-total`/`confirm-cuota-irpf` aunque el resumen se re-renderice.
+- **Comportamiento del Total**: al editar Base, Cuota IVA o IRPF se recalcula automáticamente (cuadre garantizado). Al editar Total directamente solo sincroniza con el campo de arriba (no fuerza re-cuadre — el usuario decide qué corregir, igual que `updateIVACalc()` que ya marca con ✗ rojo si rompe la coherencia).
+- **Modal admin**: el resumen guarda `cuota_irpf` y `total_factura` en `desgloseIrpfCuota` (cacheado al abrir modal) y al pulsar "Guardar cambios" se envían ambos al PUT `/api/admin/facturas/:id` junto con `lineas_iva`. La fila Tabulator se actualiza con los nuevos valores en `row.update()`. El backend ya aceptaba esos campos en `EDITABLE`.
+- **Limitación documentada**: en multi-IVA, **Base y Cuota IVA del resumen son la suma de los tramos**. El backend recalcula esos agregados en `normalizeConfirmedLineasIva()` desde `lineas_iva`, así que un override manual en `summary-base`/`summary-cuota-iva` se descarta al guardar (los tramos son la fuente). Para cambiar la base agregada el usuario debe editar los tramos. Total e IRPF SÍ se persisten desde el resumen porque no se recalculan en el backend.
+- **Cache-busters bumpeados**: `app.js?v=20260430-003`, `admin-facturas.js?v=20260430-003`.
+- **Deploy**: rebuild frontend + stop/up. Health-check 5/5 verde. Sintaxis JS verificada con `node -c`.
+
+### 2026-04-30 (tarde) — UX: eliminada UI de productos en desglose IVA · resumen simplificado con Total - IRPF
+- **Eliminada toda la UI de productos en el desglose multi-IVA** (`app/frontend/src/app.js` y `app/frontend/src/admin-facturas.js`): se quitan inputs de descripción/importe, botones "➕ Añadir producto" y "✕" eliminar producto, y la sección "PRODUCTOS DE ESTE TRAMO". Cada bloque-tramo ahora muestra solo IVA % / BASE TRAMO / CUOTA TRAMO. `readLineasIvaFromUI()` y `readDesgloseFromUI()` dejan de leer/serializar el array `productos`. **Backend NO tocado**: el OCR sigue extrayendo productos en `lineas_iva[].productos` y el validador de iva.js los normaliza; el admin Excel export (`/admin/facturas/desglose.xlsx`) los sigue mostrando como columna informativa. Si el usuario edita y guarda, el backend recibe `lineas_iva` sin la propiedad `productos` y el validador la repuebla a `[]` por línea (preserva schema BD).
+- **Resumen multi-IVA reescrito** (`updateLineasIvaSummary` en app.js · `updateDesgloseSummary` en admin-facturas.js): elimina nº tramos, símbolos Σ y "Tipo dominante". Muestra ahora 3 filas apiladas: **Base** (suma de bases), **Cuota IVA** (suma de cuotas), **Total** (= Base + Cuota IVA − Cuota IRPF). En el modal de comprobación lee `#confirm-cuota-irpf` con event listener que recalcula al editar IRPF. En el modal admin lee `rowData.cuota_irpf` cacheado en `desgloseIrpfCuota` al abrir el modal.
+- **Cache-busters bumpeados**: `app.js?v=20260430-002`, `admin-facturas.js?v=20260430-002`.
+- **Deploy**: `docker compose build frontend && stop frontend && up -d frontend`. Health-check 5/5 verde, HTTPS 200.
+
+### 2026-04-30 — UX: panel desglose IVA apilado vertical · fix botón "Ver imagen" admin
+- **Apilado vertical de inputs IVA/IRPF en el modal de confirmación** (`app/frontend/src/index.html`): los recuadros BASE IMPONIBLE / IVA % / CUOTA IVA y los de RETENCIÓN IRPF % / CUOTA IRPF pasan de una fila estrecha (`flex` horizontal) a apilarse verticalmente (`flex-direction:column`) ocupando el 100 % del ancho del panel. Inputs ampliados a `font-size:15px; padding:8px 10px` para mejor legibilidad en móvil. Motivo: en pantallas estrechas los recuadros eran apenas visibles y dificultaban revisar/corregir los valores extraídos por OCR.
+- **Apilado vertical de tramos en vista MULTI-IVA** (`app/frontend/src/app.js` `renderLineasIvaMulti()`): cada tramo IVA muestra IVA % / BASE TRAMO / CUOTA TRAMO uno debajo de otro, con cabecera "TRAMO N" y botón "✕ Eliminar tramo" en la esquina superior derecha. Mismo cambio replicado en el modal de desglose del panel admin (`app/frontend/src/admin-facturas.js` `renderDesgloseBlocks()`).
+- **Fix botón "Ver" columna Imagen del panel admin** (`app/frontend/src/admin-facturas.js` `verImagenAdmin()`): la función usaba `localStorage.getItem('token')` para construir el header `Authorization`, pero desde el rediseño de auth (token en memoria + RT cookie httpOnly) `localStorage` siempre devuelve `null` y la petición fallaba con 401. Refactorizada para usar `authFetch()` (delega en `Auth.apiFetch`) con refresh automático y retry. Añadido soporte para PDFs (iframe) además de imágenes, cierre con tecla Escape, limpieza de URL.createObjectURL, y `aria-label` en el botón cerrar.
+- **Cache-busters bumpeados**: `app.js?v=20260430-001`, `admin-facturas.js?v=20260430-001`.
+- **Deploy**: `docker compose build frontend && stop frontend && up -d frontend`. Health-check 5/5 verde, HTTPS 200, cache-busters servidos correctamente. Backend no tocado.
+
 ### 2026-04-28 — 🏷️ v2.0.0 promocionado a `main` · refactor v3 modular Awilix DI en runtime
 - **Hito**: cierre completo del descongelado del refactor v3. Tag `v2.0.0` publicado en `main @ a1cda6d`. PR #93 mergeado (squash). Deploy a producción ejecutado con `DESPLEGAR`.
 - **Cronología de la sesión** (UTC):
