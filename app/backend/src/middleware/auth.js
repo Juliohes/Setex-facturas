@@ -61,17 +61,20 @@ function makeRequireActiveCompany({ pool, logger }) {
 
     try {
       const { rows } = await pool.query(
-        `SELECT cc.status FROM client_companies cc
-         WHERE cc.nif = (SELECT company_nif FROM users WHERE id = $1)
+        `SELECT cc.activa, cc.pendiente FROM client_companies cc
+         WHERE cc.cif = (SELECT company_nif FROM users WHERE id = $1)
          LIMIT 1`,
         [req.user.userId]
       );
-      const status = rows[0]?.status;
-      if (status === 'active') return next();
-      if (status === 'pending') {
+      const row = rows[0];
+      if (!row) {
+        return res.status(403).json({ error: 'Empresa no encontrada', company_status: 'unknown' });
+      }
+      if (row.activa) return next();
+      if (row.pendiente) {
         return res.status(403).json({ error: 'Empresa pendiente de aprobación', company_status: 'pending' });
       }
-      return res.status(403).json({ error: 'Empresa no activa', company_status: status || 'unknown' });
+      return res.status(403).json({ error: 'Empresa no activa', company_status: 'inactive' });
     } catch (err) {
       logger?.error?.('requireActiveCompany DB error', { message: err.message });
       return res.status(503).json({ error: 'Servicio no disponible' });
