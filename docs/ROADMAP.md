@@ -1,30 +1,22 @@
 # SETEX — Roadmap trimestral 2026
 
-Última actualización: **2026-04-28 09:40 UTC** — tras promoción **v2.0.0 a producción** ✅ (refactor v3 modular Awilix DI en runtime).
+Última actualización: **2026-05-06** — v2.0.0 promocionado el 2026-04-28 09:36 UTC pero **revertido quirúrgicamente el mismo día** por bug LL-002 (contrato `/api/admin/facturas`). Producción runtime corre el monolito 4308 líneas (`server.js`). Detalles: `.claude/CLAUDE.md` §10.2.
 
 ---
 
-## 🎯 Siguiente bloque del proyecto · post-v2.0.0 estabilización + Q3 cleanup
+## 🎯 Siguiente bloque del proyecto · post-rollback v2.0.0 (LL-002)
 
-**Q2 está cerrado al 100%**. v3 modular en runtime en prod desde 2026-04-28 09:36 UTC. Lo siguiente:
+**Q2 ejecutado parcialmente**: v3 modular se intentó promocionar a runtime el 2026-04-28 pero se revirtió quirúrgicamente el mismo día por bug LL-002 (contrato roto en `/api/admin/facturas`). Producción runtime corre el monolito 4308 líneas (`server.js`), container Up >6 días healthy. Lo siguiente (ver Bloque C del plan estratégico 2026-05-05 en `.claude/CLAUDE.md`):
 
-1. **Monitoring 24-48h post-deploy prod** (cron Claude session `754e45ea` cada hora + watchdog cada 5min):
-   - `docker logs setex-prod-backend` sin errores nuevos.
-   - Smoke HTTP horario verde.
-   - Sin reinicios container.
-   - Sin alertas en logs/watchdog.
-
-2. **Si todo verde 7 días** → considerar Q3 cleanup:
-   - Borrar `src/server.legacy.js` (PR de limpieza, post-30 días estable).
-   - Borrar `gemini.js` (266 líneas DESACTIVADO) y `paddleocr.js` (39 líneas sin uso).
-   - Refactor `sanitizeMetaFormat` con wrapper defensivo que prevenga regresiones silenciosas similares al bug del 28-Abr.
-   - Migrar cookie `setex_admin` a Bearer JWT (reduce superficie cookie).
+1. **Refrescar documentos vivos** con realidad post-rollback (en curso, sesión 2026-05-05): CLAUDE.md, MACROPLAN, PLAN-FASE-4, ROADMAP.
+2. **Reforzar paridad CI con shape de respuesta JSON** (no solo status code 200): tests de body shape para endpoints críticos.
+3. **Mergear formalmente `508d7ae`** (revert) a main para sincronizar git con runtime.
+4. **Re-planificar Etapas 5-6** del refactor v3 con la nueva infraestructura de paridad.
+5. **Solo entonces**: Q3 cleanup (borrar `gemini.js`, `paddleocr.js` ya planificado).
 
 ---
 
-## Q2 2026 (abril–junio) — CERRADO ✅
-
-## Q2 2026 (abril–junio)
+## Q2 2026 (abril–junio) — Mayoría completada · v2.0.0 revertido (LL-002)
 
 ### 🚨 Críticas para cerrar al 100% el plan de migración
 
@@ -43,6 +35,8 @@
 - [x] **🏷️ v2.0.0 promocionado a `main`** ✅ (PR #93, squash `a1cda6d`, 2026-04-28 09:33 UTC, tag annotated)
 - [x] **🚀 Deploy a producción ejecutado** ✅ (workflow_dispatch DESPLEGAR, 2026-04-28 09:36 UTC)
 - [x] **Verificación E2E producción** ✅ (server.js v3 60 líneas, 4/4 containers healthy, smoke 3/3, HSTS 10 años, login Zod-validated 400/401 correcto)
+
+> ⚠️ **AVISO POST-ROLLBACK 2026-04-28**: aunque las tareas anteriores marcadas ✅ se ejecutaron correctamente en su momento, el deploy a producción **se revirtió quirúrgicamente el mismo 2026-04-28** por bug LL-002 (contrato `/api/admin/facturas`). Producción runtime corre el monolito 4308 líneas, NO el v3 modular. El revert (`508d7ae`) NO está mergeado a main. La promoción real de v2.0.0 queda **pendiente** hasta completar el Bloque C del plan estratégico 2026-05-05 (ver `.claude/CLAUDE.md` §10.2 + REGLA 11).
 
 > Plan ejecutable detallado: [PLAN-FASE-4-DESCONGELADO-V3.md](plans/PLAN-FASE-4-DESCONGELADO-V3.md)
 
@@ -96,7 +90,7 @@
 
 ### Si el flujo Q2 + FASE 1B van bien
 
-- [ ] **Tag `v2.0.0` publicado** (post FASE 1B etapa 6 · refactor v3 en runtime estable 7+ días)
+- [ ] **Tag `v2.0.0` re-promovido tras LL-002 cerrado** (requiere completar Bloque C del plan estratégico 2026-05-05: paridad CI body shape + revert sincronizado a main + re-validación staging 24-48h)
 - [ ] **Multi-empresa**: soporte para que un usuario gestione facturas de varias empresas (separadas por workspace). Implica cambios en `users` ↔ `companies` (many-to-many).
 - [ ] **Notificaciones email** cuando se procesa una factura (ya hay infra SMTP).
 - [ ] **Backups offsite a S3/Backblaze B2** (~$1/mes) además de la replicación VPS-secundario actual. Hoy el VPS secundario `72.62.189.27` está OK pero ambos son Hostinger → mismo proveedor = riesgo correlacionado.
@@ -131,7 +125,7 @@ Cada 3 meses, Julio (o auditor externo) ejecuta:
 
 ## Indicadores que vigilar (KPIs)
 
-| Indicador | Hoy (2026-04-27) | Objetivo Q3 |
+| Indicador | Hoy (2026-05-06, post-rollback v2.0.0) | Objetivo Q3 |
 |---|---|---|
 | Vulnerabilidades Dependabot abiertas | 0 (cerrada GHSA-w5hq-g745-h8pq el 27-Abr vía override uuid@14) | 0 |
 | Cobertura tests automatizados | 0% (a pesar de `tests/architecture.test.js` + contracts en develop, no se ejecutan en CI todavía) | 30% (validators, calculators, paridad legacy↔v3 vía FASE 1B etapa 2) |
@@ -145,7 +139,7 @@ Cada 3 meses, Julio (o auditor externo) ejecuta:
 
 ## Riesgos residuales conocidos
 
-1. **Refactor v3 congelado en `develop`** (2026-04-27): mientras no se ejecute la Etapa 0 de FASE 1B, cualquier `deploy-staging.yml` desde develop reproduciría el incidente Round 16. **Mitigación inmediata**: hacer Etapa 0 antes de cualquier otro trabajo en develop.
+1. **Descalce git vs runtime tras LL-002** (2026-04-28): `origin/main` declara v2.0.0 desplegado pero producción corre el monolito (rollback quirúrgico). Cualquier `docker compose build && docker compose up -d` desde main reintroduciría el bug LL-002. **Mitigación**: REGLA 11 documentada en CLAUDE.md §4. **Resolución pendiente**: Bloque C plan estratégico 2026-05-05 (mergear `508d7ae` a main + reforzar paridad CI).
 2. **Deuda de ownership root:root** en `/opt/setex/{prod,staging}`: contamina a deploys futuros. Mitigación inmediata aplicada el 27-Abr; mitigación permanente pendiente (chown automatizado en `fix-permissions.sh`).
 3. **Dependencia única de OpenAI + Azure DI**: si ambos caen el mismo día, OCR no funciona. Smoke test diario detecta, pero no resuelve.
 4. **Backups solo locales + replicación VPS-secundario Hostinger**: si Hostinger cae globalmente (poco probable pero posible), perdemos ambos. Mitigación pendiente: S3/B2 (Q3).

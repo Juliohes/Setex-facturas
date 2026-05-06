@@ -57,7 +57,7 @@ SETEX es una asesoría contable y fiscal española que gestiona la administraci�
 
 ### 1.4 Estado: producción + staging
 
-La aplicación está construida y funcionando en producción. OCR integrado, tag **v1.0.0** entregado al cliente 2026-04-21, **v1.1.0** (desglose multi-IVA) en main, **v2.0.0** prevista tras swap del refactor v3. **Esto NO es un proyecto en construcción. ES un producto en producción.**
+La aplicación está construida y funcionando en producción. OCR integrado, tag **v1.0.0** entregado al cliente 2026-04-21, **v1.1.0** (desglose multi-IVA) en main. **v2.0.0 promocionada el 2026-04-28 con bug LL-002 y revertida quirúrgicamente en disco el mismo día**: producción runtime corre el **monolito 4308 líneas**. El revert (`508d7ae`) **no está mergeado a main** — ver §10.1 y REGLA 11. **Esto NO es un proyecto en construcción. ES un producto en producción.**
 
 ### 1.5 Historia breve
 
@@ -155,7 +155,7 @@ Toda la red interna Docker está aislada. Solo el frontend está expuesto vía T
 
 ## 4. REGLAS CRÍTICAS INVIOLABLES
 
-Estas 10 reglas son la frontera de seguridad operativa del proyecto. Violarlas tiene consecuencias en producción.
+Estas 11 reglas son la frontera de seguridad operativa del proyecto. Violarlas tiene consecuencias en producción.
 
 1. **NUNCA** tocar `docker-compose.yml` sin confirmación explícita de Julio
 2. **NUNCA** modificar rutas de auth sin confirmación
@@ -167,6 +167,7 @@ Estas 10 reglas son la frontera de seguridad operativa del proyecto. Violarlas t
 8. **Google Drive, Sheets y n8n eliminados** — no añadir código relacionado
 9. **Scripts bash NUEVOS** deben `source "${SCRIPT_DIR}/lib/paths.sh"` para contenedores/dominio/rutas; NO hardcodear `setex-prod-*`, `setex-staging-*` ni dominios. El fichero paths.sh autodetecta el entorno.
 10. **Auditorías firmadas** (`INFORME_SEGURIDAD.md`, `AUDIT-*.md`, `REVISION_*`, `DECISIONS.md`) son documentos históricos — no reescribir contenido antiguo, solo añadir entradas nuevas al historial
+11. **DESCALCE main vs runtime tras LL-002** — `origin/main` declara v2.0.0 desplegado pero producción corre el monolito 4308 líneas (rollback quirúrgico 2026-04-28). Commit revert `508d7ae` (rama `hotfix/revert-v3-swap-2026-04-28`) **NO mergeado a main**. Cualquier `docker compose build && docker compose up -d` desde main reconstruye con v3 roto y rompe producción. Antes de cualquier deploy desde main: verificar que `508d7ae` está mergeado/aplicado, o aplicar manualmente. Ver §10.2 + INFORME §761-784.
 
 ### 4.x Restricciones del entorno (complemento)
 
@@ -262,7 +263,7 @@ Ver §11 para listado completo. Resumen:
 ├── docs/
 │   ├── INFORME_SISTEMA_COMPLETO.md          ← bitácora viva del producto
 │   ├── plans/MACROPLAN-SETEX-v2.0.md        ← plan maestro 19 áreas FASES 0-4
-│   ├── plans/PLAN-FASE-4-DESCONGELADO-V3.md ← plan en ejecución
+│   ├── plans/PLAN-FASE-4-DESCONGELADO-V3.md ← obsoleto post-LL-002 (ver §10.2)
 │   ├── ROADMAP.md                           ← Q2/Q3/Q4 2026
 │   ├── PLAYBOOK_EMERGENCIAS.md              ← runbook
 │   ├── GUIA_USUARIO.md                      ← manual cliente
@@ -596,7 +597,7 @@ Regla: si el conflicto es complejo, **paras y preguntas**. Nunca resuelvas adivi
 - Smoke HTTP post-deploy bloquea promoción si la superficie API se rompe.
 - Healthcheck Docker apunta a la ruta crítica → `unhealthy` automático si falta.
 
-Detalle completo en `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md` (Etapas 3-4 cerradas).
+Detalle completo en `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md` (Etapas 0-5 cerradas, 6 ejecutada y revertida — ver §10.2).
 
 ---
 
@@ -609,21 +610,26 @@ Detalle completo en `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md` (Etapas 3-4 cerr
 | R1-R4 | ✅ Mergeados a develop (PR #46-#52) | Extracción de `services/audit/`, `services/auth/`, repositories, domain |
 | R5-R15 | ✅ Mergeados | Continuación de la extracción modular |
 | Hotfixes (5) | ✅ Mergeados | Correcciones detectadas durante refactor |
-| **v3 SWAP runtime** | 🟡 PENDIENTE | Etapa 6 del plan FASE 1B — ver `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md` |
+| **v3 SWAP runtime** | ⚠️ EJECUTADO 28-abr Y REVERTIDO (LL-002) | Etapa 6 del plan FASE 1B desplegada 09:36 UTC, bug en contrato `/api/admin/facturas` (`{items, total}` vs `{facturas, total}`). Rollback quirúrgico en disco 09:35-09:57 UTC: `server.js`=monolito 4308 líneas. Commit revert `508d7ae` en `hotfix/revert-v3-swap-2026-04-28` **NO mergeado a main** — ver REGLA 11 |
 
-### 10.2 v3 listo para swap, pendiente de validación
+### 10.2 v3 swap intentado el 28-abr y revertido (LL-002): pendiente re-validación
 
-Las Etapas 0-4 del plan FASE 1B están **mergeadas a `develop`**. El descongelado está blindado:
-- Paridad CI legacy↔v3 corre en cada PR a develop/main.
-- Healthcheck container apunta a ruta crítica.
-- Smoke HTTP post-deploy bloquea promoción.
+Las Etapas 0-4 del plan FASE 1B están **mergeadas a `develop`** y siguen vigentes (paridad CI legacy↔v3 en PRs, healthcheck, smoke HTTP). Sin embargo, la **Etapa 6 (swap real)** se ejecutó el 2026-04-28 09:36 UTC y **rompió producción inmediatamente** por bug **LL-002**: el contrato de respuesta de `/api/admin/facturas` difería entre el monolito (`{facturas, total}`) y el módulo v3 (`{items, total}`). El frontend admin recibió `undefined` y devolvió 404 masivo.
 
-Pendiente de acción humana (Etapas 5-6):
-1. Disparar `deploy-staging.yml` y validar 24-48 h.
-2. Branch `refactor/v3-swap-runtime-2026-XX-XX` desde develop con el rename físico (`mv server.js server.legacy.js && mv server.next.js server.js`), ajustar `package.json` y `eslint.config.js`, PR a develop, merge.
-3. 24-48 h staging adicional con v3 en runtime real.
-4. PR develop → main + tag `v2.0.0` + deploy manual a prod.
-5. Monitoring 24 h en prod + reporte de cierre.
+Lección aprendida: la **paridad CI sólo verificaba superficie de URL** (status code 200), no la **forma del body de respuesta**. El bug atravesó los 3 blindajes: paridad CI ✅, healthcheck ✅, smoke HTTP ✅, todos pasaron porque ninguno comprobaba shape del JSON.
+
+**Estado actual:**
+- Producción runtime: monolito 4308 líneas (`server.js`), container Up >6 días healthy.
+- Filesystem prod tiene el rollback aplicado quirúrgicamente (28-abr 09:35-09:57 UTC).
+- Commit revert `508d7ae` en `hotfix/revert-v3-swap-2026-04-28` **NO mergeado a main** — `main` sigue declarando v2.0.0 desplegado (descalce documentado en REGLA 11).
+- v3 mini en `server.next.js` (untracked, congelado).
+
+**Pendiente para reintentar swap (NO ejecutar sin previo análisis):**
+1. Análisis post-mortem de LL-002 (causa raíz documentada en INFORME §761-784).
+2. Reforzar paridad CI con test de **shape de respuesta** (JSON keys + tipos), no solo status code.
+3. Reforzar smoke HTTP post-deploy con validación de body shape en endpoints críticos (`/api/admin/facturas`, `/api/me/facturas`, `/api/auth/login`).
+4. Mergear o aplicar formalmente el rollback `508d7ae` a `main` para sincronizar git con runtime.
+5. Solo entonces: re-planificar Etapas 5-6 con la nueva infraestructura de paridad.
 
 ### 10.3 Top deudas pendientes (ROADMAP)
 
@@ -652,7 +658,7 @@ ADR-0003 (`docs/adr/0003-typescript-gradual-migration.md`) acepta migración gra
 |---|---|---|
 | `docs/INFORME_SISTEMA_COMPLETO.md` | Bitácora viva del producto (~2 700 líneas) | Por sesión de desarrollo (regla obligatoria §0) |
 | `docs/plans/MACROPLAN-SETEX-v2.0.md` | Plan estratégico vivo (19 áreas, FASES 0-4, runbooks INC-01..10, templates) | Por tarea completada |
-| `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md` | Plan en ejecución del descongelado v3 (Etapas 0-4 ✅, 5-6 🟡) | Por etapa cerrada |
+| `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md` | Plan del descongelado v3, **obsoleto post-LL-002** (Etapas 0-5 ✅, 6 ⚠️ ejecutada y revertida) | Requiere refresco completo |
 | `docs/ROADMAP.md` | Roadmap trimestral 2026 | Trimestral |
 | `docs/PLAYBOOK_EMERGENCIAS.md` | Runbook operativo de emergencias | Por incidente nuevo |
 | `docs/GUIA_USUARIO.md` | Manual del cliente final (RGPD, ventana 00-06, soporte) | Por release con cambios visibles |
