@@ -999,27 +999,21 @@ function showConfirmModal(previewId, campos, meta) {
 
     // ── Sección IVA ────────────────────────────────────────────────────────
     document.getElementById('confirm-base').value = campos.base_imponible || '';
-    document.getElementById('confirm-iva-pct').value = campos.iva_porcentaje || '';
+    // Snap IVA % mono al renderizar (corrige errores OCR como 211 → 21)
+    document.getElementById('confirm-iva-pct').value = snapToValidIvaRate(campos.iva_porcentaje) || (campos.iva_porcentaje || '');
     document.getElementById('confirm-cuota-iva').value = campos.cuota_iva || '';
 
-    // IRPF: mostrar si OCR lo detectó O si el NIF del proveedor parece persona física
-    const irpfPct   = campos.irpf_porcentaje || '0,0';
-    const irpfCuota = campos.cuota_irpf      || '0,00';
-    const hasIrpfValue = irpfPct !== '0,0' && irpfPct !== '0' && irpfCuota !== '0,00' && irpfCuota !== '0';
+    // IRPF: mostrar el cuadro plegable abierto si OCR lo detectó O si el NIF del proveedor parece persona física
+    const irpfPct   = campos.irpf_porcentaje || '';
+    const irpfCuota = campos.cuota_irpf      || '';
+    const hasIrpfValue = (irpfPct && irpfPct !== '0,0' && irpfPct !== '0') || (irpfCuota && irpfCuota !== '0,00' && irpfCuota !== '0');
     // Detectar si el proveedor parece persona física (NIF: 8 dígitos + letra)
     const nifProvStr = (campos.proveedor_nif || '').toUpperCase().replace(/[\s\-\.]/g, '');
     const esPersonaFisica = /^\d{8}[A-Z]$/.test(nifProvStr) || /^[XYZ]\d{7}[A-Z]$/.test(nifProvStr);
     const showIrpf = hasIrpfValue || esPersonaFisica;
 
-    const irpfSection   = document.getElementById('irpf-section');
-    const irpfToggleRow = document.getElementById('irpf-toggle-row');
-    if (irpfSection) {
-        irpfSection.style.display = showIrpf ? 'flex' : 'none';
-        document.getElementById('confirm-irpf-pct').value   = irpfPct;
-        document.getElementById('confirm-cuota-irpf').value = irpfCuota;
-    }
-    // El botón toggle: ocultarlo si ya mostramos el IRPF automáticamente
-    if (irpfToggleRow) irpfToggleRow.style.display = showIrpf ? 'none' : 'block';
+    document.getElementById('confirm-irpf-pct').value   = hasIrpfValue ? irpfPct : '';
+    document.getElementById('confirm-cuota-irpf').value = hasIrpfValue ? irpfCuota : '';
 
     // Multi-IVA 2026-04-21 parte 3/7: decisión visual mono vs multi.
     // Si lineas_iva tiene 2+ tramos → vista multi con bloques editables por tramo.
@@ -1028,19 +1022,22 @@ function showConfirmModal(previewId, campos, meta) {
     const monoEl    = document.getElementById('confirm-iva-mono');
     const multiEl   = document.getElementById('confirm-iva-multi');
     const calcEl    = document.getElementById('confirm-iva-calc');
-    const ivaTitleEl = document.getElementById('confirm-iva-title');
     if (isMultiIva) {
         if (monoEl)    monoEl.style.display  = 'none';
         if (multiEl)   multiEl.style.display = 'block';
         if (calcEl)    calcEl.style.display  = 'none';
-        if (ivaTitleEl) ivaTitleEl.textContent = 'DESGLOSE IVA POR TRAMOS';
         renderLineasIvaMulti(campos.lineas_iva);
     } else {
         if (monoEl)    monoEl.style.display  = 'block';
         if (multiEl)   multiEl.style.display = 'none';
         if (calcEl)    calcEl.style.display  = 'block';
-        if (ivaTitleEl) ivaTitleEl.textContent = 'DESGLOSE IVA';
     }
+    // Política 2026-04-30: cuadros plegados POR DEFECTO. Solo se abren si hay anomalía
+    // detectada (cuenta que no cuadra o campo incompleto), para llamar la atención del usuario.
+    const boxTramos = document.getElementById('box-tramos');
+    if (boxTramos) boxTramos.open = tieneAnomaliaTramos();
+    const boxIrpf = document.getElementById('box-irpf');
+    if (boxIrpf) boxIrpf.open = tieneAnomaliaIrpf();
 
     // Estado de validación IVA del backend
     const ivaStatusEl = document.getElementById('confirm-iva-status');
@@ -1056,6 +1053,9 @@ function showConfirmModal(previewId, campos, meta) {
 
     // Calcular IVA en tiempo real
     updateIVACalc();
+    // Forzar primer render del cuadro RESUMEN (en mono-IVA no se dispara solo,
+    // los listeners 'input' solo reaccionan a edición del usuario, no a .value =).
+    if (typeof updateLineasIvaSummary === 'function') updateLineasIvaSummary();
 
     // Limpiar mensaje previo
     document.getElementById('confirm-message').innerHTML = '';
@@ -1085,27 +1085,24 @@ function showConfirmModal(previewId, campos, meta) {
 // ── Toggle IRPF manual ────────────────────────────────────────────────────────
 
 function showIRPFSection() {
-    const sec = document.getElementById('irpf-section');
-    const row = document.getElementById('irpf-toggle-row');
-    if (sec) sec.style.display = 'flex';
-    if (row) row.style.display = 'none';
-    // Poner foco en el campo porcentaje para que el usuario escriba directamente
+    const box = document.getElementById('box-irpf');
+    if (box) box.open = true;
     const el = document.getElementById('confirm-irpf-pct');
-    if (el) { el.value = ''; el.focus(); }
+    if (el && !el.value) el.focus();
     updateIVACalc();
+    if (typeof updateLineasIvaSummary === 'function') updateLineasIvaSummary();
 }
 
 function hideIRPFSection() {
-    const sec = document.getElementById('irpf-section');
-    const row = document.getElementById('irpf-toggle-row');
-    if (sec) sec.style.display = 'none';
-    if (row) row.style.display = 'block';
-    // Resetear valores a cero para no enviarlos al backend
+    const box = document.getElementById('box-irpf');
+    if (box) box.open = false;
+    // Resetear valores a vacío para no enviarlos al backend
     const pct   = document.getElementById('confirm-irpf-pct');
     const cuota = document.getElementById('confirm-cuota-irpf');
-    if (pct)   pct.value   = '0,0';
-    if (cuota) cuota.value = '0,00';
+    if (pct)   pct.value   = '';
+    if (cuota) cuota.value = '';
     updateIVACalc();
+    if (typeof updateLineasIvaSummary === 'function') updateLineasIvaSummary();
 }
 
 // Flag: si abrimos el modal con history.pushState, lo dejamos consumir el "atrás".
@@ -1156,90 +1153,246 @@ window.addEventListener('popstate', function() {
 
 // ── Multi-IVA 2026-04-21 parte 3/7 ──────────────────────────────────────────
 // Renderiza bloques editables por tramo cuando la factura tiene varios IVAs.
-// Cada bloque permite editar base/cuota + añadir/quitar productos.
+// Cada bloque permite editar IVA % / base / cuota.
 
 function escAttr(s) { return String(s ?? '').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 function escHtmlF(s) { return String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 
+// ── Snap IVA % a {21, 10, 4, 0} ───────────────────────────────────────────
+// España solo admite estos 4 tipos. Si OCR lee "211" → 21; "9.5" → 10; "3" → 4.
+// Acepta entrada en cualquier formato (string/number, con coma o punto, con %)
+// y devuelve un string con el entero válido más cercano. Devuelve '' si no parsea.
+const IVA_RATES_VALIDOS = [21, 10, 4, 0];
+function snapToValidIvaRate(raw) {
+    if (raw === null || raw === undefined || raw === '') return '';
+    const clean = String(raw).replace(',', '.').replace('%', '').trim();
+    let n = parseFloat(clean);
+    if (!Number.isFinite(n)) return '';
+    // Normalizar 0.21 → 21 si vino como decimal
+    if (n > 0 && n < 1) n = n * 100;
+    let bestRate = IVA_RATES_VALIDOS[0];
+    let bestDist = Math.abs(n - bestRate);
+    for (const r of IVA_RATES_VALIDOS) {
+        const d = Math.abs(n - r);
+        if (d < bestDist) { bestDist = d; bestRate = r; }
+    }
+    return String(bestRate);
+}
+
+// Deduplica tramos por IVA % (snappeado) y limita a 4 tramos máximo.
+// Conserva la PRIMERA ocurrencia de cada % — el caso típico es OCR leyendo
+// dos veces el mismo tramo con valores idénticos. Tramos con % no parseable se descartan.
+function dedupeAndCapTramos(lineas) {
+    if (!Array.isArray(lineas)) return lineas;
+    const seen = new Set();
+    const out = [];
+    for (const l of lineas) {
+        const pct = snapToValidIvaRate(l && l.porcentaje);
+        if (pct === '') continue;
+        if (seen.has(pct)) continue;
+        if (out.length >= IVA_RATES_VALIDOS.length) break;
+        seen.add(pct);
+        out.push({ ...l, porcentaje: pct });
+    }
+    return out;
+}
+
+// Devuelve el primer % de IVA_RATES_VALIDOS que NO está presente en los tramos
+// actuales (útil para el botón "Añadir tramo"). null si los 4 ya están.
+function firstAvailableRate(lineas) {
+    const used = new Set((Array.isArray(lineas) ? lineas : []).map(l => snapToValidIvaRate(l && l.porcentaje)));
+    for (const r of IVA_RATES_VALIDOS) {
+        if (!used.has(String(r))) return String(r);
+    }
+    return null;
+}
+
+// Tolerancia para comparar cuotas (céntimos de euro)
+const COHERENCIA_TOL_EUR = 0.02;
+function round2(n) { return Math.round(n * 100) / 100; }
+
+// Detecta si el bloque de tramos tiene alguna anomalía aritmética o campos vacíos.
+// Cubre tanto multi-IVA (lista de tramos) como mono-IVA (los inputs Base/IVA%/Cuota directos).
+function tieneAnomaliaTramos() {
+    const multiEl = document.getElementById('confirm-iva-multi');
+    const isMultiVisible = multiEl && multiEl.style.display !== 'none';
+    if (isMultiVisible) {
+        const lineas = readLineasIvaFromUI();
+        if (!Array.isArray(lineas) || lineas.length === 0) return true; // multi visible sin tramos = anomalía
+        for (const l of lineas) {
+            if (!l.base || !l.cuota || !l.porcentaje) return true;
+            const base  = parseSummaryNum(l.base);
+            const cuota = parseSummaryNum(l.cuota);
+            const pctSnapped = snapToValidIvaRate(l.porcentaje);
+            const pct = pctSnapped !== '' ? parseFloat(pctSnapped) : NaN;
+            if (!Number.isFinite(base) || !Number.isFinite(pct) || !Number.isFinite(cuota)) return true;
+            const cuotaCalc = round2(base * pct / 100);
+            if (Math.abs(cuota - cuotaCalc) > COHERENCIA_TOL_EUR) return true;
+        }
+        return false;
+    }
+    // Modo mono-IVA
+    const baseRaw  = (document.getElementById('confirm-base')?.value || '').trim();
+    const pctRaw   = (document.getElementById('confirm-iva-pct')?.value || '').trim();
+    const cuotaRaw = (document.getElementById('confirm-cuota-iva')?.value || '').trim();
+    if (!baseRaw && !pctRaw && !cuotaRaw) return false; // sin datos → no es anomalía aún
+    if (!baseRaw || !pctRaw || !cuotaRaw) return true;  // alguno vacío → anomalía
+    const base  = parseSummaryNum(baseRaw);
+    const cuota = parseSummaryNum(cuotaRaw);
+    const pctSnapped = snapToValidIvaRate(pctRaw);
+    const pct = pctSnapped !== '' ? parseFloat(pctSnapped) : NaN;
+    if (!Number.isFinite(base) || !Number.isFinite(pct) || !Number.isFinite(cuota)) return true;
+    const cuotaCalc = round2(base * pct / 100);
+    return Math.abs(cuota - cuotaCalc) > COHERENCIA_TOL_EUR;
+}
+
+// Detecta anomalía en IRPF: hay valor parcial, valor sin cuadre, o cuota ≠ base × irpf% / 100.
+function tieneAnomaliaIrpf() {
+    const irpfPctRaw = (document.getElementById('confirm-irpf-pct')?.value || '').trim();
+    const cuotaIrpfRaw = (document.getElementById('confirm-cuota-irpf')?.value || '').trim();
+    // Sin nada → sin anomalía (cuadro plegado).
+    if (!irpfPctRaw && !cuotaIrpfRaw) return false;
+    // Solo uno de los dos → anomalía (incompleto).
+    if (!irpfPctRaw || !cuotaIrpfRaw) return true;
+    const pct = parseFloat(String(irpfPctRaw).replace(',', '.'));
+    const cuotaIrpf = parseSummaryNum(cuotaIrpfRaw);
+    if (!Number.isFinite(pct) || !Number.isFinite(cuotaIrpf)) return true;
+    // Base total para el cálculo: suma de tramos en multi, confirm-base en mono.
+    const multiEl = document.getElementById('confirm-iva-multi');
+    const isMultiVisible = multiEl && multiEl.style.display !== 'none';
+    let baseTotal = 0;
+    if (isMultiVisible) {
+        const lineas = readLineasIvaFromUI() || [];
+        lineas.forEach(l => baseTotal += parseSummaryNum(l.base));
+    } else {
+        baseTotal = parseSummaryNum(document.getElementById('confirm-base')?.value || '');
+    }
+    if (!Number.isFinite(baseTotal) || baseTotal <= 0) return true;
+    const cuotaCalc = round2(baseTotal * pct / 100);
+    return Math.abs(cuotaIrpf - cuotaCalc) > COHERENCIA_TOL_EUR;
+}
+
+// Devuelve true si el tramo cuadra (CUOTA ≈ BASE × IVA% / 100 con tolerancia 0,02€).
+// Si algún valor falta o no es numérico, devuelve null (estado indeterminado, no aviso).
+function tramoCuadra(base, pct, cuota) {
+    if (!Number.isFinite(base) || !Number.isFinite(pct) || !Number.isFinite(cuota)) return null;
+    const cuotaCalc = round2(base * pct / 100);
+    return Math.abs(cuota - cuotaCalc) <= COHERENCIA_TOL_EUR;
+}
+
+// Muestra/oculta el banner de aviso de un bloque-tramo según su coherencia actual.
+// Banner visible solo si los 3 campos están rellenos y los números no cuadran.
+function updateTramoWarning(block) {
+    if (!block) return;
+    const elBase  = block.querySelector('input[data-kind="base"]');
+    const elPct   = block.querySelector('input[data-kind="porcentaje"]');
+    const elCuota = block.querySelector('input[data-kind="cuota"]');
+    const warning = block.querySelector('.tramo-warning');
+    if (!elBase || !elPct || !elCuota || !warning) return;
+    // Si algún campo está vacío, ocultamos (el usuario aún está rellenando).
+    if (!elBase.value.trim() || !elPct.value.trim() || !elCuota.value.trim()) {
+        warning.style.display = 'none';
+        return;
+    }
+    const base  = parseSummaryNum(elBase.value);
+    const cuota = parseSummaryNum(elCuota.value);
+    const pctSnapped = snapToValidIvaRate(elPct.value);
+    const pct = pctSnapped !== '' ? parseFloat(pctSnapped) : NaN;
+    const cuadra = tramoCuadra(base, pct, cuota);
+    warning.style.display = cuadra === false ? 'block' : 'none';
+}
+// Itera todos los bloques visibles y actualiza sus avisos.
+function updateAllTramosWarnings() {
+    document.querySelectorAll('#confirm-lineas-iva-blocks .lineas-iva-block').forEach(updateTramoWarning);
+}
+
+// Recalcula CUOTA o BASE en un bloque-tramo según la regla CUOTA = BASE × IVA% / 100.
+// kind = 'base' | 'cuota' | 'porcentaje' indica qué campo cambió el usuario.
+// Si IVA% es snappeable y los otros valores numéricos, ajusta el campo derivado.
+function recalcCoherenciaTramo(block, kind) {
+    if (!block) return;
+    const elBase  = block.querySelector('input[data-kind="base"]');
+    const elPct   = block.querySelector('input[data-kind="porcentaje"]');
+    const elCuota = block.querySelector('input[data-kind="cuota"]');
+    if (!elBase || !elPct || !elCuota) return;
+    const pctSnapped = snapToValidIvaRate(elPct.value);
+    if (pctSnapped === '') return;
+    const pct = parseFloat(pctSnapped);
+
+    if (kind === 'base' || kind === 'porcentaje') {
+        // BASE × IVA% → CUOTA
+        const base = parseSummaryNum(elBase.value);
+        if (!Number.isFinite(base)) return;
+        if (document.activeElement === elCuota) return; // no pisar lo que el usuario edita
+        elCuota.value = fmtSummaryNum(round2(base * pct / 100));
+    } else if (kind === 'cuota') {
+        // CUOTA × 100 / IVA% → BASE  (si IVA% > 0)
+        if (pct <= 0) return;
+        const cuota = parseSummaryNum(elCuota.value);
+        if (!Number.isFinite(cuota)) return;
+        if (document.activeElement === elBase) return;
+        elBase.value = fmtSummaryNum(round2(cuota * 100 / pct));
+    }
+}
+
 function renderLineasIvaMulti(lineas) {
     const container = document.getElementById('confirm-lineas-iva-blocks');
     if (!container) return;
-    container.innerHTML = (lineas || []).map((l, idx) => {
-        const productosHtml = (Array.isArray(l.productos) ? l.productos : []).map((p, pIdx) => `
-          <div class="lineas-iva-producto" style="display:flex; gap:6px; margin-top:4px; align-items:center;">
-            <input type="text" data-kind="desc" data-tramo="${idx}" data-prod="${pIdx}"
-                   value="${escAttr(p.descripcion || '')}" placeholder="Descripción producto"
-                   maxlength="120" style="flex:3; font-size:12px; padding:4px 6px; border:1px solid #cbd5e0; border-radius:4px;" />
-            <input type="text" data-kind="importe" data-tramo="${idx}" data-prod="${pIdx}"
-                   value="${escAttr(p.importe || '')}" placeholder="0,00"
-                   maxlength="15" style="flex:1; font-size:12px; padding:4px 6px; border:1px solid #cbd5e0; border-radius:4px; text-align:right;" />
-            <button type="button" class="btn-del-producto" data-tramo="${idx}" data-prod="${pIdx}" title="Eliminar producto"
-                    style="background:transparent; border:1px solid #e2e8f0; border-radius:4px; padding:2px 6px; font-size:12px; color:#a0aec0; cursor:pointer;">✕</button>
-          </div>
-        `).join('');
+    // Deduplica por IVA % y limita a 4 tramos antes de renderizar.
+    // Caso típico: OCR lee dos veces el mismo tramo (valores duplicados).
+    const safeLineas = dedupeAndCapTramos(lineas) || [];
+    container.innerHTML = safeLineas.map((l, idx) => {
+        // El % ya viene snappeado desde dedupeAndCapTramos
+        const pctSnapped = l.porcentaje;
         return `
         <div class="lineas-iva-block" data-tramo="${idx}" style="border:1px solid #bee3f8; border-radius:6px; background:#fff; padding:10px; margin-bottom:10px;">
-          <div style="display:flex; gap:6px; margin-bottom:8px; align-items:flex-end;">
-            <div style="flex:1;">
-              <label style="display:block; font-size:10px; font-weight:700; color:#4a90d9; margin-bottom:2px;">IVA %</label>
-              <input type="text" data-kind="porcentaje" data-tramo="${idx}" value="${escAttr(l.porcentaje || '')}"
-                     maxlength="5" placeholder="21,0"
-                     style="width:100%; font-size:13px; padding:4px 6px; border:1px solid #90cdf4; border-radius:4px; text-align:center; font-weight:700;" />
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <span style="font-size:10px; font-weight:700; color:#2b6cb0; letter-spacing:.05em;">TRAMO ${idx + 1}</span>
+            <button type="button" class="btn-del-tramo" data-tramo="${idx}" title="Eliminar tramo"
+                    style="background:transparent; border:1px solid #fbd38d; border-radius:4px; padding:4px 10px; font-size:12px; color:#c05621; cursor:pointer;">✕ Eliminar tramo</button>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:8px;">
+            <div>
+              <label style="display:block; font-size:11px; font-weight:700; color:#4a90d9; margin-bottom:3px;">IVA %</label>
+              <input type="text" data-kind="porcentaje" data-tramo="${idx}" value="${escAttr(pctSnapped)}"
+                     maxlength="3" placeholder="21" inputmode="numeric"
+                     style="width:100%; font-size:14px; padding:7px 10px; border:1px solid #90cdf4; border-radius:6px; text-align:center; font-weight:700; box-sizing:border-box;" />
             </div>
-            <div style="flex:2;">
-              <label style="display:block; font-size:10px; font-weight:700; color:#4a90d9; margin-bottom:2px;">BASE TRAMO</label>
+            <div>
+              <label style="display:block; font-size:11px; font-weight:700; color:#4a90d9; margin-bottom:3px;">BASE TRAMO (€)</label>
               <input type="text" data-kind="base" data-tramo="${idx}" value="${escAttr(l.base || '')}"
                      maxlength="15" placeholder="0,00"
-                     style="width:100%; font-size:13px; padding:4px 6px; border:1px solid #90cdf4; border-radius:4px;" />
+                     style="width:100%; font-size:14px; padding:7px 10px; border:1px solid #90cdf4; border-radius:6px; box-sizing:border-box;" />
             </div>
-            <div style="flex:2;">
-              <label style="display:block; font-size:10px; font-weight:700; color:#4a90d9; margin-bottom:2px;">CUOTA TRAMO</label>
+            <div>
+              <label style="display:block; font-size:11px; font-weight:700; color:#4a90d9; margin-bottom:3px;">CUOTA TRAMO (€)</label>
               <input type="text" data-kind="cuota" data-tramo="${idx}" value="${escAttr(l.cuota || '')}"
                      maxlength="15" placeholder="0,00"
-                     style="width:100%; font-size:13px; padding:4px 6px; border:1px solid #90cdf4; border-radius:4px;" />
+                     style="width:100%; font-size:14px; padding:7px 10px; border:1px solid #90cdf4; border-radius:6px; box-sizing:border-box;" />
             </div>
-            <button type="button" class="btn-del-tramo" data-tramo="${idx}" title="Eliminar tramo"
-                    style="background:transparent; border:1px solid #fbd38d; border-radius:4px; padding:4px 8px; font-size:12px; color:#c05621; cursor:pointer;">✕ Tramo</button>
           </div>
-          <div class="lineas-iva-productos-list" data-tramo="${idx}">
-            <div style="font-size:10px; font-weight:700; color:#718096; margin-bottom:4px;">PRODUCTOS DE ESTE TRAMO</div>
-            ${productosHtml || '<div style="font-size:11px; color:#a0aec0; font-style:italic;">Sin productos detectados por OCR — añade manualmente si procede</div>'}
-            <button type="button" class="btn-add-producto" data-tramo="${idx}" title="Añadir producto"
-                    style="margin-top:6px; background:#ebf8ff; border:1px dashed #90cdf4; color:#2b6cb0; border-radius:4px; padding:4px 8px; font-size:11px; cursor:pointer;">➕ Añadir producto</button>
+          <div class="tramo-warning" style="display:none; margin-top:8px; padding:8px 10px; background:#fff5f5; border:1px solid #fc8181; border-radius:4px; font-size:12px; color:#c53030; font-weight:600;">
+            ⚠ Revisar este tramo: la cuota no cuadra con BASE × IVA % ÷ 100.
           </div>
         </div>`;
     }).join('');
 
-    // Botón global para añadir tramo nuevo
-    const btnAddTramoHtml = `
-      <button type="button" id="btn-add-tramo"
-              style="width:100%; margin-top:4px; background:#f0fff4; border:1px dashed #68d391; color:#276749; border-radius:4px; padding:6px 10px; font-size:12px; cursor:pointer;">
-        ➕ Añadir otro tramo IVA
-      </button>`;
+    // Botón global para añadir tramo nuevo. Solo se permite si quedan tipos de IVA libres.
+    // Como máximo 4 tramos: uno por cada valor de IVA_RATES_VALIDOS (21, 10, 4, 0).
+    const nextRate = firstAvailableRate(safeLineas);
+    const allFull = nextRate === null;
+    const btnAddTramoHtml = allFull
+      ? `<div style="font-size:11px; color:#718096; text-align:center; padding:6px;">Ya tienes los 4 tipos de IVA posibles (21, 10, 4 y 0).</div>`
+      : `<button type="button" id="btn-add-tramo" data-next-rate="${nextRate}"
+                style="width:100%; margin-top:4px; background:#f0fff4; border:1px dashed #68d391; color:#276749; border-radius:4px; padding:6px 10px; font-size:12px; cursor:pointer;">
+          ➕ Añadir tramo al ${nextRate}%
+        </button>`;
     container.insertAdjacentHTML('beforeend', btnAddTramoHtml);
 
     // Event delegation (una sola vez por render)
     container.onclick = (e) => {
         const t = e.target;
-        if (t.classList.contains('btn-del-producto')) {
-            const tramo = parseInt(t.dataset.tramo, 10);
-            const pIdx  = parseInt(t.dataset.prod, 10);
-            const lineasActuales = readLineasIvaFromUI();
-            if (lineasActuales[tramo] && Array.isArray(lineasActuales[tramo].productos)) {
-                lineasActuales[tramo].productos.splice(pIdx, 1);
-                renderLineasIvaMulti(lineasActuales);
-                updateLineasIvaSummary();
-            }
-        } else if (t.classList.contains('btn-add-producto')) {
-            const tramo = parseInt(t.dataset.tramo, 10);
-            const lineasActuales = readLineasIvaFromUI();
-            if (lineasActuales[tramo]) {
-                lineasActuales[tramo].productos = lineasActuales[tramo].productos || [];
-                lineasActuales[tramo].productos.push({ descripcion: '', importe: '' });
-                renderLineasIvaMulti(lineasActuales);
-                updateLineasIvaSummary();
-            }
-        } else if (t.classList.contains('btn-del-tramo')) {
+        if (t.classList.contains('btn-del-tramo')) {
             const tramo = parseInt(t.dataset.tramo, 10);
             const lineasActuales = readLineasIvaFromUI();
             lineasActuales.splice(tramo, 1);
@@ -1247,14 +1400,46 @@ function renderLineasIvaMulti(lineas) {
             updateLineasIvaSummary();
         } else if (t.id === 'btn-add-tramo') {
             const lineasActuales = readLineasIvaFromUI();
-            lineasActuales.push({ porcentaje: '', base: '', cuota: '', productos: [] });
+            const nextRate = t.dataset.nextRate || firstAvailableRate(lineasActuales);
+            if (nextRate === null) return;
+            lineasActuales.push({ porcentaje: nextRate, base: '', cuota: '' });
             renderLineasIvaMulti(lineasActuales);
             updateLineasIvaSummary();
         }
     };
-    container.oninput = () => updateLineasIvaSummary();
+    container.oninput = (e) => {
+        // Coherencia matemática: CUOTA = BASE × IVA% / 100. Si cambia BASE → recalcular CUOTA.
+        // Si cambia CUOTA → recalcular BASE (asume IVA% válido).
+        const t = e && e.target;
+        if (t && t.dataset && (t.dataset.kind === 'base' || t.dataset.kind === 'cuota')) {
+            const block = t.closest('.lineas-iva-block');
+            recalcCoherenciaTramo(block, t.dataset.kind);
+            updateTramoWarning(block);
+        }
+        updateLineasIvaSummary();
+    };
+    // Snap + dedupe + recálculo CUOTA del IVA % al perder foco.
+    container.addEventListener('focusout', (e) => {
+        const t = e.target;
+        if (!t || !t.dataset || t.dataset.kind !== 'porcentaje') return;
+        const snapped = snapToValidIvaRate(t.value);
+        if (snapped === '') return;
+        if (t.value !== snapped) t.value = snapped;
+        // Tras snap, recalcular CUOTA del bloque a partir de BASE × IVA% / 100.
+        const block = t.closest('.lineas-iva-block');
+        recalcCoherenciaTramo(block, 'porcentaje');
+        updateTramoWarning(block);
+        const before = readLineasIvaFromUI() || [];
+        const after = dedupeAndCapTramos(before);
+        if (after.length !== before.length) {
+            renderLineasIvaMulti(after);
+        }
+        updateLineasIvaSummary();
+    });
 
     updateLineasIvaSummary();
+    // Al renderizar (incluido tras OCR), evaluar avisos de cada tramo.
+    updateAllTramosWarnings();
 }
 
 function readLineasIvaFromUI() {
@@ -1268,49 +1453,188 @@ function readLineasIvaFromUI() {
         const base       = block.querySelector(`input[data-kind="base"][data-tramo="${tramoIdx}"]`)?.value.trim() || '';
         const porcentaje = block.querySelector(`input[data-kind="porcentaje"][data-tramo="${tramoIdx}"]`)?.value.trim() || '';
         const cuota      = block.querySelector(`input[data-kind="cuota"][data-tramo="${tramoIdx}"]`)?.value.trim() || '';
-        const productos = [];
-        block.querySelectorAll('.lineas-iva-producto').forEach((row) => {
-            const desc    = row.querySelector('input[data-kind="desc"]')?.value.trim() || '';
-            const importe = row.querySelector('input[data-kind="importe"]')?.value.trim() || '';
-            if (desc || importe) productos.push({ descripcion: desc, importe: importe || null });
-        });
-        out.push({ base, porcentaje, cuota, productos });
+        out.push({ base, porcentaje, cuota });
     });
     return out;
 }
 
+// Helper compartido: parsea un importe en formato español (1.234,56 / 1234,56 / 1234.56)
+function parseSummaryNum(s) {
+    if (s === null || s === undefined || s === '') return 0;
+    const clean = String(s).replace(/\./g, '').replace(',', '.').replace(/[€$\s]/g, '');
+    const n = parseFloat(clean);
+    return Number.isFinite(n) ? n : 0;
+}
+function fmtSummaryNum(n) {
+    return n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// Flag para evitar bucles cuando un listener escribe en otro input que dispara su propio listener.
+let _summarySyncing = false;
+// Flag para garantizar que los listeners sobre #confirm-total y #confirm-cuota-irpf
+// (campos "de arriba" en el modal) se conectan UNA sola vez aunque el resumen se re-renderice.
+let _topLevelSummaryListenersWired = false;
+
 function updateLineasIvaSummary() {
     const summaryEl = document.getElementById('confirm-lineas-iva-summary');
     if (!summaryEl) return;
-    const lineas = readLineasIvaFromUI();
-    if (!lineas || lineas.length === 0) {
-        summaryEl.innerHTML = '<em style="color:#a0aec0;">Sin tramos definidos</em>';
-        return;
+
+    // Fuente de Base y Cuota IVA según el modo activo:
+    //   - Multi-IVA visible → suma de tramos (fuente de verdad).
+    //   - Mono-IVA visible → confirm-base / confirm-cuota-iva.
+    // Cuota IRPF y Total se leen de los campos "de arriba" del modal (linkados).
+    const multiEl = document.getElementById('confirm-iva-multi');
+    const isMultiVisible = multiEl && multiEl.style.display !== 'none';
+    let sumBase = 0, sumCuota = 0;
+    if (isMultiVisible) {
+        const lineas = readLineasIvaFromUI() || [];
+        lineas.forEach((l) => {
+            sumBase  += parseSummaryNum(l.base);
+            sumCuota += parseSummaryNum(l.cuota);
+        });
+    } else {
+        sumBase  = parseSummaryNum(document.getElementById('confirm-base')?.value || '');
+        sumCuota = parseSummaryNum(document.getElementById('confirm-cuota-iva')?.value || '');
     }
-    // Parseador simple de formato español para la suma
-    const parseNum = (s) => {
-        if (!s) return 0;
-        const clean = String(s).replace(/\./g, '').replace(',', '.').replace(/[€$\s]/g, '');
-        const n = parseFloat(clean);
-        return Number.isFinite(n) ? n : 0;
+    const irpf  = Math.abs(parseSummaryNum(document.getElementById('confirm-cuota-irpf')?.value || ''));
+    const total = sumBase + sumCuota - irpf;
+
+    // Solo recreamos el HTML si los inputs aún no existen (primer render).
+    // Base y Cuota IVA son readonly (siempre coinciden con suma de tramos / mono).
+    // Cuota IRPF y Total son editables y bidireccionales con confirm-cuota-irpf y confirm-total.
+    const existingBase = summaryEl.querySelector('#summary-base');
+    if (!existingBase) {
+        summaryEl.innerHTML = `
+          <div style="display:flex; flex-direction:column; gap:8px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+              <label for="summary-base" style="color:#2c5282; font-weight:600;">Base</label>
+              <input type="text" id="summary-base" readonly tabindex="-1"
+                     title="Calculado desde los tramos. Edita los tramos para cambiar este valor."
+                     style="width:130px; font-size:14px; padding:6px 8px; border:1px solid #cbd5e0; border-radius:6px; background:#f7fafc; color:#2c5282; text-align:right; box-sizing:border-box;" />
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+              <label for="summary-cuota-iva" style="color:#2c5282; font-weight:600;">Cuota IVA</label>
+              <input type="text" id="summary-cuota-iva" readonly tabindex="-1"
+                     title="Suma de las cuotas de los tramos. Edita los tramos para cambiar este valor."
+                     style="width:130px; font-size:14px; padding:6px 8px; border:1px solid #cbd5e0; border-radius:6px; background:#f7fafc; color:#2c5282; text-align:right; box-sizing:border-box;" />
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+              <label for="summary-cuota-irpf" style="color:#c05621; font-weight:600;">Cuota IRPF</label>
+              <input type="text" id="summary-cuota-irpf" inputmode="decimal" maxlength="15"
+                     style="width:130px; font-size:14px; padding:6px 8px; border:1px solid #fbd38d; border-radius:6px; background:#fff; text-align:right; color:#c05621; box-sizing:border-box;" />
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; border-top:1px solid #bee3f8; padding-top:8px; margin-top:2px;">
+              <label for="summary-total" style="color:#1a365d; font-weight:700;">Total</label>
+              <input type="text" id="summary-total" inputmode="decimal" maxlength="15"
+                     style="width:130px; font-size:15px; font-weight:700; padding:6px 8px; border:1px solid #1a365d; border-radius:6px; background:#fff; text-align:right; color:#1a365d; box-sizing:border-box;" />
+            </div>
+          </div>`;
+        wireSummaryInputs();
+    }
+
+    // Actualizamos valores SIN disparar listeners propios: usamos el flag _summarySyncing.
+    // Total siempre cuadra: Total = Base + Cuota IVA - Cuota IRPF.
+    // No sobreescribimos un input mientras el usuario lo está editando (foco activo).
+    _summarySyncing = true;
+    try {
+        const elBase = summaryEl.querySelector('#summary-base');
+        const elCuotaIva = summaryEl.querySelector('#summary-cuota-iva');
+        const elIrpf = summaryEl.querySelector('#summary-cuota-irpf');
+        const elTotal = summaryEl.querySelector('#summary-total');
+        const elTopTotal = document.getElementById('confirm-total');
+        elBase.value     = fmtSummaryNum(sumBase);
+        elCuotaIva.value = fmtSummaryNum(sumCuota);
+        if (document.activeElement !== elIrpf)     elIrpf.value     = irpf > 0 ? `-${fmtSummaryNum(irpf)}` : fmtSummaryNum(0);
+        if (document.activeElement !== elTotal)    elTotal.value    = fmtSummaryNum(total);
+        if (elTopTotal && document.activeElement !== elTopTotal) elTopTotal.value = fmtSummaryNum(total);
+    } finally {
+        _summarySyncing = false;
+    }
+}
+
+// Conecta los listeners de los 4 inputs del resumen.
+// Bidireccional: editar IRPF/Total propaga a #confirm-cuota-irpf / #confirm-total y viceversa.
+// Editar Base, Cuota IVA o IRPF recalcula Total. Editar Total NO recalcula otras (cuadre manual).
+function wireSummaryInputs() {
+    const elBase     = document.getElementById('summary-base');
+    const elCuotaIva = document.getElementById('summary-cuota-iva');
+    const elIrpf     = document.getElementById('summary-cuota-irpf');
+    const elTotal    = document.getElementById('summary-total');
+    const elTopTotal = document.getElementById('confirm-total');
+    const elTopIrpf  = document.getElementById('confirm-cuota-irpf');
+    if (!elBase || !elCuotaIva || !elIrpf || !elTotal) return;
+
+    // Base y Cuota IVA del resumen son READONLY: siempre se calculan desde los tramos
+    // (multi-IVA) o desde confirm-base/confirm-cuota-iva (mono). No tienen listener.
+
+    const recalcTotal = () => {
+        const b = parseSummaryNum(elBase.value);
+        const ci = parseSummaryNum(elCuotaIva.value);
+        const ir = Math.abs(parseSummaryNum(elIrpf.value));
+        const t = b + ci - ir;
+        _summarySyncing = true;
+        try {
+            if (document.activeElement !== elTotal)    elTotal.value    = fmtSummaryNum(t);
+            if (elTopTotal && document.activeElement !== elTopTotal) elTopTotal.value = fmtSummaryNum(t);
+        } finally { _summarySyncing = false; }
     };
-    const fmt = (n) => n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    let sumBase = 0, sumCuota = 0, dominantRate = null, dominantCuota = -1;
-    lineas.forEach((l) => {
-        const b = parseNum(l.base);
-        const c = parseNum(l.cuota);
-        sumBase  += b;
-        sumCuota += c;
-        if (c > dominantCuota) { dominantCuota = c; dominantRate = l.porcentaje; }
+
+    elIrpf.addEventListener('input', () => {
+        if (_summarySyncing) return;
+        const ir = Math.abs(parseSummaryNum(elIrpf.value));
+        _summarySyncing = true;
+        try {
+            if (elTopIrpf && document.activeElement !== elTopIrpf) elTopIrpf.value = ir > 0 ? fmtSummaryNum(ir) : '';
+        } finally { _summarySyncing = false; }
+        recalcTotal();
+        if (typeof updateIVACalc === 'function') updateIVACalc();
     });
-    summaryEl.innerHTML = `
-      <div style="display:flex; justify-content:space-between; align-items:center;">
-        <span><strong>${lineas.length}</strong> tramo${lineas.length !== 1 ? 's' : ''}</span>
-        <span>Σ bases: <strong>${fmt(sumBase)}</strong> €</span>
-        <span>Σ cuotas: <strong>${fmt(sumCuota)}</strong> €</span>
-        <span>Total IVA: <strong>${fmt(sumBase + sumCuota)}</strong> €</span>
-        ${dominantRate ? `<span style="color:#2c5282;">Tipo dominante: <strong>${escHtmlF(dominantRate)}%</strong></span>` : ''}
-      </div>`;
+
+    elTotal.addEventListener('input', () => {
+        if (_summarySyncing) return;
+        const t = parseSummaryNum(elTotal.value);
+        _summarySyncing = true;
+        try {
+            if (elTopTotal && document.activeElement !== elTopTotal) elTopTotal.value = fmtSummaryNum(t);
+        } finally { _summarySyncing = false; }
+        if (typeof updateIVACalc === 'function') updateIVACalc();
+    });
+
+    // Inversa: si el usuario edita los campos de arriba, reflejamos en el resumen.
+    // Solo conectamos UNA vez aunque el resumen se re-renderice.
+    if (!_topLevelSummaryListenersWired) {
+        if (elTopIrpf) elTopIrpf.addEventListener('input', () => {
+            if (_summarySyncing) return;
+            const elIrpfNow = document.getElementById('summary-cuota-irpf');
+            if (!elIrpfNow) return;
+            const ir = parseSummaryNum(elTopIrpf.value);
+            _summarySyncing = true;
+            try {
+                if (document.activeElement !== elIrpfNow) elIrpfNow.value = ir > 0 ? `-${fmtSummaryNum(ir)}` : fmtSummaryNum(0);
+            } finally { _summarySyncing = false; }
+            const elBaseNow = document.getElementById('summary-base');
+            const elCuotaNow = document.getElementById('summary-cuota-iva');
+            const elTotalNow = document.getElementById('summary-total');
+            if (elBaseNow && elCuotaNow && elTotalNow) {
+                const t = parseSummaryNum(elBaseNow.value) + parseSummaryNum(elCuotaNow.value) - Math.abs(parseSummaryNum(elIrpfNow.value));
+                _summarySyncing = true;
+                try {
+                    if (document.activeElement !== elTotalNow) elTotalNow.value = fmtSummaryNum(t);
+                    if (document.activeElement !== elTopTotal) elTopTotal.value = fmtSummaryNum(t);
+                } finally { _summarySyncing = false; }
+            }
+        });
+        if (elTopTotal) elTopTotal.addEventListener('input', () => {
+            if (_summarySyncing) return;
+            const elTotalNow = document.getElementById('summary-total');
+            if (!elTotalNow) return;
+            _summarySyncing = true;
+            try {
+                if (document.activeElement !== elTotalNow) elTotalNow.value = fmtSummaryNum(parseSummaryNum(elTopTotal.value));
+            } finally { _summarySyncing = false; }
+        });
+        _topLevelSummaryListenersWired = true;
+    }
 }
 
 async function confirmUpload() {
@@ -1326,7 +1650,9 @@ async function confirmUpload() {
     const confirmed_receptor_nif     = document.getElementById('confirm-receptor-nif')?.value?.trim().toUpperCase().replace(/[\s\-\.]/g, '') || '';
     // Campos IVA corregibles por el usuario — modo mono (un solo tramo editable)
     const confirmed_base_imponible  = document.getElementById('confirm-base').value.trim();
-    const confirmed_iva_porcentaje  = document.getElementById('confirm-iva-pct').value.trim();
+    // Snap final del IVA % mono a {21,10,4,0} antes de enviar al backend
+    const confirmed_iva_porcentaje  = snapToValidIvaRate(document.getElementById('confirm-iva-pct').value)
+                                       || document.getElementById('confirm-iva-pct').value.trim();
     const confirmed_cuota_iva       = document.getElementById('confirm-cuota-iva').value.trim();
     const confirmed_irpf_porcentaje = document.getElementById('confirm-irpf-pct')?.value?.trim() || '';
     const confirmed_cuota_irpf      = document.getElementById('confirm-cuota-irpf')?.value?.trim() || '';
@@ -1335,7 +1661,11 @@ async function confirmUpload() {
     // los tramos editados. El backend (parte 2/7) recalculará base/cuota/iva%
     // como suma + tipo dominante, sobreescribiendo los campos mono si ambos se
     // envían (el normalizeConfirmedLineasIva tiene prioridad sobre los agregados).
-    const confirmed_lineas_iva = readLineasIvaFromUI();
+    // Snap + dedupe + cap a 4 tramos antes de enviar (regla 2026-04-30: 1 tramo por % máx 4).
+    const _rawLineas = readLineasIvaFromUI();
+    const confirmed_lineas_iva = Array.isArray(_rawLineas)
+        ? dedupeAndCapTramos(_rawLineas)
+        : _rawLineas;
 
     const msgEl = document.getElementById('confirm-message');
 
@@ -1516,8 +1846,54 @@ if (elRemoveIrpf) elRemoveIrpf.addEventListener('click', hideIRPFSection);
 // Validación IVA en tiempo real mientras el usuario edita
 ['confirm-base', 'confirm-iva-pct', 'confirm-cuota-iva', 'confirm-total', 'confirm-cuota-irpf'].forEach(id => {
     const el = document.getElementById(id);
-    if (el) el.addEventListener('input', updateIVACalc);
+    if (el) {
+        el.addEventListener('input', updateIVACalc);
+        // Cualquier campo del bloque IVA mono/IRPF/total afecta al resumen general
+        el.addEventListener('input', () => { if (typeof updateLineasIvaSummary === 'function') updateLineasIvaSummary(); });
+    }
 });
+
+// Snap + coherencia matemática del IVA % mono al perder foco.
+// Al snappear el %, recalculamos cuota mono = base × % / 100 (si base definida).
+const elIvaPctMono = document.getElementById('confirm-iva-pct');
+if (elIvaPctMono) {
+    elIvaPctMono.addEventListener('blur', () => {
+        const snapped = snapToValidIvaRate(elIvaPctMono.value);
+        if (snapped !== '' && elIvaPctMono.value !== snapped) {
+            elIvaPctMono.value = snapped;
+        }
+        recalcCoherenciaMono('porcentaje');
+        updateIVACalc();
+        if (typeof updateLineasIvaSummary === 'function') updateLineasIvaSummary();
+    });
+}
+
+// Coherencia mono CUOTA = BASE × IVA% / 100 mientras el usuario edita.
+function recalcCoherenciaMono(kind) {
+    const elBase  = document.getElementById('confirm-base');
+    const elPct   = document.getElementById('confirm-iva-pct');
+    const elCuota = document.getElementById('confirm-cuota-iva');
+    if (!elBase || !elPct || !elCuota) return;
+    const pctSnapped = snapToValidIvaRate(elPct.value);
+    if (pctSnapped === '') return;
+    const pct = parseFloat(pctSnapped);
+    if (kind === 'base' || kind === 'porcentaje') {
+        const base = parseSummaryNum(elBase.value);
+        if (!Number.isFinite(base)) return;
+        if (document.activeElement === elCuota) return;
+        elCuota.value = fmtSummaryNum(round2(base * pct / 100));
+    } else if (kind === 'cuota') {
+        if (pct <= 0) return;
+        const cuota = parseSummaryNum(elCuota.value);
+        if (!Number.isFinite(cuota)) return;
+        if (document.activeElement === elBase) return;
+        elBase.value = fmtSummaryNum(round2(cuota * 100 / pct));
+    }
+}
+const _elBaseMono = document.getElementById('confirm-base');
+const _elCuotaMono = document.getElementById('confirm-cuota-iva');
+if (_elBaseMono)  _elBaseMono.addEventListener('input',  () => recalcCoherenciaMono('base'));
+if (_elCuotaMono) _elCuotaMono.addEventListener('input', () => recalcCoherenciaMono('cuota'));
 
 // Auto-capitalizar NIF en registro
 document.getElementById('register-company-nif').addEventListener('input', function() {
