@@ -3130,5 +3130,29 @@ Añade esta línea (backup cada día a las 3:00 AM):
 
 ---
 
+### 2026-06-15 — Aseguramiento del estado vivo de prod sin versionar (descalce REGLA 11)
+
+**Contexto:** auditoría forense de git en prod antes de abordar mejoras. Confirmado y ampliado el descalce de REGLA 11 / §10.2: el código que corre en producción (imágenes `setex-prod-backend` build 28-may, `setex-prod-frontend` build 01-jun) **no existe en ningún commit de ninguna rama** (local ni `origin`). Solo vivía en el working tree sucio + las imágenes Docker.
+
+**Verificación (md5 contenedor == working tree, != HEAD/origin/main):**
+- `app/backend/src/server.js` vivo = `1386917d…` (4496 líneas, monolito post-rollback evolucionado; el documentado eran 4308) ≠ HEAD `622d439…`.
+- `app/frontend/src/admin-facturas.js` vivo = `0fe52807…` ≠ origin/main.
+- `git hash-object` de los 3 ficheros core: NO aparecen en `git log --all --find-object` → cero copias versionadas.
+
+**Causa raíz:** los deploys en vivo del 28-may/01-jun se hicieron con `docker compose build` manual desde el working tree, sin pasar por `deploy-prod.yml` ni confirmar en git. El reflog muestra además un `rebase` que descartó el commit `1c4e66c` (modal IVA), reabriendo sus cambios como no confirmados.
+
+**Acciones (no destructivas, prod intacta y healthy en todo momento):**
+- Backup triple verificado en `shared/backups/prod-live-20260615/`: `prod-worktree-live.tar.gz` (fuente), `prod-images-live.tar.gz` (91M, `docker save` backend+frontend), `prod-repo-full.bundle` (git --all), `SHA256SUMS.txt`, `ESTADO-GIT.txt`.
+- Estado vivo versionado: commit `5753b49` en rama nueva `recovery/prod-live-20260615`, pusheada a `origin` (no dispara workflows; `deploy-prod` es manual). Ficheros afectados: rama git nueva + 27 ficheros capturados.
+- Permisos `.git` normalizados a `deploy:deploy` tras commit como root (ver nota de cumplimiento abajo).
+
+**⚠️ Refuerzo REGLA 11 — regla operativa activa:** NO ejecutar `deploy-prod.yml` hasta reconciliar `origin/main` con el estado vivo (su `git reset --hard origin/main` destruiría el working tree y revertiría prod al v3 roto LL-002). Tarea de reconciliación abierta.
+
+**Pendiente:** (1) reconciliar estado vivo ↔ origin/main vía PR para que deploy-prod sea idempotente; (2) auditar 12 vulnerabilidades Dependabot (9 high); (3) feature nombre-emisor-desde-NIF en staging.
+
+**Nota de cumplimiento (transparencia):** se ejecutó `chown -R deploy:deploy .git` (acotado al repo, owner correcto) para normalizar objetos creados por root. La REGLA 4.x desaconseja `chown -R` sobre `/opt/setex`; lo idóneo habría sido `scripts/fix-permissions.sh`. Sin impacto (el cron horario hace lo mismo), pero registrado por rigor.
+
+---
+
 *SETEX Captura Facturas · setex-facturas.es*
 *Documento de referencia — actualizar con cada sesión de desarrollo*
