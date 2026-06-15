@@ -167,6 +167,20 @@ function makeEditableFormatter(field, innerFormatter) {
   };
 }
 
+// Formatter UNIFICADO de IVA %: fusiona la antigua columna "IVA %" con la antigua "Desglose".
+//   - Multi-IVA (lineas_iva.length >= 2)  → badge "🧾 N tramos" clickable (abre modal desglose).
+//   - Mono-IVA (length 0/1 o sin lineas)  → porcentaje editable con lápiz, igual que antes.
+function formatIvaPctUnified(cell) {
+  const row = cell.getRow().getData();
+  const lineas = row.lineas_iva;
+  const isMulti = Array.isArray(lineas) && lineas.length >= 2;
+  if (isMulti) {
+    return `<span class="desglose-badge" title="Click para ver/editar el desglose completo" style="background:#ebf8ff;color:#2b6cb0;border:1px solid #90cdf4;border-radius:10px;padding:2px 8px;font-size:11px;font-weight:700;cursor:pointer;">🧾 ${lineas.length} tramos</span>`;
+  }
+  const val = formatPct(cell);
+  return `<span class="cell-val">${val}</span><button class="edit-cell-btn" title="Editar IVA %">✏️</button>`;
+}
+
 function makeEditableCellClick(field) {
   return (_e, cell) => {
     // Solo abrir modal si el click fue en el botón de editar
@@ -174,6 +188,21 @@ function makeEditableCellClick(field) {
       openEditModal(cell.getRow().getData(), field);
     }
   };
+}
+
+// CellClick UNIFICADO de IVA %:
+//   - Multi-IVA: cualquier click sobre el badge abre el modal de desglose.
+//   - Mono-IVA: delega en el botón ✏️ para abrir el modal de edición de IVA %.
+function ivaPctUnifiedCellClick(_e, cell) {
+  const row = cell.getRow().getData();
+  const isMulti = Array.isArray(row.lineas_iva) && row.lineas_iva.length >= 2;
+  if (isMulti) {
+    openDesgloseModal(row);
+    return;
+  }
+  if (_e.target.classList.contains('edit-cell-btn')) {
+    openEditModal(row, 'iva_porcentaje');
+  }
 }
 
 function formatEuro(cell) {
@@ -241,16 +270,107 @@ function formatImagen(cell) {
   return '<span style="color:#a0aec0">—</span>';
 }
 
-// Multi-IVA 2026-04-21 parte 4/7: badge en tabla que abre modal de desglose
-function formatDesglose(cell) {
-  const lineas = cell.getValue();
-  if (!Array.isArray(lineas) || lineas.length === 0) return '<span style="color:#a0aec0">—</span>';
-  if (lineas.length === 1) return '<span style="color:#718096;font-size:11px;" title="Un solo tramo IVA">1 tramo</span>';
-  return `<span class="desglose-badge" title="Click para ver/editar el desglose completo" style="background:#ebf8ff;color:#2b6cb0;border:1px solid #90cdf4;border-radius:10px;padding:2px 8px;font-size:11px;font-weight:700;cursor:pointer;">🧾 ${lineas.length} tramos</span>`;
+// ── Visor PDF multiplataforma (PDF.js, render en <canvas>) ───────────────────
+// Los navegadores móviles (Safari iOS, Chrome Android) NO renderizan PDF dentro
+// de <iframe>/<embed>/<object>: quedaba en blanco en el móvil aunque funcionara
+// en escritorio. PDF.js dibuja cada página en un <canvas> por software, así que
+// el visor funciona igual en escritorio y móvil. La librería se sirve self-hosted
+// (pdf.min.js + pdf.worker.min.js) → encaja en la CSP `script-src 'self'` sin
+// tocarla. Reemplaza al antiguo iframe (cambio 2026-06-01).
+if (window.pdfjsLib) {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdf.worker.min.js';
 }
 
-function verImagenAdmin(id) {
-  const token = localStorage.getItem('token');
+// Renderiza un PDF (blobUrl) dentro de `container`: barra fija con botón
+// "Descargar PDF" (red de seguridad multiplataforma) + todas las páginas
+// apiladas en <canvas> con scroll. Si PDF.js no estuviera disponible o fallara,
+// degrada con elegancia dejando la descarga operativa. `blobUrl` debe seguir
+// vivo mientras el visor esté abierto.
+async function renderPdfInto(container, blobUrl, downloadName) {
+  container.innerHTML = '';
+
+  const bar = document.createElement('div');
+  bar.style.cssText = 'position:sticky;top:0;z-index:1;display:flex;justify-content:flex-end;padding:8px;background:rgba(0,0,0,0.55);';
+  const dl = document.createElement('a');
+  dl.href = blobUrl;
+  dl.download = downloadName || 'factura.pdf';
+  dl.textContent = '⬇ Descargar PDF';
+  dl.style.cssText = 'background:#fff;color:#1a202c;text-decoration:none;padding:6px 12px;border-radius:6px;font-size:13px;font-weight:600;';
+  dl.addEventListener('click', (e) => e.stopPropagation());
+  bar.appendChild(dl);
+  container.appendChild(bar);
+
+  const pages = document.createElement('div');
+  pages.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:12px;padding:12px;';
+  container.appendChild(pages);
+
+  const note = (txt) => {
+    const p = document.createElement('p');
+    p.style.cssText = 'color:#fff;font-size:14px;text-align:center;padding:8px;';
+    p.textContent = txt;
+    pages.appendChild(p);
+  };
+
+  if (!window.pdfjsLib) { note('Pulsa «Descargar PDF» para abrir la factura.'); return; }
+
+  try {
+    const pdf = await pdfjsLib.getDocument({ url: blobUrl }).promise;
+    const scale = Math.min(window.devicePixelRatio || 1, 2) * 1.5;
+    for (let n = 1; n <= pdf.numPages; n++) {
+      const page = await pdf.getPage(n);
+      const viewport = page.getViewport({ scale });
+      const canvas = document.createElement('canvas');
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      canvas.style.cssText = 'width:min(92vw,900px);height:auto;border-radius:6px;box-shadow:0 4px 24px rgba(0,0,0,0.5);background:#fff;';
+      canvas.addEventListener('click', (e) => e.stopPropagation());
+      pages.appendChild(canvas);
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+    }
+  } catch (err) {
+    note('No se pudo renderizar el PDF. Usa «Descargar PDF» para abrirlo.');
+  }
+}
+
+// Helpers del lightbox: convive una imagen (<img>) y un contenedor PDF (canvas
+// vía PDF.js, lazy-creado) para que tanto JPG/PNG como PDFs se previsualicen a
+// pantalla completa en cualquier dispositivo.
+function openLightbox(url, isPdf) {
+  const lb  = document.getElementById('lightbox');
+  const img = document.getElementById('lightbox-img');
+  let pdfBox = document.getElementById('lightbox-pdf');
+  if (!pdfBox) {
+    pdfBox = document.createElement('div');
+    pdfBox.id = 'lightbox-pdf';
+    pdfBox.style.cssText = 'width:min(95vw,920px);max-height:95vh;overflow:auto;border-radius:6px;background:#222;cursor:auto;';
+    pdfBox.addEventListener('click', (e) => e.stopPropagation());
+    lb.appendChild(pdfBox);
+  }
+  if (isPdf) {
+    img.style.display = 'none';
+    img.src = '';
+    pdfBox.style.display = 'block';
+    renderPdfInto(pdfBox, url, 'factura.pdf');
+  } else {
+    pdfBox.style.display = 'none';
+    pdfBox.innerHTML = '';
+    img.src = url;
+    img.style.display = 'block';
+  }
+  lb.style.display = 'flex';
+}
+
+function closeLightbox() {
+  const lb = document.getElementById('lightbox');
+  if (!lb) return;
+  lb.style.display = 'none';
+  const img = document.getElementById('lightbox-img');
+  if (img) img.src = '';
+  const pdfBox = document.getElementById('lightbox-pdf');
+  if (pdfBox) { pdfBox.style.display = 'none'; pdfBox.innerHTML = ''; }
+}
+
+async function verImagenAdmin(id) {
   const url = `${API_URL}/admin/facturas/${id}/imagen`;
 
   const overlay = document.createElement('div');
@@ -262,28 +382,46 @@ function verImagenAdmin(id) {
 
   const closeBtn = document.createElement('button');
   closeBtn.textContent = '×';
+  closeBtn.setAttribute('aria-label', 'Cerrar');
   closeBtn.style.cssText = 'position:fixed;top:18px;right:18px;background:#fff;border:none;border-radius:50%;width:36px;height:36px;font-size:22px;cursor:pointer;line-height:1;box-shadow:0 2px 8px rgba(0,0,0,0.4);z-index:10000;';
-  closeBtn.addEventListener('click', () => overlay.remove());
 
+  let imgUrl = null;
+  const cleanup = () => {
+    if (imgUrl) { URL.revokeObjectURL(imgUrl); imgUrl = null; }
+    document.removeEventListener('keydown', onKey);
+    overlay.remove();
+  };
+  const onKey = (e) => { if (e.key === 'Escape') cleanup(); };
+
+  closeBtn.addEventListener('click', cleanup);
   overlay.appendChild(content);
   overlay.appendChild(closeBtn);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) cleanup(); });
+  document.addEventListener('keydown', onKey);
   document.body.appendChild(overlay);
 
-  fetch(url, { headers: { 'Authorization': `Bearer ${token}` } })
-    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
-    .then(blob => {
-      const imgUrl = URL.createObjectURL(blob);
+  try {
+    const res = await authFetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const blob = await res.blob();
+    imgUrl = URL.createObjectURL(blob);
+    const isPdf = (blob.type || '').toLowerCase().includes('pdf');
+    content.innerHTML = '';
+    if (isPdf) {
+      // PDF.js en <canvas> — funciona en móvil y escritorio (antes: iframe, en
+      // blanco en móvil). El contenedor pasa a scroll vertical para multipágina.
+      content.style.cssText = 'position:relative;width:min(95vw,920px);max-height:92vh;overflow:auto;border-radius:8px;background:#222;box-shadow:0 4px 32px rgba(0,0,0,0.6);';
+      await renderPdfInto(content, imgUrl, `factura-${id}.pdf`);
+    } else {
       const img = document.createElement('img');
       img.src = imgUrl;
+      img.alt = 'Imagen de la factura';
       img.style.cssText = 'max-width:90vw;max-height:90vh;border-radius:8px;box-shadow:0 4px 32px rgba(0,0,0,0.6);';
-      img.addEventListener('load', () => URL.revokeObjectURL(imgUrl));
-      content.innerHTML = '';
       content.appendChild(img);
-    })
-    .catch((err) => {
-      content.innerHTML = `<p style="color:#fff;font-size:14px;">No se pudo cargar la imagen (${err.message}).</p>`;
-    });
+    }
+  } catch (err) {
+    content.innerHTML = `<p style="color:#fff;font-size:14px;">No se pudo cargar la imagen (${escHtml(err.message || 'error')}).</p>`;
+  }
 }
 
 function initTable() {
@@ -295,7 +433,7 @@ function initTable() {
     placeholder: 'No hay facturas con los filtros aplicados',
     movableColumns: true,
     persistence: { sort: true, columns: ['width'] },
-    persistenceID: 'setex-admin-facturas-v8',
+    persistenceID: 'setex-admin-facturas-v9',
     columns: [
       { title: 'ID',               field: 'codigo_cliente',  width: 90,  sorter: 'string', hozAlign: 'center', frozen: true,
         formatter: (cell) => { const v = cell.getValue(); return v ? `<code style="font-size:12px;font-weight:700;">${escHtml(v)}</code>` : '<span style="color:#a0aec0;">—</span>'; } },
@@ -314,21 +452,14 @@ function initTable() {
       { title: 'Fecha',            field: 'fecha_emision',   width: 110, sorter: 'string', formatter: makeEditableFormatter('fecha_emision'), cellClick: makeEditableCellClick('fecha_emision') },
       { title: 'Base Imp.',        field: 'base_imponible',  width: 115, sorter: 'string', hozAlign: 'right',
         formatter: makeEditableFormatter('base_imponible', formatEuroStr), cellClick: makeEditableCellClick('base_imponible') },
-      { title: 'IVA %',            field: 'iva_porcentaje',  width: 80,  sorter: 'string', hozAlign: 'center',
-        formatter: makeEditableFormatter('iva_porcentaje', formatPct), cellClick: makeEditableCellClick('iva_porcentaje') },
+      { title: 'IVA %',            field: 'iva_porcentaje',  width: 110, sorter: 'string', hozAlign: 'center', headerSort: false,
+        formatter: formatIvaPctUnified, cellClick: ivaPctUnifiedCellClick },
       { title: 'Cuota IVA',        field: 'cuota_iva',       width: 110, sorter: 'string', hozAlign: 'right',
         formatter: makeEditableFormatter('cuota_iva', formatEuroStr), cellClick: makeEditableCellClick('cuota_iva') },
       { title: 'IRPF %',           field: 'irpf_porcentaje', width: 80,  sorter: 'string', hozAlign: 'center',
         formatter: makeEditableFormatter('irpf_porcentaje', formatPct), cellClick: makeEditableCellClick('irpf_porcentaje') },
       { title: 'Cuota IRPF',       field: 'cuota_irpf',      width: 110, sorter: 'string', hozAlign: 'right',
         formatter: makeEditableFormatter('cuota_irpf', formatEuroStr), cellClick: makeEditableCellClick('cuota_irpf') },
-      { title: 'Desglose',         field: 'lineas_iva',      width: 100, hozAlign: 'center', headerSort: false,
-        formatter: formatDesglose, cellClick: (_e, cell) => {
-          const lineas = cell.getValue();
-          if (!Array.isArray(lineas) || lineas.length < 2) return; // solo multi-IVA abre modal
-          openDesgloseModal(cell.getRow().getData());
-        }
-      },
       { title: 'Total',            field: 'total_factura',   width: 120, sorter: 'number', hozAlign: 'right',
         cellStyle: () => ({ fontWeight: '700', color: '#1a365d' }),
         formatter: makeEditableFormatter('total_factura', formatEuro), cellClick: makeEditableCellClick('total_factura') },
@@ -713,14 +844,20 @@ window._empVerFacturas = async function(id, cif, nombre) {
           if (!ir.ok) throw new Error('sin imagen');
           const blob = await ir.blob();
           const url  = URL.createObjectURL(blob);
-          img.src = url;
-          img.style.display = 'block';
-          ph.style.display  = 'none';
-          img.onclick = () => {
-            const lb = document.getElementById('lightbox');
-            document.getElementById('lightbox-img').src = url;
-            lb.style.display = 'flex';
-          };
+          const isPdf = (blob.type || '').toLowerCase().includes('pdf');
+          if (isPdf) {
+            // Los PDFs no se pueden previsualizar dentro de <img>: mostramos icono PDF
+            // clicable en la tarjeta y, al pulsar, abrimos el lightbox con PDF.js.
+            ph.textContent = '📄 PDF';
+            ph.style.cursor = 'pointer';
+            ph.title = 'Abrir PDF';
+            ph.onclick = () => openLightbox(url, true);
+          } else {
+            img.src = url;
+            img.style.display = 'block';
+            ph.style.display  = 'none';
+            img.onclick = () => openLightbox(url, false);
+          }
         } catch {
           ph.textContent = '📄';
           ph.title = 'Imagen no disponible';
@@ -936,15 +1073,15 @@ function initEmpresaModal() {
     if (e.target === document.getElementById('facemp-modal')) document.getElementById('facemp-modal').style.display = 'none';
   });
 
-  // Lightbox: cerrar al hacer click sobre el fondo
+  // Lightbox: cerrar al hacer click sobre el fondo (limpia también el iframe PDF)
   document.getElementById('lightbox').addEventListener('click', () => {
-    document.getElementById('lightbox').style.display = 'none';
+    closeLightbox();
   });
 
   // Cerrar con Escape
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-      document.getElementById('lightbox').style.display = 'none';
+      closeLightbox();
       document.getElementById('facemp-modal').style.display = 'none';
     }
   });
@@ -1408,14 +1545,122 @@ async function init() {
 }
 
 // ── Multi-IVA 2026-04-21 parte 4/7 — Modal desglose admin ────────────────────
-// Permite al admin ver/editar los tramos IVA (y productos) de una factura
-// multi-IVA. Reutiliza el patrón del modal de comprobación pero con submit PUT
-// a /api/admin/facturas/:id y refresh de la fila Tabulator tras éxito.
+// Permite al admin ver/editar los tramos IVA de una factura multi-IVA.
+// Reutiliza el patrón del modal de comprobación pero con submit PUT a
+// /api/admin/facturas/:id y refresh de la fila Tabulator tras éxito.
+
+// Snap IVA % a {21,10,4,0} (España solo admite estos tipos)
+const ADMIN_IVA_RATES_VALIDOS = [21, 10, 4, 0];
+function snapAdminIvaRate(raw) {
+  if (raw === null || raw === undefined || raw === '') return '';
+  const clean = String(raw).replace(',', '.').replace('%', '').trim();
+  let n = parseFloat(clean);
+  if (!Number.isFinite(n)) return '';
+  if (n > 0 && n < 1) n = n * 100;
+  let bestRate = ADMIN_IVA_RATES_VALIDOS[0];
+  let bestDist = Math.abs(n - bestRate);
+  for (const r of ADMIN_IVA_RATES_VALIDOS) {
+    const d = Math.abs(n - r);
+    if (d < bestDist) { bestDist = d; bestRate = r; }
+  }
+  return String(bestRate);
+}
+
+// Deduplica tramos por % (snappeado) y limita a 4. Conserva el primero.
+function dedupeAndCapAdminTramos(lineas) {
+  if (!Array.isArray(lineas)) return lineas;
+  const seen = new Set();
+  const out = [];
+  for (const l of lineas) {
+    const pct = snapAdminIvaRate(l && l.porcentaje);
+    if (pct === '') continue;
+    if (seen.has(pct)) continue;
+    if (out.length >= ADMIN_IVA_RATES_VALIDOS.length) break;
+    seen.add(pct);
+    out.push({ ...l, porcentaje: pct });
+  }
+  return out;
+}
+
+function firstAvailableAdminRate(lineas) {
+  const used = new Set((Array.isArray(lineas) ? lineas : []).map(l => snapAdminIvaRate(l && l.porcentaje)));
+  for (const r of ADMIN_IVA_RATES_VALIDOS) {
+    if (!used.has(String(r))) return String(r);
+  }
+  return null;
+}
+
+function _round2Admin(n) { return Math.round(n * 100) / 100; }
+const ADMIN_COHERENCIA_TOL_EUR = 0.02;
+
+function tramoCuadraAdmin(base, pct, cuota) {
+  if (!Number.isFinite(base) || !Number.isFinite(pct) || !Number.isFinite(cuota)) return null;
+  const cuotaCalc = _round2Admin(base * pct / 100);
+  return Math.abs(cuota - cuotaCalc) <= ADMIN_COHERENCIA_TOL_EUR;
+}
+
+function updateAdminTramoWarning(block) {
+  if (!block) return;
+  const elBase  = block.querySelector('input[data-kind="base"]');
+  const elPct   = block.querySelector('input[data-kind="porcentaje"]');
+  const elCuota = block.querySelector('input[data-kind="cuota"]');
+  const warning = block.querySelector('.desg-tramo-warning');
+  if (!elBase || !elPct || !elCuota || !warning) return;
+  if (!elBase.value.trim() || !elPct.value.trim() || !elCuota.value.trim()) {
+    warning.style.display = 'none';
+    return;
+  }
+  const base  = parseDesgNum(elBase.value);
+  const cuota = parseDesgNum(elCuota.value);
+  const pctSnapped = snapAdminIvaRate(elPct.value);
+  const pct = pctSnapped !== '' ? parseFloat(pctSnapped) : NaN;
+  const cuadra = tramoCuadraAdmin(base, pct, cuota);
+  warning.style.display = cuadra === false ? 'block' : 'none';
+}
+function updateAllAdminTramosWarnings() {
+  document.querySelectorAll('#desglose-blocks .desg-block').forEach(updateAdminTramoWarning);
+}
+
+// Coherencia matemática admin: CUOTA = BASE × IVA% / 100. Recalcula el campo derivado.
+function recalcCoherenciaAdminTramo(block, kind) {
+  if (!block) return;
+  const elBase  = block.querySelector('input[data-kind="base"]');
+  const elPct   = block.querySelector('input[data-kind="porcentaje"]');
+  const elCuota = block.querySelector('input[data-kind="cuota"]');
+  if (!elBase || !elPct || !elCuota) return;
+  const pctSnapped = snapAdminIvaRate(elPct.value);
+  if (pctSnapped === '') return;
+  const pct = parseFloat(pctSnapped);
+  if (kind === 'base' || kind === 'porcentaje') {
+    const base = parseDesgNum(elBase.value);
+    if (!Number.isFinite(base)) return;
+    if (document.activeElement === elCuota) return;
+    elCuota.value = fmtDesgNum(_round2Admin(base * pct / 100));
+  } else if (kind === 'cuota') {
+    if (pct <= 0) return;
+    const cuota = parseDesgNum(elCuota.value);
+    if (!Number.isFinite(cuota)) return;
+    if (document.activeElement === elBase) return;
+    elBase.value = fmtDesgNum(_round2Admin(cuota * 100 / pct));
+  }
+}
 
 let desgloseRowId = null;
+let desgloseIrpfCuota = 0;  // CUOTA IRPF (€) de la fila — para calcular Total = bases + cuotas - IRPF
 
 function openDesgloseModal(rowData) {
   desgloseRowId = rowData.id;
+  // Parseamos cuota_irpf como número español (puede venir "0,00" o "120,50" o number)
+  const rawIrpf = rowData.cuota_irpf;
+  if (rawIrpf == null || rawIrpf === '') {
+    desgloseIrpfCuota = 0;
+  } else if (typeof rawIrpf === 'number') {
+    desgloseIrpfCuota = Number.isFinite(rawIrpf) ? rawIrpf : 0;
+  } else {
+    const clean = String(rawIrpf).replace(/\./g, '').replace(',', '.').replace(/[€$\s]/g, '');
+    const n = parseFloat(clean);
+    desgloseIrpfCuota = Number.isFinite(n) ? n : 0;
+  }
   const lineas = Array.isArray(rowData.lineas_iva) ? rowData.lineas_iva : [];
   document.getElementById('desglose-modal-title').textContent =
     `Desglose IVA — Factura ${rowData.numero_factura ? '#' + rowData.numero_factura : '#' + rowData.id}`;
@@ -1438,82 +1683,96 @@ function closeDesgloseModal() {
 
 function renderDesgloseBlocks(lineas) {
   const container = document.getElementById('desglose-blocks');
-  container.innerHTML = (lineas || []).map((l, idx) => {
-    const prodsHtml = (Array.isArray(l.productos) ? l.productos : []).map((p, pIdx) => `
-      <div class="desg-producto" style="display:flex;gap:6px;margin-top:4px;align-items:center;">
-        <input type="text" data-kind="desc" data-tramo="${idx}" data-prod="${pIdx}"
-               value="${escAttr(p.descripcion || '')}" placeholder="Descripción producto"
-               maxlength="120" style="flex:3;font-size:12px;padding:4px 6px;border:1px solid #cbd5e0;border-radius:4px;" />
-        <input type="text" data-kind="importe" data-tramo="${idx}" data-prod="${pIdx}"
-               value="${escAttr(p.importe || '')}" placeholder="0,00"
-               maxlength="15" style="flex:1;font-size:12px;padding:4px 6px;border:1px solid #cbd5e0;border-radius:4px;text-align:right;" />
-        <button type="button" class="btn-desg-del-prod" data-tramo="${idx}" data-prod="${pIdx}" title="Eliminar producto"
-                style="background:transparent;border:1px solid #e2e8f0;border-radius:4px;padding:2px 6px;font-size:12px;color:#a0aec0;cursor:pointer;">✕</button>
-      </div>
-    `).join('');
+  // Deduplica por IVA % y limita a 4 antes de renderizar
+  const safeLineas = dedupeAndCapAdminTramos(lineas) || [];
+  container.innerHTML = safeLineas.map((l, idx) => {
+    const pctSnapped = l.porcentaje;
     return `
     <div class="desg-block" data-tramo="${idx}" style="border:1px solid #bee3f8;border-radius:6px;background:#fff;padding:10px;margin-bottom:10px;">
-      <div style="display:flex;gap:6px;margin-bottom:8px;align-items:flex-end;">
-        <div style="flex:1;">
-          <label style="display:block;font-size:10px;font-weight:700;color:#4a90d9;margin-bottom:2px;">IVA %</label>
-          <input type="text" data-kind="porcentaje" data-tramo="${idx}" value="${escAttr(l.porcentaje || '')}"
-                 maxlength="5" placeholder="21,0"
-                 style="width:100%;font-size:13px;padding:4px 6px;border:1px solid #90cdf4;border-radius:4px;text-align:center;font-weight:700;" />
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <span style="font-size:10px;font-weight:700;color:#2b6cb0;letter-spacing:.05em;">TRAMO ${idx + 1}</span>
+        <button type="button" class="btn-desg-del-tramo" data-tramo="${idx}" title="Eliminar tramo"
+                style="background:transparent;border:1px solid #fbd38d;border-radius:4px;padding:4px 10px;font-size:12px;color:#c05621;cursor:pointer;">✕ Eliminar tramo</button>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div>
+          <label style="display:block;font-size:11px;font-weight:700;color:#4a90d9;margin-bottom:3px;">IVA %</label>
+          <input type="text" data-kind="porcentaje" data-tramo="${idx}" value="${escAttr(pctSnapped)}"
+                 maxlength="3" placeholder="21" inputmode="numeric"
+                 style="width:100%;font-size:14px;padding:7px 10px;border:1px solid #90cdf4;border-radius:6px;text-align:center;font-weight:700;box-sizing:border-box;" />
         </div>
-        <div style="flex:2;">
-          <label style="display:block;font-size:10px;font-weight:700;color:#4a90d9;margin-bottom:2px;">BASE TRAMO</label>
+        <div>
+          <label style="display:block;font-size:11px;font-weight:700;color:#4a90d9;margin-bottom:3px;">BASE TRAMO (€)</label>
           <input type="text" data-kind="base" data-tramo="${idx}" value="${escAttr(l.base || '')}"
                  maxlength="15" placeholder="0,00"
-                 style="width:100%;font-size:13px;padding:4px 6px;border:1px solid #90cdf4;border-radius:4px;" />
+                 style="width:100%;font-size:14px;padding:7px 10px;border:1px solid #90cdf4;border-radius:6px;box-sizing:border-box;" />
         </div>
-        <div style="flex:2;">
-          <label style="display:block;font-size:10px;font-weight:700;color:#4a90d9;margin-bottom:2px;">CUOTA TRAMO</label>
+        <div>
+          <label style="display:block;font-size:11px;font-weight:700;color:#4a90d9;margin-bottom:3px;">CUOTA TRAMO (€)</label>
           <input type="text" data-kind="cuota" data-tramo="${idx}" value="${escAttr(l.cuota || '')}"
                  maxlength="15" placeholder="0,00"
-                 style="width:100%;font-size:13px;padding:4px 6px;border:1px solid #90cdf4;border-radius:4px;" />
+                 style="width:100%;font-size:14px;padding:7px 10px;border:1px solid #90cdf4;border-radius:6px;box-sizing:border-box;" />
         </div>
-        <button type="button" class="btn-desg-del-tramo" data-tramo="${idx}" title="Eliminar tramo"
-                style="background:transparent;border:1px solid #fbd38d;border-radius:4px;padding:4px 8px;font-size:12px;color:#c05621;cursor:pointer;">✕ Tramo</button>
       </div>
-      <div style="font-size:10px;font-weight:700;color:#718096;margin-bottom:4px;">PRODUCTOS DE ESTE TRAMO</div>
-      ${prodsHtml || '<div style="font-size:11px;color:#a0aec0;font-style:italic;">Sin productos</div>'}
-      <button type="button" class="btn-desg-add-prod" data-tramo="${idx}"
-              style="margin-top:6px;background:#ebf8ff;border:1px dashed #90cdf4;color:#2b6cb0;border-radius:4px;padding:4px 8px;font-size:11px;cursor:pointer;">➕ Añadir producto</button>
+      <div class="desg-tramo-warning" style="display:none;margin-top:8px;padding:8px 10px;background:#fff5f5;border:1px solid #fc8181;border-radius:4px;font-size:12px;color:#c53030;font-weight:600;">
+        ⚠ Revisar este tramo: la cuota no cuadra con BASE × IVA % ÷ 100.
+      </div>
     </div>`;
   }).join('');
 
+  // Botón añadir tramo: solo si quedan tipos libres (máx 4: 21, 10, 4, 0)
+  const nextRate = firstAvailableAdminRate(safeLineas);
+  const allFull = nextRate === null;
   container.insertAdjacentHTML('beforeend',
-    `<button type="button" id="btn-desg-add-tramo"
-             style="width:100%;margin-top:4px;background:#f0fff4;border:1px dashed #68d391;color:#276749;border-radius:4px;padding:6px 10px;font-size:12px;cursor:pointer;">➕ Añadir otro tramo IVA</button>`);
+    allFull
+      ? `<div style="font-size:11px;color:#718096;text-align:center;padding:6px;">Ya tienes los 4 tipos de IVA posibles (21, 10, 4 y 0).</div>`
+      : `<button type="button" id="btn-desg-add-tramo" data-next-rate="${nextRate}"
+                 style="width:100%;margin-top:4px;background:#f0fff4;border:1px dashed #68d391;color:#276749;border-radius:4px;padding:6px 10px;font-size:12px;cursor:pointer;">➕ Añadir tramo al ${nextRate}%</button>`);
 
   container.onclick = (e) => {
     const t = e.target;
-    if (t.classList.contains('btn-desg-del-prod')) {
-      const tramo = parseInt(t.dataset.tramo, 10);
-      const pIdx  = parseInt(t.dataset.prod, 10);
-      const lineas = readDesgloseFromUI();
-      if (lineas[tramo]) { lineas[tramo].productos.splice(pIdx, 1); renderDesgloseBlocks(lineas); }
-    } else if (t.classList.contains('btn-desg-add-prod')) {
-      const tramo = parseInt(t.dataset.tramo, 10);
-      const lineas = readDesgloseFromUI();
-      if (lineas[tramo]) {
-        lineas[tramo].productos = lineas[tramo].productos || [];
-        lineas[tramo].productos.push({ descripcion: '', importe: '' });
-        renderDesgloseBlocks(lineas);
-      }
-    } else if (t.classList.contains('btn-desg-del-tramo')) {
+    if (t.classList.contains('btn-desg-del-tramo')) {
       const tramo = parseInt(t.dataset.tramo, 10);
       const lineas = readDesgloseFromUI();
       lineas.splice(tramo, 1);
       renderDesgloseBlocks(lineas);
     } else if (t.id === 'btn-desg-add-tramo') {
       const lineas = readDesgloseFromUI();
-      lineas.push({ porcentaje: '', base: '', cuota: '', productos: [] });
+      const next = t.dataset.nextRate || firstAvailableAdminRate(lineas);
+      if (next === null) return;
+      lineas.push({ porcentaje: next, base: '', cuota: '' });
       renderDesgloseBlocks(lineas);
     }
   };
-  container.oninput = () => updateDesgloseSummary();
+  container.oninput = (e) => {
+    // Coherencia matemática: CUOTA = BASE × IVA% / 100.
+    const t = e && e.target;
+    if (t && t.dataset && (t.dataset.kind === 'base' || t.dataset.kind === 'cuota')) {
+      const block = t.closest('.desg-block');
+      recalcCoherenciaAdminTramo(block, t.dataset.kind);
+      updateAdminTramoWarning(block);
+    }
+    updateDesgloseSummary();
+  };
+  // Snap + dedupe + recálculo CUOTA del IVA % al perder foco
+  container.addEventListener('focusout', (e) => {
+    const t = e.target;
+    if (!t || !t.dataset || t.dataset.kind !== 'porcentaje') return;
+    const snapped = snapAdminIvaRate(t.value);
+    if (snapped === '') return;
+    if (t.value !== snapped) t.value = snapped;
+    const block = t.closest('.desg-block');
+    recalcCoherenciaAdminTramo(block, 'porcentaje');
+    updateAdminTramoWarning(block);
+    const before = readDesgloseFromUI() || [];
+    const after = dedupeAndCapAdminTramos(before);
+    if (after.length !== before.length) {
+      renderDesgloseBlocks(after);
+    }
+    updateDesgloseSummary();
+  });
   updateDesgloseSummary();
+  updateAllAdminTramosWarnings();
 }
 
 function readDesgloseFromUI() {
@@ -1523,57 +1782,130 @@ function readDesgloseFromUI() {
     const base       = block.querySelector(`input[data-kind="base"][data-tramo="${tramoIdx}"]`)?.value.trim() || '';
     const porcentaje = block.querySelector(`input[data-kind="porcentaje"][data-tramo="${tramoIdx}"]`)?.value.trim() || '';
     const cuota      = block.querySelector(`input[data-kind="cuota"][data-tramo="${tramoIdx}"]`)?.value.trim() || '';
-    const productos = [];
-    block.querySelectorAll('.desg-producto').forEach((row) => {
-      const desc    = row.querySelector('input[data-kind="desc"]')?.value.trim() || '';
-      const importe = row.querySelector('input[data-kind="importe"]')?.value.trim() || '';
-      if (desc || importe) productos.push({ descripcion: desc, importe: importe || null });
-    });
-    out.push({ base, porcentaje, cuota, productos });
+    out.push({ base, porcentaje, cuota });
   });
   return out;
 }
+
+// Helpers compartidos del resumen del modal admin
+function parseDesgNum(s) {
+  if (s === null || s === undefined || s === '') return 0;
+  const clean = String(s).replace(/\./g, '').replace(',', '.').replace(/[€$\s]/g, '');
+  const n = parseFloat(clean);
+  return Number.isFinite(n) ? n : 0;
+}
+function fmtDesgNum(n) {
+  return n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+let _desgSummarySyncing = false;
 
 function updateDesgloseSummary() {
   const summaryEl = document.getElementById('desglose-summary');
   if (!summaryEl) return;
   const lineas = readDesgloseFromUI();
-  const parseNum = (s) => {
-    if (!s) return 0;
-    const clean = String(s).replace(/\./g, '').replace(',', '.').replace(/[€$\s]/g, '');
-    const n = parseFloat(clean);
-    return Number.isFinite(n) ? n : 0;
-  };
-  const fmt = (n) => n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  let sumBase = 0, sumCuota = 0, dominantRate = null, dominantCuota = -1;
+  let sumBase = 0, sumCuota = 0;
   lineas.forEach((l) => {
-    const b = parseNum(l.base);
-    const c = parseNum(l.cuota);
-    sumBase += b; sumCuota += c;
-    if (c > dominantCuota) { dominantCuota = c; dominantRate = l.porcentaje; }
+    sumBase  += parseDesgNum(l.base);
+    sumCuota += parseDesgNum(l.cuota);
   });
-  summaryEl.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
-      <span><strong>${lineas.length}</strong> tramo${lineas.length !== 1 ? 's' : ''}</span>
-      <span>Σ bases: <strong>${fmt(sumBase)}</strong> €</span>
-      <span>Σ cuotas: <strong>${fmt(sumCuota)}</strong> €</span>
-      <span>Total IVA: <strong>${fmt(sumBase + sumCuota)}</strong> €</span>
-      ${dominantRate ? `<span>Dominante: <strong>${escHtml(String(dominantRate))}%</strong></span>` : ''}
-    </div>`;
+  const irpf = Math.abs(desgloseIrpfCuota || 0);
+  const total = sumBase + sumCuota - irpf;
+
+  const existingBase = summaryEl.querySelector('#desg-summary-base');
+  if (!existingBase) {
+    summaryEl.innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+          <label for="desg-summary-base" style="color:#2c5282;font-weight:600;">Base</label>
+          <input type="text" id="desg-summary-base" readonly tabindex="-1"
+                 title="Suma de las bases de los tramos. Edita los tramos para cambiar."
+                 style="width:140px;font-size:14px;padding:6px 8px;border:1px solid #cbd5e0;border-radius:6px;background:#f7fafc;color:#2c5282;text-align:right;box-sizing:border-box;" />
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+          <label for="desg-summary-cuota-iva" style="color:#2c5282;font-weight:600;">Cuota IVA</label>
+          <input type="text" id="desg-summary-cuota-iva" readonly tabindex="-1"
+                 title="Suma de las cuotas de los tramos. Edita los tramos para cambiar."
+                 style="width:140px;font-size:14px;padding:6px 8px;border:1px solid #cbd5e0;border-radius:6px;background:#f7fafc;color:#2c5282;text-align:right;box-sizing:border-box;" />
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+          <label for="desg-summary-cuota-irpf" style="color:#c05621;font-weight:600;">Cuota IRPF</label>
+          <input type="text" id="desg-summary-cuota-irpf" inputmode="decimal" maxlength="15"
+                 style="width:140px;font-size:14px;padding:6px 8px;border:1px solid #fbd38d;border-radius:6px;background:#fff;text-align:right;color:#c05621;box-sizing:border-box;" />
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;border-top:1px solid #bee3f8;padding-top:8px;margin-top:2px;">
+          <label for="desg-summary-total" style="color:#1a365d;font-weight:700;">Total</label>
+          <input type="text" id="desg-summary-total" inputmode="decimal" maxlength="15"
+                 style="width:140px;font-size:15px;font-weight:700;padding:6px 8px;border:1px solid #1a365d;border-radius:6px;background:#fff;text-align:right;color:#1a365d;box-sizing:border-box;" />
+        </div>
+      </div>`;
+    wireDesgSummaryInputs();
+  }
+
+  _desgSummarySyncing = true;
+  try {
+    const elBase = summaryEl.querySelector('#desg-summary-base');
+    const elCuotaIva = summaryEl.querySelector('#desg-summary-cuota-iva');
+    const elIrpf = summaryEl.querySelector('#desg-summary-cuota-irpf');
+    const elTotal = summaryEl.querySelector('#desg-summary-total');
+    if (document.activeElement !== elBase)     elBase.value     = fmtDesgNum(sumBase);
+    if (document.activeElement !== elCuotaIva) elCuotaIva.value = fmtDesgNum(sumCuota);
+    if (document.activeElement !== elIrpf)     elIrpf.value     = irpf > 0 ? `-${fmtDesgNum(irpf)}` : fmtDesgNum(0);
+    if (document.activeElement !== elTotal)    elTotal.value    = fmtDesgNum(total);
+  } finally { _desgSummarySyncing = false; }
+}
+
+function wireDesgSummaryInputs() {
+  const elBase     = document.getElementById('desg-summary-base');
+  const elCuotaIva = document.getElementById('desg-summary-cuota-iva');
+  const elIrpf     = document.getElementById('desg-summary-cuota-irpf');
+  const elTotal    = document.getElementById('desg-summary-total');
+  if (!elBase || !elCuotaIva || !elIrpf || !elTotal) return;
+
+  const recalcTotal = () => {
+    const t = parseDesgNum(elBase.value) + parseDesgNum(elCuotaIva.value) - Math.abs(parseDesgNum(elIrpf.value));
+    _desgSummarySyncing = true;
+    try {
+      if (document.activeElement !== elTotal) elTotal.value = fmtDesgNum(t);
+    } finally { _desgSummarySyncing = false; }
+  };
+
+  // Base y Cuota IVA son readonly en el resumen — se calculan desde los tramos.
+  elIrpf.addEventListener('input', () => {
+    if (_desgSummarySyncing) return;
+    desgloseIrpfCuota = Math.abs(parseDesgNum(elIrpf.value));
+    recalcTotal();
+  });
+  // Total editable a mano: NO recalcula otras (sería destructivo). El admin asume el cuadre.
+  elTotal.addEventListener('input', () => { /* no-op por diseño */ });
 }
 
 async function saveDesglose() {
   if (!desgloseRowId) return;
-  const lineas = readDesgloseFromUI();
+  const _rawLineas = readDesgloseFromUI();
+  // Snap + dedupe + cap a 4 tramos antes de enviar (regla 2026-04-30: 1 tramo por % máx 4)
+  const lineas = Array.isArray(_rawLineas)
+    ? dedupeAndCapAdminTramos(_rawLineas)
+    : _rawLineas;
   const errEl = document.getElementById('desglose-error');
   errEl.style.display = 'none';
   const btn = document.getElementById('desglose-save');
   btn.disabled = true; btn.textContent = 'Guardando...';
   try {
+    // Total y Cuota IRPF editados en el resumen — formateados al estilo español
+    // que el backend espera ("1.234,56"). Si están vacíos enviamos null.
+    const elIrpf  = document.getElementById('desg-summary-cuota-irpf');
+    const elTotal = document.getElementById('desg-summary-total');
+    const irpfNum  = elIrpf  ? Math.abs(parseDesgNum(elIrpf.value))  : 0;
+    const totalNum = elTotal ? parseDesgNum(elTotal.value) : 0;
+    const payload = {
+      lineas_iva:    lineas,
+      cuota_irpf:    irpfNum  > 0 ? fmtDesgNum(irpfNum)  : null,
+      total_factura: totalNum > 0 ? fmtDesgNum(totalNum) : null,
+    };
     const res = await authFetch(`${API_URL}/admin/facturas/${desgloseRowId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ lineas_iva: lineas }),
+      body: JSON.stringify(payload),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -1584,19 +1916,19 @@ async function saveDesglose() {
     if (row) {
       // Cálculo rápido local para reflejar al instante (el backend hace lo mismo
       // canónicamente). Evita un round-trip extra al endpoint GET.
-      const parseN = (s) => parseFloat(String(s || '').replace(/\./g, '').replace(',', '.')) || 0;
       let sumB = 0, sumC = 0, dom = null, domC = -1;
       lineas.forEach(l => {
-        const b = parseN(l.base), c = parseN(l.cuota);
+        const b = parseDesgNum(l.base), c = parseDesgNum(l.cuota);
         sumB += b; sumC += c;
         if (c > domC) { domC = c; dom = l.porcentaje; }
       });
-      const fmtE = (n) => n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       row.update({
-        lineas_iva: lineas,
-        base_imponible: fmtE(sumB),
-        cuota_iva:      fmtE(sumC),
+        lineas_iva:     lineas,
+        base_imponible: fmtDesgNum(sumB),
+        cuota_iva:      fmtDesgNum(sumC),
         iva_porcentaje: dom || null,
+        cuota_irpf:     payload.cuota_irpf,
+        total_factura:  payload.total_factura,
       });
     }
     closeDesgloseModal();

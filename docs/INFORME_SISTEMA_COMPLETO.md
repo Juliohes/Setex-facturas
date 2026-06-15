@@ -578,6 +578,392 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-06-01 — Visor de PDF del panel admin funcional en móvil (PDF.js en `<canvas>` sustituye al `<iframe>`)
+- **Disparador**: Julio reportó que el botón "🖼 Ver" de la columna imagen del panel admin abría la factura en su PC pero quedaba en blanco en el móvil.
+- **Causa raíz**: el visor renderizaba los PDF dentro de un `<iframe>` (`admin-facturas.js`, `verImagenAdmin` y `openLightbox`). Los navegadores móviles (Safari iOS, Chrome Android) NO disponen de visor de PDF embebido en `<iframe>`/`<embed>`/`<object>` — y menos sobre `blob:` — por lo que no renderizaban nada. En escritorio sí funciona por el visor PDF nativo del navegador. Todas las facturas actuales son PDF (1/1 en BD), de ahí el fallo sistemático en móvil.
+- **Solución (opción A, aprobada por Julio)**: integrar **PDF.js v3.11.174** (build UMD legacy, **self-hosted**) que rasteriza cada página en un `<canvas>` por software → funciona idéntico en escritorio y móvil, en cualquier navegador.
+  - Nuevos ficheros estáticos: `app/frontend/src/pdf.min.js` (320 KB) y `pdf.worker.min.js` (1.06 MB), servidos por nginx (mismo patrón que `tabulator.min.js`). Descargados de cdnjs y verificados (tipo JS, API `pdfjsLib`, versión).
+  - `app/frontend/src/admin-facturas.js`: nueva función reutilizable `renderPdfInto(container, blobUrl, downloadName)` (config `GlobalWorkerOptions.workerSrc`, render multipágina con scroll + botón "⬇ Descargar PDF" como red de seguridad y degradación elegante si la librería fallara). Aplicada en `verImagenAdmin` (tabla principal) y `openLightbox` (tarjetas de empresa); eliminado el `<iframe>` en ambos.
+  - `app/frontend/src/admin-facturas.html`: carga `pdf.min.js?v=3.11.174` antes de `admin-facturas.js`; cache-buster `admin-facturas.js` → `?v=20260601-001` (regla 6).
+- **Seguridad/CSP**: NO requiere tocar la CSP. El bloque `location = /admin-facturas.html` de `nginx.conf` ya tiene `script-src 'self' 'unsafe-eval'` y `default-src 'self'` (cubre el worker same-origin). Librería auto-alojada → sin dependencia de CDN ni ampliación de `connect-src`.
+- **Despliegue**: `docker compose build frontend` + `stop` + `up -d` (reglas 3/7). Contenedor `healthy`. Verificado por HTTP público (Traefik): `/pdf.min.js`, `/pdf.worker.min.js`, `/admin-facturas.js` → `200 application/javascript`.
+- **Verificación funcional (Playwright, viewport iPhone 390×844)**: render del PDF real de factura (LUMAPA2 BROKERS) en `<canvas>` 892×1262 con 123.403 px de contenido (no en blanco). Harness local aislado; material temporal con datos de cliente borrado tras la prueba (RGPD).
+- **Pendiente**: replicar en `staging` por paridad (no ejecutado sin OK).
+
+### 2026-06-01 — Eliminación completa de `info@murimarti.com` (correo inexistente que generaba bounces)
+- **Disparador**: Julio recibía rebotes recurrentes de `mailer-daemon@googlemail.com` ("Delivery incomplete... info@murimarti.com... timed out") porque ese buzón nunca existió (dominio `murimarti.com` sin MX que acepte conexión). El correo se había dado de alta el 2026-05-19 como cuenta tech (clon de `albertomurimarti@gmail.com`).
+- **Causa raíz**: las funciones de aviso a back-office `sendAdminPendingEmail` (`server.js:2926`) y `sendAdminAutoApprovedEmail` (`server.js:2969`) hacen `SELECT email FROM users WHERE is_admin = true` y enviaban a la dirección inexistente en cada empresa nueva pendiente / auto-aprobada → bounce.
+- **Acción en BD (prod, transacción atómica BEGIN/COMMIT)**:
+  - `DELETE FROM users WHERE email='info@murimarti.com'` (id=33) — sale automáticamente de la lista de destinatarios `is_admin=true`.
+  - `DELETE FROM allowed_emails WHERE email='info@murimarti.com'` (id=14) — evita re-alta vía registro.
+  - Verificado sin dependencias FK: 0 uploads, 0 known_cifs, 0 audit_logs, 0 refresh/reset tokens.
+- **Backup previo**: filas exportadas a `data/backup_delete_info_murimarti_2026-06-01.sql.{users,allowed_emails}.csv` por reversibilidad.
+- **Verificación post-borrado**: destinatarios de avisos admin pasan de 6 → 5 (`albertomurimarti@gmail.com`, `c.bernaldez@`, `javier.novillo@`, `juliohesuni@gmail.com`, `soporte@autoken.es`). Sin variables de entorno, scripts, config ni destinatarios hardcodeados que referencien el correo. Los bounces cesan.
+- **No tocado (registro histórico)**: comentario en `server.js:1097` (incidente 2026-04-20), entradas previas de este INFORME y del MACROPLAN, y 8 filas `LOGIN_FAILED` en `audit_logs` (integridad del rastro de auditoría — purga pendiente de decisión explícita de Julio).
+
+### 2026-05-28 (tarde) — Fix crítico: visor de imagen/PDF de facturas inutilizable en el panel admin (CSP + X-Frame-Options + render PDF en `<img>`)
+- **Disparador**: Julio reportó que tras la subida de la primera factura real (id=2, LUMAPA2 BROKERS / HISPALAR, 543 KB PDF) no era capaz de previsualizar el fichero desde el panel admin — ni desde la tabla principal de facturas (`verImagenAdmin` → modal iframe) ni desde la vista "Ver facturas" de una empresa (tarjetas con lazy-load + lightbox).
+- **Diagnóstico**: backend SÍ servía el PDF correctamente (200, `application/pdf`, 543 111 B, `%PDF-1.7…`). Tres causas independientes en la capa de presentación:
+  1. `X-Frame-Options: DENY` inyectado por `helmet.frameguard` (server.js:443) sobre la respuesta del PDF → Chrome/Firefox bloquean el embebido `<iframe>` aunque sea same-origin.
+  2. CSP de nginx para `admin-facturas.html` (línea 102) sin directiva `frame-src` explícita → fallback a `default-src 'self'`, que **no admite `blob:`** → `<iframe src="blob:…">` bloqueado.
+  3. `_empVerFacturas` (admin-facturas.js:739-760) cargaba siempre el blob en `<img>` sin detectar tipo → con un PDF, la tarjeta quedaba vacía (un PDF no se renderiza en `<img>`).
+- **Cambio en `app/backend/src/server.js`** (monolito 4484 líneas, runtime activo tras revert LL-002):
+  - Endpoints `/api/facturas/:id/imagen` (línea 2437) y `/api/admin/facturas/:id/imagen` (línea 2459): antes de `res.sendFile`, `res.removeHeader('X-Frame-Options')` + `res.setHeader('Content-Security-Policy', "frame-ancestors 'self'")`. Sustituye `XFO:DENY` por `frame-ancestors 'self'` (CSP nivel 2, sucesora moderna), manteniendo la protección anti-clickjacking pero permitiendo el embebido same-origin del visor.
+- **Cambio en `app/frontend/nginx.conf`** (4 CSPs unificadas + nuevo location regex):
+  - Las 4 CSPs `add_header Content-Security-Policy` (líneas 39 server-level, 63 service-worker, 102 admin-facturas.html, 143 regex html/js/css) ahora incluyen `frame-src 'self' blob:;` — la mínima ampliación necesaria para que la SPA pueda embeber sus propios blobs.
+  - **Nuevo `location ~ ^/api/(admin/)?facturas/[0-9]+/imagen$`** (antes de `location /api/`): tiene precedencia regex sobre el prefix `/api/`, define sus propios `add_header` (HSTS + nosniff + Referrer-Policy) lo que rompe la herencia del server-level y evita que se acumule un segundo `Content-Security-Policy: …frame-ancestors 'none'` + `X-Frame-Options: DENY` sobre la respuesta del PDF. La protección anti-clickjacking se conserva mediante la CSP `frame-ancestors 'self'` que emite el backend.
+- **Cambio en `app/frontend/src/admin-facturas.js`**:
+  - Galería de empresa (`_empVerFacturas`, ~líneas 738-770): detecta `blob.type.includes('pdf')`. Si es PDF, la tarjeta muestra placeholder "📄 PDF" clicable; al click abre el lightbox con `<iframe>` (no `<img>`). Si es imagen, mantiene el comportamiento previo.
+  - Nuevos helpers `openLightbox(url, isPdf)` y `closeLightbox()`: el lightbox convive entre `<img id="lightbox-img">` (preexistente) y un `<iframe id="lightbox-frame">` lazy-creado al primer PDF. `closeLightbox` limpia ambos `src` para liberar el blob URL.
+  - El listener de cerrar lightbox (click sobre fondo + tecla Escape) ahora invoca `closeLightbox()` en lugar de solo ocultar el contenedor.
+- **Cache-buster en `app/frontend/src/admin-facturas.html`**: `admin-facturas.js?v=20260506-002` → `?v=20260528-001` (regla 6 — fuerza recarga en navegadores tras los cambios JS).
+- **Operación**: `docker compose build backend frontend` + `stop` + `up -d` (reglas 3 y 7) para el rebuild de imágenes; además `docker cp nginx.conf` + `nginx -s reload` dentro del container frontend para aplicar el cambio sin esperar al próximo arranque. Backend y frontend `healthy` en 32 s.
+- **Verificación HTTP post-deploy** (vía nginx con JWT admin válido):
+  - `GET /api/admin/facturas/2/imagen` → 200, `Content-Type: application/pdf`, `Content-Length: 543111`, una sola `Content-Security-Policy: frame-ancestors 'self'`, **sin** `X-Frame-Options`.
+  - `GET /admin-facturas.html` → CSP incluye `frame-src 'self' blob:` y `frame-ancestors 'none'` (protege el HTML padre).
+- **Postura de seguridad**: ningún cambio amplía superficie de clickjacking. `X-Frame-Options: DENY` (deprecated) sustituido por la directiva CSP equivalente moderna (`frame-ancestors 'self'`) recomendada por MDN/OWASP. `frame-src 'self' blob:` es la mínima ampliación posible y no permite frames de terceros. El nuevo location nginx solo afecta a dos rutas concretas matcheadas por regex estricto `^/api/(admin/)?facturas/[0-9]+/imagen$`.
+- **Causa raíz "silenciosa"**: el bloqueo lo realizaba el navegador del cliente sin generar ningún request al backend — por eso `audit_logs` y `docker logs backend` no mostraban error alguno. Pendiente añadir `report-to` / `report-uri` en CSP para capturar este tipo de bloqueos en el futuro (no incluido en esta iteración).
+
+### 2026-05-28 — Ampliada lista de destinatarios de avisos admin: ahora todos los `is_admin=true` (no solo `role='tech'`)
+- **Disparador**: Julio detectó que el aviso de "empresa nueva pendiente de aprobación" (LUMAPA2 BROKERS SL, id=50, registrada 14:08 UTC) llegó solo a 4 personas (`role='tech'`) y quedaron fuera `c.bernaldez@setexextremadura.es` y `javier.novillo@setexextremadura.es` (que son `is_admin=true` pero `role='admin'`).
+- **Cambio en `app/backend/src/server.js`** (monolito 4484 líneas, runtime activo tras revert LL-002):
+  - Línea 2915 (`sendAdminPendingEmail`): `SELECT email FROM users WHERE role = 'tech'` → `WHERE is_admin = true`.
+  - Línea 2957 (`sendAdminAutoApprovedEmail`): mismo cambio para el aviso de auto-registro con CIF pre-aprobado.
+  - Comentarios de 2026-05-06 actualizados con nota 2026-05-28 explicando la ampliación.
+  - Log info reformulado: "miembros de soporte técnico" → "administradores".
+- **Decisión deliberada**: NO se eleva el `role` de Bernáldez/Novillo a `tech` para no concederles privilegios futuros del middleware `requireTech` (definido pero hoy sin uso, reservado para endpoints sensibles: security.json, motor OCR, hard-delete de empresas). Recibirán todos los correos del equipo pero seguirán sin acceso técnico de plataforma.
+- **Lista resultante (6 destinatarios verificada en vivo desde el backend post-deploy)**: `albertomurimarti@gmail.com`, `c.bernaldez@setexextremadura.es`, `info@murimarti.com`, `javier.novillo@setexextremadura.es`, `juliohesuni@gmail.com`, `soporte@autoken.es`.
+- **Operación**: `docker compose build backend` + `stop` + `up -d` (reglas 3 y 7). Container `healthy` en 39s, `/health` HTTP 200 post-arranque.
+- **⚠ RGPD menor**: el monolito envía los 6 emails en el campo `To:` de un único `sendMail` (cruzan direcciones entre sí). Aceptable porque forman un equipo único bajo SETEX. El módulo v3 (`approval-notification.service.js`) ya hace un envío por destinatario; cuando se retome el swap v3 (post-LL-002) este detalle queda corregido.
+
+### 2026-05-19 — Altas de acceso: `info@murimarti.com` (tech) y `javier.novillo@setexextremadura.es` añadido a whitelist
+- **Nuevo usuario `info@murimarti.com` (users.id=33)**:
+  - Clon de privilegios de `albertomurimarti@gmail.com` (id=3): `role='tech'`, `is_admin=true` (sincronizado por trigger `trg_sync_is_admin`), `auto_confirm_enabled=true`, `company_name='Autoken'`, `is_test=false`.
+  - `password_hash`: bcrypt 12 rounds de un valor aleatorio de 48 bytes — **nadie conoce la contraseña**. Activar con "Olvidé mi contraseña" (mismo patrón que `c.bernaldez@setexextremadura.es` el 2026-05-06).
+  - También añadido a `allowed_emails` (id=14) con nota trazable.
+- **`javier.novillo@setexextremadura.es` añadido a `allowed_emails` (id=13)**:
+  - Su cuenta `users` (id=32, `role='admin'`) ya existía desde 2026-05-07 pero faltaba en whitelist. Añadido por coherencia documental (no afecta a su login actual).
+- **Operación**: una sola transacción atómica (BEGIN/COMMIT) con 3 `INSERT` (2 `allowed_emails` + 1 `users`). Verificado post-alta con `SELECT` cruzado.
+- **Motivo**: petición explícita de Julio (sesión 2026-05-19) al confirmar consulta sobre estado de accesos.
+
+### 2026-05-07 (noche-4) — Sandbox 100% aislado: cleanup interno cada 60s + filtros admin de empresas + validación CIF visible
+- **Auto-purga sandbox cada 60s — ahora interna al backend** (no más cron del sistema):
+  - Nuevo módulo `app/backend/src/services/test-cleanup.js` (~75 líneas).
+  - Arrancado al final de `start()` con `setInterval` de 60s + primera corrida a los 5s del arranque.
+  - Cada tick: `DELETE` de `uploads`, `audit_logs`, `refresh_tokens`, `known_cifs`, `password_reset_tokens` de los usuarios `is_test=true`. Más borrado de los ficheros físicos en `/app/uploads/...` y limpieza de carpetas vacías por email-prefix.
+  - Idempotente, transaccional, fail-safe (si falla un tick, lo intenta el siguiente).
+  - Reemplaza el script externo `scripts/purge-test-uploads.sh` que requería cron del root y nunca se llegó a activar. **Funciona automáticamente sin sudo**.
+- **Empresa fake "Sandbox Pruebas" oculta del panel admin**:
+  - Nueva columna `client_companies.is_test BOOLEAN DEFAULT false` (migración idempotente en `initDB()`).
+  - Índice parcial `idx_client_companies_is_test ON (is_test) WHERE is_test = true`.
+  - `UPDATE client_companies SET is_test=true WHERE cif='B12345674'` (la del sandbox).
+  - Filtro `is_test IS NOT TRUE` aplicado en 3 endpoints admin de empresas:
+    - `/api/admin/client-companies` (listado del panel + JOIN con users también filtrado).
+    - `/api/admin/companies/pending` (pendientes).
+    - `/api/client-companies` (selector usado por admins).
+  - Resultado: **49 empresas en BD → 48 visibles + 1 oculta**.
+- **Validación CIF emisor/receptor visible en el modal** (sin tocar la lógica de IVA/IRPF):
+  - Re-creado `app/frontend/src/cif-validator.js` (espejo del backend, vanilla JS, ~95 líneas, regex tildes en forma escapada `̀-ͯ`).
+  - Cargado en `index.html` antes de `app.js` con cache-buster `?v=20260507-003`.
+  - Nuevo `<div id="confirm-cif-validation">` antes del botón Guardar.
+  - Cambios mínimos en `showConfirmModal()` (3 sustituciones quirúrgicas en líneas 866, 916-927, 933-935): se deja de **machacar** el lado del usuario con sus datos de BD; ahora se muestra lo que vio el OCR. La lógica de los 3 cuadros plegables (Tramos/IRPF/Resumen), el snap IVA% a {21,10,4,0}, los banners rojos de descuadre y el linkado bidireccional **no se han tocado**.
+  - Nuevos helpers (~80 líneas, sin dependencias) al final del modal: `setupCifValidationListeners`, `revalidateAndToggleSave`, `renderCifValidationMessages`, `toggleSaveButton`, `escapeHtmlSimple`.
+  - Listeners `input` en los 4 campos editables → re-evaluación en tiempo real, botón Guardar bloqueado/desbloqueado automáticamente.
+  - Manejo del 400 `cif_mismatch` del backend en `confirmUpload`: pinta los errores en el contenedor sin cerrar modal ni hacer logout.
+  - Cache-buster `app.js` actualizado a `?v=20260507-003`.
+- **Por qué hubo que hacer esto**: cuando el sandbox `setex@gmail.com` (CIF fake `B12345674`) subió una factura real, el frontend antiguo machacaba el lado del usuario con sus datos de BD → `confirmed_receptor_nif='B12345674'` (no lo del OCR) → el backend validaba contra sí mismo y NO bloqueaba. Ahora el frontend muestra lo del OCR y el validador detecta la discrepancia con los datos del usuario logueado, pintando el aviso rojo y bloqueando el Save.
+- **Despliegue**: rebuild backend + rebuild frontend, 4/4 healthy, HTTPS 200, log `[TestCleanup] iniciado: cada 60s` confirmado al arranque.
+
+### 2026-05-07 (noche-3) — Fix sandbox no podía subir facturas + alerta email auto-aprobados + limpieza notas client_companies
+- **Bug del sandbox `setex@gmail.com` arreglado**:
+  - Síntoma: tras pulsar "Enviar" en la subida de factura, el frontend mostraba "Tu sesión ha expirado".
+  - Causa: el middleware `requireActiveCompany` (server.js:3001) exige que el usuario tenga `company_nif` y que ese CIF esté en `client_companies` con `activa=true, pendiente=false`. El sandbox había sido creado con `company_nif=NULL` por la conversión a usuario test, fallando el check con HTTP 403 → el frontend trata 403 como sesión expirada (bug pre-existente).
+  - Solo afectaba al sandbox: el resto de cuentas (tech/admin) tienen `is_admin=true` y están exentas del middleware.
+  - **Fix doble**:
+    - **Datos**: asignado al sandbox `company_nif='B12345674'` (válido AEAT) y creada empresa "Sandbox Pruebas" en `client_companies` con `activa=true, pendiente=false, registration_source='admin'`.
+    - **Código** (defensa en profundidad): `requireActiveCompany` ahora exenta también a usuarios con `is_test=true` además de `is_admin=true`. Si alguien quita el CIF al sandbox en el futuro, sigue funcionando.
+- **Alerta email para registros auto-aprobados** (`sendAdminAutoApprovedEmail` en server.js:2937):
+  - Se dispara desde `/api/auth/register` cuando un usuario se registra con un CIF del catálogo pre-aprobado y recibe JWT inmediato.
+  - Destinatarios: todos los usuarios `role='tech'` (Julio, Alberto, soporte@autoken).
+  - Asunto: `[SETEX] Nuevo registro auto-aprobado — <nombre> (<cif>)`.
+  - Cuerpo: email del registrante, nombre declarado, CIF, IP origen, fecha. Detecta otros usuarios ya registrados con el mismo CIF (excluyendo `is_test=true`) y muestra un aviso rojo si los hay → vigilancia humana de posibles suplantaciones (los CIFs son datos públicos).
+  - Idempotente y fail-safe: si el email falla, no bloquea el registro (igual que `sendAdminPendingEmail`).
+- **Limpieza columna `notas` de `client_companies`**:
+  - Borradas las 48 entradas con texto autoinsertado por la carga masiva ("Cargada via import-companies-bulk.js…").
+  - Decisión Julio: la columna `notas` es para uso humano del admin, nunca rellenar autónomamente desde scripts/operaciones masivas.
+  - `scripts/import-companies-bulk.js` actualizado: ya no toca `notas` ni en INSERT ni en ON CONFLICT UPDATE.
+  - Memorizado en `~/.claude/projects/-opt-setex-prod/memory/feedback_no_autonotes_companies.md` para sesiones futuras.
+- **Auditoría filtros user_id**:
+  - Verificado que los 4 endpoints de usuario normal (`/api/mis-facturas`, `/api/facturas/:id/imagen`, `/api/mis-facturas/export.xlsx`, `/api/me/export`) ya tienen `WHERE user_id = req.user.userId`. Un usuario solo ve sus propias facturas, nunca las de otra empresa aunque comparta CIF.
+- **Deploy**: 2 rebuilds del backend (uno por fix del middleware, otro por la función de email). 4/4 healthy, HTTPS 200, sin errores en logs.
+
+### 2026-05-07 (noche-2) — Carga masiva de 48 empresas-cliente (opción A: pre-aprobadas) + fix rate-limit auth + revert frontend a versión correcta
+- **Carga masiva de empresas-cliente** (`scripts/import-companies-bulk.js`):
+  - 48 empresas insertadas en `client_companies` con `activa=true, pendiente=false, registration_source='admin'` (Opción A: cuando un usuario nuevo se registre con uno de estos CIFs, recibe JWT inmediato sin esperar aprobación admin).
+  - Listado: talleres, autónomos y entidades (incluye AYUNTAMIENTO DE BADAJOZ y IES SAN JOSE).
+  - Validación previa con `domain/validators/nif.js` (algoritmo AEAT): **48/48 válidos**, 0 inválidos.
+  - Script idempotente (ON CONFLICT (cif) DO UPDATE), reutilizable para cargas futuras.
+  - Audit log: `ADMIN_BULK_IMPORT_COMPANIES` con totales en JSONB.
+- **Fix rate-limit de auth** (`app/backend/src/middleware/rate-limit.js`):
+  - El `authLimiter` ahora usa `email` como clave en lugar de `req.ip`.
+  - Razón: tras Traefik+nginx, `req.ip` siempre era la IP de la red interna Docker → un único contador global bloqueaba a todos los usuarios cuando alguien fallaba muchos intentos.
+  - Ahora un usuario que falla 10 veces se bloquea sólo a sí mismo durante 15 min; el resto de usuarios siguen pudiendo entrar.
+  - Fallback a IP cuando la petición no trae email (p.ej. `/reset-password` con token).
+  - Mensaje de error más claro: «Demasiados intentos para este usuario».
+- **Revert frontend a versión correcta del 6-may**:
+  - Tras el deploy de la validación CIF visual, mi `git checkout HEAD -- app/frontend/` me llevó a la versión del 21-abr (commit `628a230`) porque la rama actual `chore/docs-refinement-2026-05-05` está desfasada respecto a `origin/main`.
+  - Restaurado correctamente desde commit `19fbe3f` (PR #101 "feat(ux): rediseño completo del modal IVA + unificación columnas admin"), que contiene los 3 cuadros plegables, snap IVA% a {21,10,4,0}, banner rojo de descuadre, linkado bidireccional Total/IRPF.
+  - Ficheros restaurados: `app.js`, `index.html`, `admin-facturas.html`, `admin-facturas.js`. Cache-buster vuelve a `?v=20260506-001`.
+  - Validador CIF visual (rojos/amarillos en modal con bloqueo de Save) **NO desplegado** — el backend mantiene la validación en `/api/upload-confirm` (defensa en profundidad) que devuelve HTTP 400 con `cif_mismatch:true` y se registra `UPLOAD_BLOCKED_CIF_MISMATCH` en audit_logs.
+
+### 2026-05-07 (noche) — Reorganización de cuentas: nuevos admin, sandbox de pruebas, baja de jnodav
+- **Bajas**: eliminado el usuario `jnodav@gmail.com` (id 24, admin) por reemplazo. CASCADE limpió sus tokens; audit_logs preservados con `user_id=NULL` por FK SET NULL.
+- **Altas**: creado nuevo admin `javier.novillo@setexextremadura.es` (id 32) con NIF `08843135A`, password temporal `setex1234`, role admin. Migra al dominio corporativo `setexextremadura.es`.
+- **Activación cuentas pre-aprovisionadas**:
+  - `c.bernaldez@setexextremadura.es` (id 31, admin): asignado `company_name='Carlos Bernáldez'`. CIF se queda NULL hasta que Carlos lo aporte.
+  - `soporte@autoken.es` (id 30, tech): password cambiado de `!BLOCKED:...` a bcrypt válido de `setex1234`. Cuenta ahora puede hacer login. Token_version bumpeado.
+- **Nuevo modo sandbox** para usuario `setex@gmail.com` (id 23):
+  - **Conversión**: rol cambiado de `admin` → `user`, `is_admin=false` (sincronizado por trigger `trg_sync_is_admin`), `is_test=true`, password reset a `setex1234`, CIF nullificado, `company_name='Sandbox Pruebas'`.
+  - **Migración de schema** (idempotente, en `initDB()` de `server.js:332-334`):
+    - `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT false;`
+    - `CREATE INDEX IF NOT EXISTS idx_users_is_test ON users(is_test) WHERE is_test = true;` (índice parcial — coste 0 cuando no hay test users).
+  - **Filtros añadidos en panel admin** (`server.js`, 4 endpoints):
+    - `/api/admin/facturas` (listado): `WHERE us.is_test IS NOT TRUE`.
+    - `/api/admin/facturas/usuarios` (dropdown): `WHERE is_test IS NOT TRUE`.
+    - `/api/admin/facturas/export.xlsx`: `WHERE us.is_test IS NOT TRUE`.
+    - `/api/admin/users` (listado de usuarios): `WHERE u.is_test IS NOT TRUE`.
+  - **Script de purga periódica**: `scripts/purge-test-uploads.sh` (creado nuevo, +90 líneas):
+    - Cada 5 min: borra `uploads`, ficheros físicos del volumen `/app/uploads/`, `audit_logs`, `refresh_tokens`, `password_reset_tokens` y `known_cifs` de **todos los usuarios con `is_test=true`**.
+    - El usuario en sí NO se borra: queremos que pueda seguir haciendo login para más pruebas.
+    - Carpetas vacías por email-prefix se limpian via `find -empty -delete`.
+    - Log en `/var/log/setex/purge-test.log`.
+    - Idempotente: si no hay test users, exit 0 silencioso.
+  - **Cron NO instalado automáticamente** (regla 1 de no tocar config global sin OK explícito): la línea está documentada en `config/crontab-prod-additions.txt`. Para activar, Julio debe ejecutar con sudo:
+    ```bash
+    sudo crontab -l > /tmp/cron-current
+    cat /opt/setex/prod/config/crontab-prod-additions.txt >> /tmp/cron-current
+    sudo crontab /tmp/cron-current
+    sudo crontab -l | grep purge-test
+    ```
+  - **Primera ejecución manual** del script: borró `0 uploads / 31 audit_logs / 48 refresh_tokens / 0 password_reset / 0 known_cifs` históricos del antiguo `setex@gmail.com` admin antes de su conversión a sandbox.
+- **Limitación conocida**: el usuario test SÍ está físicamente presente en `users` (es necesario para que el login funcione). Lo que NO existe es rastro de su actividad (uploads, audit_logs) más allá de 5 minutos. El usuario aparece en queries directas SQL pero NO en ningún endpoint del panel admin. RGPD: si en el futuro el usuario test deja de necesitarse, basta con `DELETE FROM users WHERE is_test=true`.
+- **Deploy**: `is_test` aplicado vía `ALTER TABLE` manual antes del rebuild (idempotente; el código en `initDB()` lo aplicaría igualmente al reiniciar). Rebuild backend → stop + up -d → 4/4 healthy → HTTPS 200, sin errores en logs.
+- **Estado final de usuarios**:
+  - tech (3): juliohesuni · albertomurimarti · soporte@autoken (todos activos)
+  - admin (2): c.bernaldez · javier.novillo (ambos activos, password `setex1234`)
+  - user + is_test (1): setex@gmail.com (sandbox, oculto del panel admin, password `setex1234`)
+
+### 2026-05-07 (tarde) — Validación de coincidencia CIF emisor/receptor con usuario logueado
+- **Motivo**: hasta ahora cuando un usuario subía una foto de factura, el sistema rellenaba automáticamente los datos de "su lado" (emisor en factura emitida, receptor en factura recibida) con los datos del perfil del usuario logueado, **ignorando lo que la IA hubiese leído en la factura**. Si el usuario subía por error una factura ajena en la que él no aparecía, la factura se guardaba con sus datos como si fuera suya. Riesgo de contaminar el flujo del equipo contable con facturas de terceros mal etiquetadas.
+- **Cambio de comportamiento**: ahora el sistema lee y respeta lo que el OCR ha extraído de **ambos lados** (emisor + receptor) y lo compara con el CIF/nombre del usuario logueado. Si el lado que debe ocupar el usuario no coincide con sus datos → error rojo bloqueante en el modal y botón Guardar deshabilitado. Si el CIF coincide pero el nombre difiere (típico "S.L." vs "SLU") → warning amarillo informativo, no bloquea. Si el CIF emisor y receptor son idénticos → error rojo bloqueante (una empresa no puede emitirse facturas a sí misma). Los errores y warnings se actualizan en tiempo real mientras el usuario edita los campos: en cuanto se corrige, el aviso desaparece y el botón se desbloquea solo.
+- **Defensa en profundidad**: la misma validación corre en `/api/upload-confirm`. Si un cliente HTTP (no el navegador) intentase saltarse el modal frontend, el backend devuelve 400 con `cif_mismatch: true` y se registra `UPLOAD_BLOCKED_CIF_MISMATCH` en `audit_logs`.
+- **Excepción admin**: cuando un admin opera desde el panel admin con una empresa cliente seleccionada, la comparación se hace contra el CIF de **esa empresa cliente**, no contra el del propio admin. Cubierto automáticamente porque la asignación de `userCompanyNif/Name` ya conmuta con `previewClientCompanyData` en el preview.
+- **Algoritmo de match**:
+  - **CIF**: comparación exacta tras normalizar (uppercase + sin espacios/guiones/puntos + remover prefijo `ES` intracomunitario).
+  - **Nombre**: comparación tras normalizar (lowercase + sin tildes + sin puntuación + sin sufijos societarios `S.L./SLU/S.A./SCoop/CB/Sociedad Limitada/Sociedad Anónima`). Solo warning, nunca bloqueo, porque la fuente fiscal de verdad es el CIF.
+- **Ficheros nuevos**:
+  - `app/backend/src/lib/invoice-cif-validator.js` — validador puro CommonJS (~85 líneas).
+  - `app/frontend/src/cif-validator.js` — espejo vanilla JS (`window.SetexCifValidator`, ~95 líneas).
+- **Ficheros modificados**:
+  - `app/backend/src/server.js`:
+    - `+1` import del validador.
+    - `+18` líneas tras el swap automático en `/api/upload-preview`: nueva variable `cifValidation`, se incluye en el payload JSON de respuesta (`cif_validation`, `user_company`).
+    - `+45` líneas en `/api/upload-confirm` antes de las validaciones de campos obligatorios: cálculo de `validationUserNif/Name` (con excepción admin), llamada al validador, rechazo `400` con `cif_mismatch: true` + `audit_logs` si bloquea.
+  - `app/frontend/src/app.js`:
+    - 3 fixes en `showConfirmModal` (líneas 866, 916-928, 933-935): se deja de **machacar** el lado del usuario con sus datos de BD; ahora se muestra lo que vio el OCR y solo hay fallback a usuario si el OCR no detectó nada.
+    - `+90` líneas con 4 helpers nuevos: `setupCifValidationListeners`, `revalidateAndToggleSave`, `renderCifValidationMessages`, `toggleSaveButton`, `escapeHtmlSimple`.
+    - Handler del 400 `cif_mismatch` en `confirmUpload()`: pinta los errores en el contenedor sin cerrar modal ni hacer logout.
+    - `finally` del `confirmUpload()` ahora re-evalúa el bloqueo en lugar de re-habilitar el botón ciegamente.
+  - `app/frontend/src/index.html`: nuevo `<div id="confirm-cif-validation">` antes del botón Guardar; nuevo `<script src="cif-validator.js?v=20260507-001">`; cache-buster de `app.js` actualizado a `?v=20260507-001` (regla 6).
+- **Mensajes mostrados al usuario**:
+  - 🔴 `EMISOR_MISMATCH` (factura emitida): «El CIF del emisor leído en la factura (X) no coincide con el de tu empresa (Y). Esta factura no parece emitida por ti.»
+  - 🔴 `RECEPTOR_MISMATCH` (factura recibida): «El CIF del receptor leído en la factura (X) no coincide con el de tu empresa (Y). Esta factura no parece dirigida a ti.»
+  - 🔴 `SAME_EMISOR_RECEPTOR`: «El CIF del emisor y del receptor no pueden ser idénticos. Una empresa no puede emitirse facturas a sí misma.»
+  - 🟡 `EMISOR_NAME_DIFFERS` / `RECEPTOR_NAME_DIFFERS`: warning informativo cuando el CIF coincide pero el nombre normalizado no (variación tipográfica probable).
+- **Tests del validador puro**: ejecutados en local, casos cubiertos: match exacto OK, mismatch CIF emitida/recibida, emisor=receptor, OCR sin detectar lado del usuario (no bloquea, deja editar), normalización de tildes/sufijos, prefijo intracomunitario `ES`.
+- **Deploy**: rebuild backend + frontend → stop + up -d → 4/4 healthy → HTTPS 200 → `cif-validator.js` se sirve correctamente (4058 bytes) → `/api/upload-preview` mantiene 401 sin auth.
+- **Riesgo asumido y mitigaciones**: cambio en el flujo crítico de subida de facturas. Snapshot canónico previo (`setex_db_20260507_post_purga_CANONICO.sql.gz`) disponible para rollback. Revert con `git revert` + rebuild si surgiese algún caso edge no contemplado.
+
+### 2026-05-07 — Limpieza total de datos de prueba (facturas + usuarios + catálogo de empresas)
+- **Motivo**: hasta ahora todo el contenido de la BD de producción eran datos de prueba acumulados durante el desarrollo (~6 meses). Reset completo antes de la entrada real en explotación con clientes finales.
+- **Backup pre-borrado**: dump SQL plano `/tmp/setex_pre_purge_20260507_091822.sql` (151 KB, modo 600) + GPG cifrado del cron 03:00 ya disponible en `/opt/setex/shared/backups/postgres/setex_db_20260507_030001.sql.gz.gpg`.
+- **Borrado en transacción atómica única** (`BEGIN…COMMIT`):
+  - `audit_logs` 344 → 225 (borrados 119: los de user_id huérfano o de usuarios eliminados; conservados los logs de tech/admin).
+  - `company_audit_log` 8 → 0 (todo el log de cambios sobre empresas).
+  - `known_cifs` 8 → 2 (conservados solo los CIFs aprendidos por usuarios tech/admin).
+  - `failed_jobs` 0 → 0.
+  - `uploads` 12 → 0 (TODAS las facturas eliminadas).
+  - `company_relationships` 6 → 0.
+  - `client_companies` 63 → 0 (catálogo completo de 59 empresas-cliente con códigos 1-58 + las 4 self_register + DBK SLU).
+  - `company_catalog` 1 → 0.
+  - `allowed_emails` 6 → 4 (eliminados `xanfla95@gmail.com` y `administracion@itdbk.es`).
+  - `users` 14 → 6: borrados los 8 con role='user' (xanfla95, murimartinvesting, test/test1@autoken, info@murimarti, setex2, teresa260060, administracion@itdbk).
+  - `password_reset_tokens` y `refresh_tokens` limpiados automáticamente vía CASCADE (refresh_tokens 100→62; los 62 restantes son de tech/admin).
+- **Usuarios conservados** (6, todos `is_admin=true`):
+  - `tech`: juliohesuni@gmail.com (id 2), albertomurimarti@gmail.com (id 3), soporte@autoken.es (id 30).
+  - `admin`: setex@gmail.com (id 23), jnodav@gmail.com (id 24), c.bernaldez@setexextremadura.es (id 31).
+- **Volumen físico**: `/app/uploads/` dentro del contenedor backend vaciado (12 ficheros, 4.5 MB → 0 ficheros, 4 KB) conservando el directorio raíz con permisos `appuser:appgroup`.
+- **Verificación post**: integridad referencial sin huérfanos (audit_logs/refresh_tokens/password_reset_tokens/known_cifs/allowed_emails todos 0 huérfanos), 4/4 contenedores healthy, HTTPS 200, login devuelve 401 con creds inválidas (sin 5xx), endpoints admin piden token. RGPD art. 17: derecho al olvido aplicado a los 8 usuarios eliminados.
+- **Limpieza máxima fase 2** (mismo día, tras confirmación):
+  - **Redis**: borradas 6 claves residuales `bull:n8n-send:*` (115, 116, completed, events, id, meta) — chatarra de la eliminación de n8n del 2026-04-16. `DBSIZE` final = 0.
+  - **Reset de secuencias `*_id_seq`** en transacción atómica:
+    - Tablas vaciadas → `setval(seq, 1, false)`: `uploads_id_seq`, `client_companies_id_seq`, `company_relationships_id_seq`, `company_audit_log_id_seq`, `company_catalog_id_seq`, `failed_jobs_id_seq`. Próximo `nextval()` devolverá 1: la primera factura nueva tendrá `id=1`, la primera empresa cliente `id=1`, etc.
+    - Tablas con datos conservados → alineadas a `MAX(id)`: `users_id_seq=31`, `audit_logs_id_seq=344`, `allowed_emails_id_seq=12`, `known_cifs_id_seq=26`, `refresh_tokens_id_seq=434`, `password_reset_tokens_id_seq=11`. Próximo nextval = `MAX+1` (sin colisiones de PK).
+  - **Borrado seguro del dump pre-borrado** (`/tmp/setex_pre_purge_20260507_091822.sql`, 151 KB): `shred -u -v -n 3 -z` (3 pasadas aleatorias + zero pass + rename progresivo + unlink). Cumplimiento **RGPD art. 17 (derecho al olvido)**: ya no existe copia plana de los datos personales eliminados. Queda únicamente el backup GPG cifrado AES-256 del cron 03:00 (`setex_db_20260507_030001.sql.gz.gpg`), inaccesible sin la passphrase de `secrets/backup_passphrase.txt`.
+- **No replicado en staging**: decisión explícita de Julio. Staging mantiene sus datos sintéticos.
+- **No comunicado a usuarios**: decisión explícita de Julio. Los usuarios eliminados (`xanfla95`, `info@murimarti`, etc.) verán login fallido al volver y deberán re-registrarse cuando se les autorice en `allowed_emails`.
+- **Limpieza máxima fase 3** (mismo día):
+  - **Smoke OCR auditado** (`scripts/smoke-test-ocr.js`): verificado que **NO inserta en `uploads`** ni conecta a PostgreSQL. Solo hace fetch HTTP a OpenAI + Azure DI. El cron 04:30 puede seguir activo: la primera factura real seguirá siendo `id=1`.
+  - **Bump global de `token_version`** (`UPDATE users SET token_version = token_version + 1`): los 6 usuarios pasan a versión +1 → invalidación inmediata de cualquier JWT access existente al expirar (15 min). Adicionalmente, **revocados 10 refresh_tokens activos** (`UPDATE refresh_tokens SET revoked=true, revoked_at=NOW()`): de 69 totales, 0 quedan activos. Re-login obligatorio en próxima sesión de cada admin/tech.
+  - **`VACUUM ANALYZE`**: dead tuples a 0 (antes: 31 en `known_cifs`, 20 en `password_reset_tokens`, 17 en `refresh_tokens`/`google_tokens`, etc.). Estadísticas del planner refrescadas tras los DELETE masivos. DB total: 9.39 MB → 9.66 MB (incremento por audit_logs nuevos de la sesión y `revoked_at` poblados; espacio reusable interno marcado, no compactado — `VACUUM FULL` queda fuera de alcance por requerir lock exclusivo).
+  - **Anonimización RGPD de `audit_logs.details` JSONB**: 71 campos PII redactados a `"[REDACTED-RGPD]"` en transacción atómica:
+    - 2 `email` de usuarios borrados (los emails de los 6 tech/admin se preservan: base jurídica de trazabilidad operativa interna).
+    - 27 `nif` (UPLOAD_SUCCESS, referencias a facturas eliminadas).
+    - 7 `cif` + 1 `cif_assigned` (ADMIN_* sobre empresas eliminadas).
+    - 27 `filename` (incluían el username embebido en el path).
+    - 7 `nombre` + 1 `company_name`.
+    - Conservado: `action`, `user_id`, `ip_address` (IP interna Docker), `created_at`, `reason`, `confidence_level`, `auto_confirmed`, `ocr_time` (no son PII personal directa).
+    - Verificación: 0 PII residual de usuarios borrados sin redactar.
+  - **`docs/PLAYBOOK_EMERGENCIAS.md`** actualizado: nueva sección "⛔ Backups con bloqueo RGPD — NO restaurar". Tabla con patrón `setex_db_20260507_*.sql.gz.gpg` y anteriores marcados con bloqueo desde 2026-05-14. Acciones obligatorias: purga programada con `shred` (local + offsite VPS `72.62.189.27`), prohibición permanente de restauración aunque la rotación de 7 días los haya eliminado, e instrucciones de fallback (parte cero / seed sintético) si se necesita rollback masivo posterior al 2026-05-07.
+
+### 2026-05-06 (tarde) — Separación de roles: Soporte Técnico vs Administración
+- **Modelo nuevo**: tres roles en `users.role` con check constraint `IN ('tech','admin','user')`. Default `'user'`.
+  - **`tech`** (Soporte Técnico): superconjunto de admin. Recibe correos operativos (nuevas solicitudes de empresa, alertas, futuro: quejas de usuarios vía `soporte@autoken.es`). Acceso completo al panel admin.
+  - **`admin`** (Administración): acceso al panel admin (igual que tech) pero NO recibe correos.
+  - **`user`** (cliente final): acceso a su propia captura de facturas.
+- **Migración aplicada en transacción atómica**:
+  - `juliohesuni@gmail.com` (id 2) → `tech`
+  - `albertomurimarti@gmail.com` (id 3) → `tech`
+  - `setex@gmail.com` (id 23) → `admin`
+  - `jnodav@gmail.com` (id 24) → `admin`
+  - Cuentas creadas con `password_hash='!BLOCKED:...'` (no es hash bcrypt válido, login bloqueado):
+    - `soporte@autoken.es` (id 30, `tech`) — solo destinatario de correos.
+    - `c.bernaldez@setexextremadura.es` (id 31, `admin`) — activable con "Olvidé mi contraseña".
+  - Whitelist: eliminado `albertomurimarti@hotmail.com` (no se usaba), añadidos los dos nuevos emails.
+  - **`is_admin` se mantiene sincronizado con role** (`is_admin = role IN ('tech','admin')`) por compatibilidad con el resto del código que aún consulta esa columna.
+- **Backend**: `sendAdminPendingEmail()` cambia su query de `WHERE is_admin = true` a `WHERE role = 'tech'`. Solo el equipo técnico (3 personas: Julio, Alberto, soporte@autoken.es) recibe la notificación de nueva empresa pendiente. Log actualizado para reflejar "miembros de soporte técnico".
+- **Frontend**: sin cambios. El panel admin sigue funcionando igual para tech y admin (ambos tienen `is_admin=true` por compatibilidad).
+- **Pendiente para próxima sesión**: endpoint `POST /api/support/contact` para que usuarios puedan enviar quejas/consultas directamente a `soporte@autoken.es`. No incluido aquí para no ampliar alcance.
+- **Deploy**: rebuild backend (regla 3) + stop/up. Health-check 5/5 verde. Sintaxis verificada con `node -c`.
+
+### 2026-05-06 (mañana-2) — UX admin: columnas "IVA %" y "Desglose" unificadas en una sola
+- **Cambio**: la tabla del panel admin (`/admin-facturas.html`) tenía dos columnas separadas que mostraban información parcial:
+  - **"IVA %"** (`field: iva_porcentaje`): mostraba el porcentaje en mono-IVA y `—` en multi-IVA.
+  - **"Desglose"** (`field: lineas_iva`): mostraba `1 tramo` (gris, sin valor) en mono-IVA y `🧾 N tramos` (badge azul clickable) en multi-IVA.
+- **Resultado nuevo**: una única columna **"IVA %"** (ancho 110px, sin sort) que fusiona ambos comportamientos:
+  - **Mono-IVA** (sin `lineas_iva` o length < 2) → muestra el porcentaje (`21 %`, `10 %`, etc.) editable con lápiz como antes.
+  - **Multi-IVA** (length ≥ 2) → muestra el badge `🧾 N tramos` clickable que abre el modal de desglose, igual que antes hacía la columna "Desglose".
+- **Helpers**:
+  - `formatIvaPctUnified(cell)` reemplaza al antiguo `formatIvaPctMulti`.
+  - `ivaPctUnifiedCellClick(_e, cell)` reemplaza al antiguo `ivaPctCellClick`. En multi-IVA cualquier click sobre el badge abre `openDesgloseModal(row)`. En mono-IVA solo el click sobre `.edit-cell-btn` abre `openEditModal(row, 'iva_porcentaje')`.
+  - `formatDesglose(cell)` eliminado (código muerto tras la fusión).
+- **`persistenceID` bumpeado** de `setex-admin-facturas-v8` a `v9`: necesario porque Tabulator persiste anchos de columna en `localStorage`. Sin bump, los usuarios ya activos verían un hueco vacío donde estaba la columna "Desglose" hasta forzar un reset manual.
+- **Cache-buster**: `admin-facturas.js?v=20260506-002`.
+- **Deploy**: rebuild frontend + stop/up. Sintaxis verificada con `node -c`. Health-check 5/5 verde. Backend no tocado.
+
+### 2026-05-06 — Fix: resumen general no se renderizaba en mono-IVA al abrir el modal
+- **Síntoma**: tras eliminar el bloque `confirm-iva-calc` (iteración 2026-04-30 tarde-5), el cuadro "RESUMEN" aparecía vacío al abrir el modal de confirmación con facturas mono-IVA.
+- **Causa raíz**: `updateLineasIvaSummary()` solo se invocaba (a) desde `renderLineasIvaMulti()` para multi-IVA, o (b) desde el listener `input` de los campos mono — que **no se dispara cuando se asigna `.value =`** programáticamente al cargar el preview. Resultado: el `#confirm-lineas-iva-summary` quedaba vacío en mono-IVA hasta que el usuario tecleaba algo.
+- **Fix**: añadida llamada explícita a `updateLineasIvaSummary()` al final de `renderUploadPreview` en `app/frontend/src/app.js`, justo después de `updateIVACalc()`. Ahora el resumen aparece poblado desde el primer render.
+- **Cache-buster**: `app.js?v=20260506-001`. Health-check 5/5 verde.
+
+### 2026-04-30 (tarde-5) — UX: limpieza visual del modal (placeholder IRPF, textos auxiliares y verificador final)
+- **Placeholder de RETENCIÓN IRPF %**: cambiado de `15,0` a `0,00` en `app/frontend/src/index.html`. Coherente con el placeholder del input "CUOTA IRPF (€)" que ya era `0,00`.
+- **Texto auxiliar eliminado**: el `<div>` "Solo se admiten 21, 10, 4 o 0." que aparecía bajo el input IVA % en mono-IVA. Eliminado en `index.html`.
+- **Tooltip eliminado**: atributo `title="Solo se admiten 21, 10, 4 o 0"` quitado de los inputs IVA % de tramo en `app.js` (`renderLineasIvaMulti`) y `admin-facturas.js` (`renderDesgloseBlocks`). El snap automático sigue activo, pero sin texto explicativo visible.
+- **Bloque verificador final eliminado**: `<div id="confirm-iva-calc">` (mostraba "✓ Base × IVA = ..." en tiempo real justo antes del botón "Confirmar y guardar") quitado del `index.html`. La función `updateIVACalc()` no se elimina porque hace early return si el elemento no existe (`if (!calcEl) return;`) — sigue siendo invocada desde varios sitios pero no produce output visible. Los avisos de descuadre por tramo (`tramo-warning`) y la apertura automática de cuadros con anomalía siguen cumpliendo el rol de validación.
+- **Cache-busters**: `app.js?v=20260430-009`, `admin-facturas.js?v=20260430-009`.
+- **Deploy**: rebuild frontend. Sintaxis verificada con `node -c`. Health-check 5/5 verde. Backend no tocado.
+
+### 2026-04-30 (tarde-4) — Alta de empresa cliente "INGENIERIA TERMOACUSTICA DBK SLU"
+- **Datos**: CIF `B06533277` (validado por `validateCIF.js`, dígito control 7 correcto), email principal `administracion@itdbk.es`.
+- **`client_companies`** (id=66): insertada con `activa=true`, `pendiente=false`, `registration_source='admin'`. `codigo_cliente=NULL` (admin puede asignarlo después desde el panel `/admin-facturas.html`).
+- **`allowed_emails`** (id=10): email autorizado para registro.
+- Operación atómica en una sola transacción (`BEGIN`/`COMMIT`). Cero impacto en código o despliegue. Backend sin tocar.
+
+### 2026-04-30 (tarde-3) — Aviso visual por tramo cuando no cuadra CUOTA = BASE × IVA% / 100
+- **Banner rojo dentro de cada tramo descuadrado**: el bloque del tramo incluye un `<div class="tramo-warning">` (`.desg-tramo-warning` en admin) oculto por defecto que se muestra cuando los 3 campos están rellenos pero no cumplen la regla `CUOTA ≈ BASE × IVA% / 100` (tolerancia 0,02€). Texto: "⚠ Revisar este tramo: la cuota no cuadra con BASE × IVA % ÷ 100."
+- **Helpers nuevos**:
+  - `tramoCuadra(base, pct, cuota)` / `tramoCuadraAdmin(...)`: devuelve true/false/null (null si algún valor no es numérico).
+  - `updateTramoWarning(block)` / `updateAdminTramoWarning(...)`: muestra/oculta el banner del bloque pasado.
+  - `updateAllTramosWarnings()` / `updateAllAdminTramosWarnings()`: itera todos los bloques visibles.
+- **Conexión a eventos**: tras cualquier `oninput` (BASE/CUOTA) o `focusout` (IVA % con snap+recalc) se reevalúa el aviso del bloque afectado. Al renderizar tramos (incluido tras OCR) se evalúan todos los bloques.
+- **Comportamiento**: cuando OCR detecta valores incoherentes (p.ej. BASE=100, IVA%=21, CUOTA=18 detectados como tres lecturas independientes), el banner aparece en ese tramo concreto y `tieneAnomaliaTramos()` devuelve true, lo que abre automáticamente el cuadro `box-tramos`. Cuando el usuario edita un campo, la coherencia automática (`recalcCoherenciaTramo`) ajusta el campo derivado y el banner desaparece.
+- **Cuadros plegables (recordatorio)**: ambos cuadros (`box-tramos` y `box-irpf`) plegados por defecto. Solo se abren si `tieneAnomaliaTramos()` o `tieneAnomaliaIrpf()` devuelven true.
+- **Cache-busters**: `app.js?v=20260430-008`, `admin-facturas.js?v=20260430-008`.
+- **Deploy**: rebuild frontend. Sintaxis verificada con `node -c`. Health-check 5/5 verde. Backend no tocado.
+
+### 2026-04-30 (tarde-2) — Coherencia matemática CUOTA = BASE × IVA% / 100 + cuadros plegados por anomalía
+- **Regla matemática estricta en cada tramo** (`app/frontend/src/app.js` y `admin-facturas.js`): siempre debe cumplirse `CUOTA = BASE × IVA% / 100`. La UI fuerza la coherencia automáticamente:
+  - Editar **BASE** o **IVA %** → se recalcula CUOTA al instante.
+  - Editar **CUOTA** → se recalcula BASE (`BASE = CUOTA × 100 / IVA%`), asumiendo que el usuario corrige el agregado.
+  - Listener `oninput` en BASE y CUOTA del tramo (delegation por contenedor) y `focusout` en IVA % (tras el snap).
+  - Guard `document.activeElement` para no sobreescribir el campo que tiene el foco del usuario.
+  - Aplicado en multi-IVA (tramos), modal admin (`recalcCoherenciaAdminTramo`), y mono-IVA (`recalcCoherenciaMono` sobre `confirm-base`/`confirm-iva-pct`/`confirm-cuota-iva`).
+- **Política nueva de cuadros plegables**: ambos cuadros (`box-tramos` y `box-irpf`) aparecen **plegados por defecto**. Solo se abren si hay anomalía detectada, llamando la atención del usuario al problema:
+  - **`tieneAnomaliaTramos()`**: cubre multi-IVA (algún tramo con cuota ≠ base × pct/100, tolerancia 0,02€, o campo vacío) y mono-IVA (incoherencia entre Base/IVA%/Cuota).
+  - **`tieneAnomaliaIrpf()`**: hay valor parcial (solo IRPF % o solo Cuota IRPF), no parseable, o `cuota_irpf ≠ base_total × irpf%/100` (tolerancia 0,02€).
+  - `renderUploadPreview` evalúa ambas tras pintar los datos del OCR y abre/pliega cada cuadro en consecuencia.
+  - Resultado UX: si OCR lee la factura correctamente, el usuario solo ve el resumen (Base/Cuota IVA/Cuota IRPF/Total) y los dos cuadros plegados con flecha. Si OCR falló o el usuario debe corregir algo, los cuadros se abren automáticamente para mostrar el problema.
+- **Tolerancia**: `COHERENCIA_TOL_EUR = 0.02`. Permite redondeos de céntimos sin marcar falsa anomalía.
+- **Helper `round2(n)`** y `_round2Admin(n)` para redondeos consistentes a 2 decimales.
+- **Cache-busters**: `app.js?v=20260430-007`, `admin-facturas.js?v=20260430-007`.
+- **Deploy**: rebuild frontend + stop/up. Sintaxis verificada con `node -c`. Health-check 5/5 verde. Backend no tocado.
+
+### 2026-04-30 (mediodía) — UX admin: columna "IVA %" muestra — en facturas multi-IVA
+- **Tabla del panel admin** (`app/frontend/src/admin-facturas.js`): la columna `iva_porcentaje` ahora muestra `—` (gris claro) cuando la factura es multi-IVA (`lineas_iva.length >= 2`). Razón: en multi-IVA, el porcentaje agregado almacenado en la columna `iva_porcentaje` es solo el "tipo dominante" calculado por el backend, no representa la realidad de la factura. El detalle real está en la columna "Desglose" y se edita en el modal de tramos.
+- **Edición bloqueada en multi-IVA**: el lápiz `✏️` desaparece y `cellClick` no abre el modal de edición de IVA %. Para cambiar el IVA % de una factura multi-IVA hay que abrir el modal de Desglose (badge `🧾 N tramos` en la columna Desglose) y editar los tramos individuales.
+- **Mono-IVA sin cambios**: las facturas mono-IVA (sin `lineas_iva` o con `length < 2`) siguen mostrando el porcentaje y el lápiz como antes.
+- **Helpers añadidos**: `formatIvaPctMulti` y `ivaPctCellClick`. La columna usa estos en lugar de `makeEditableFormatter('iva_porcentaje', formatPct)` / `makeEditableCellClick('iva_porcentaje')`.
+- **Cache-buster**: `admin-facturas.js?v=20260430-006`.
+- **Deploy**: rebuild frontend. Health-check 5/5 verde. Backend no tocado.
+
+### 2026-04-30 (mañana) — UX: dedupe de tramos por IVA % + máximo 4 tramos
+- **Nueva regla**: en multi-IVA, **nunca pueden aparecer dos tramos con el mismo IVA %**, y **como máximo 4 tramos** (uno por cada valor de {21, 10, 4, 0}). Caso típico que motiva la regla: el OCR a veces lee dos veces el mismo tramo y devuelve líneas duplicadas con valores idénticos.
+- **Nuevos helpers** en `app/frontend/src/app.js`: `dedupeAndCapTramos(lineas)` (snap IVA % + dedupe por % conservando el primero + cap a 4) y `firstAvailableRate(lineas)` (devuelve el primer % de los 4 que aún no está en uso). Mismos helpers `dedupeAndCapAdminTramos` / `firstAvailableAdminRate` en `app/frontend/src/admin-facturas.js`.
+- **Aplicado en 4 puntos**:
+  1. **Render inicial** (`renderLineasIvaMulti` y `renderDesgloseBlocks`): se deduplica antes de pintar — los tramos duplicados del OCR desaparecen al cargar el modal.
+  2. **`focusout`** de un input de IVA % de tramo: si tras snappear el valor coincide con otro tramo existente, se elimina el duplicado y se re-renderiza.
+  3. **Botón "Añadir tramo"**: ahora calcula el primer % libre y crea el tramo con ese %, p.ej. "➕ Añadir tramo al 10%". Si los 4 tipos ya están presentes, el botón se sustituye por un mensaje "Ya tienes los 4 tipos de IVA posibles (21, 10, 4 y 0)" y no se permite añadir más.
+  4. **Antes de enviar al backend** (`confirmUpload` y `saveDesglose`): salvaguarda final con `dedupeAndCapTramos`.
+- **Cache-busters**: `app.js?v=20260430-005`, `admin-facturas.js?v=20260430-005`.
+- **Deploy**: rebuild frontend + stop/up. Sintaxis verificada con `node -c`. Health-check 5/5 verde. Backend no tocado.
+
+### 2026-04-30 (madrugada) — UX: 3 cuadros (Tramos plegable / IRPF plegable / Resumen no plegable) · snap IVA % {21,10,4,0}
+- **Modal de comprobación reestructurado** (`app/frontend/src/index.html`): el bloque "DESGLOSE IVA" se sustituye por 3 cuadros independientes:
+  1. **`<details id="box-tramos">`** (plegable, abierto si OCR detectó datos): contiene la vista mono (Base/IVA%/Cuota directos) o la vista multi (lista de tramos editables).
+  2. **`<details id="box-irpf">`** (plegable, abierto si OCR detectó IRPF o el proveedor parece persona física): contiene los inputs de "RETENCIÓN IRPF %" y "CUOTA IRPF (€)".
+  3. **`<div id="box-resumen">`** (no plegable, siempre al final): los 4 valores Base / Cuota IVA / Cuota IRPF / Total.
+- **CSS añadido** en `<head>` para `details.box-collapsible` con flecha custom (`▾` que rota -90° al plegar). Marcador nativo oculto multi-navegador (`::-webkit-details-marker { display:none; }` y `::marker { content:'' }`).
+- **Snap de IVA % a {21, 10, 4, 0}** (`snapToValidIvaRate` en `app.js` y `snapAdminIvaRate` en `admin-facturas.js`): España solo admite estos 4 tipos. Si OCR lee "211" → 21; "9,5" → 10; "3" → 4; "0,21" → 21. Aplicado en 3 momentos: (a) al renderizar tramos (corrige errores OCR en pantalla), (b) en `focusout` del input de IVA % (delegation por contenedor), (c) antes de enviar al backend en `confirmUpload` y `saveDesglose`. Mismo snap también en el input mono `confirm-iva-pct` (blur).
+- **Resumen General**: `summary-base` y `summary-cuota-iva` ahora son **readonly** (siempre coinciden con la suma de los tramos en multi-IVA, o con `confirm-base`/`confirm-cuota-iva` en mono). Cumple la restricción del usuario "Cuota IVA del final debe coincidir con la suma de Cuota TRAMO". `summary-cuota-irpf` y `summary-total` siguen editables y bidireccionales con `confirm-cuota-irpf` y `confirm-total`.
+- **Estado plegado por defecto**: en `renderUploadPreview` se marca `box-tramos.open = isMultiIva || hasMonoData` y `box-irpf.open = !!showIrpf`. Si la factura no tiene tramos ni IRPF, ambos cuadros llegan plegados. `showIRPFSection`/`hideIRPFSection` actualizadas para abrir/plegar `box-irpf`.
+- **Lectura unificada mono/multi del resumen**: `updateLineasIvaSummary` detecta qué vista está visible y lee desde tramos o desde los inputs mono. El resumen aparece SIEMPRE (también en mono).
+- **Cache-busters bumpeados**: `app.js?v=20260430-004`, `admin-facturas.js?v=20260430-004`.
+- **Deploy**: rebuild frontend + stop/up. Sintaxis verificada con `node -c`. Health-check 5/5 verde. Backend no tocado.
+
+### 2026-04-30 (noche) — UX: resumen multi-IVA con 4 inputs editables y linkado bidireccional
+- **Resumen multi-IVA reescrito a inputs editables** en `app/frontend/src/app.js` (`updateLineasIvaSummary` + nuevo `wireSummaryInputs`) y `app/frontend/src/admin-facturas.js` (`updateDesgloseSummary` + nuevo `wireDesgSummaryInputs`). Cuatro filas: **Base** · **Cuota IVA** · **Cuota IRPF** (siempre con signo negativo, p.ej. `-25,00`) · **Total**. La identidad `Base + Cuota IVA − Cuota IRPF = Total` se mantiene en cada cambio.
+- **Linkado bidireccional** (modal usuario): `summary-cuota-irpf` ↔ `confirm-cuota-irpf` y `summary-total` ↔ `confirm-total`. Al editar IRPF en el resumen se propaga al campo de arriba y se recalcula Total. Al editar IRPF/Total arriba se refleja en el resumen. Anti-bucle con flag `_summarySyncing` y guarda `_topLevelSummaryListenersWired` para no duplicar listeners en `confirm-total`/`confirm-cuota-irpf` aunque el resumen se re-renderice.
+- **Comportamiento del Total**: al editar Base, Cuota IVA o IRPF se recalcula automáticamente (cuadre garantizado). Al editar Total directamente solo sincroniza con el campo de arriba (no fuerza re-cuadre — el usuario decide qué corregir, igual que `updateIVACalc()` que ya marca con ✗ rojo si rompe la coherencia).
+- **Modal admin**: el resumen guarda `cuota_irpf` y `total_factura` en `desgloseIrpfCuota` (cacheado al abrir modal) y al pulsar "Guardar cambios" se envían ambos al PUT `/api/admin/facturas/:id` junto con `lineas_iva`. La fila Tabulator se actualiza con los nuevos valores en `row.update()`. El backend ya aceptaba esos campos en `EDITABLE`.
+- **Limitación documentada**: en multi-IVA, **Base y Cuota IVA del resumen son la suma de los tramos**. El backend recalcula esos agregados en `normalizeConfirmedLineasIva()` desde `lineas_iva`, así que un override manual en `summary-base`/`summary-cuota-iva` se descarta al guardar (los tramos son la fuente). Para cambiar la base agregada el usuario debe editar los tramos. Total e IRPF SÍ se persisten desde el resumen porque no se recalculan en el backend.
+- **Cache-busters bumpeados**: `app.js?v=20260430-003`, `admin-facturas.js?v=20260430-003`.
+- **Deploy**: rebuild frontend + stop/up. Health-check 5/5 verde. Sintaxis JS verificada con `node -c`.
+
+### 2026-04-30 (tarde) — UX: eliminada UI de productos en desglose IVA · resumen simplificado con Total - IRPF
+- **Eliminada toda la UI de productos en el desglose multi-IVA** (`app/frontend/src/app.js` y `app/frontend/src/admin-facturas.js`): se quitan inputs de descripción/importe, botones "➕ Añadir producto" y "✕" eliminar producto, y la sección "PRODUCTOS DE ESTE TRAMO". Cada bloque-tramo ahora muestra solo IVA % / BASE TRAMO / CUOTA TRAMO. `readLineasIvaFromUI()` y `readDesgloseFromUI()` dejan de leer/serializar el array `productos`. **Backend NO tocado**: el OCR sigue extrayendo productos en `lineas_iva[].productos` y el validador de iva.js los normaliza; el admin Excel export (`/admin/facturas/desglose.xlsx`) los sigue mostrando como columna informativa. Si el usuario edita y guarda, el backend recibe `lineas_iva` sin la propiedad `productos` y el validador la repuebla a `[]` por línea (preserva schema BD).
+- **Resumen multi-IVA reescrito** (`updateLineasIvaSummary` en app.js · `updateDesgloseSummary` en admin-facturas.js): elimina nº tramos, símbolos Σ y "Tipo dominante". Muestra ahora 3 filas apiladas: **Base** (suma de bases), **Cuota IVA** (suma de cuotas), **Total** (= Base + Cuota IVA − Cuota IRPF). En el modal de comprobación lee `#confirm-cuota-irpf` con event listener que recalcula al editar IRPF. En el modal admin lee `rowData.cuota_irpf` cacheado en `desgloseIrpfCuota` al abrir el modal.
+- **Cache-busters bumpeados**: `app.js?v=20260430-002`, `admin-facturas.js?v=20260430-002`.
+- **Deploy**: `docker compose build frontend && stop frontend && up -d frontend`. Health-check 5/5 verde, HTTPS 200.
+
+### 2026-04-30 — UX: panel desglose IVA apilado vertical · fix botón "Ver imagen" admin
+- **Apilado vertical de inputs IVA/IRPF en el modal de confirmación** (`app/frontend/src/index.html`): los recuadros BASE IMPONIBLE / IVA % / CUOTA IVA y los de RETENCIÓN IRPF % / CUOTA IRPF pasan de una fila estrecha (`flex` horizontal) a apilarse verticalmente (`flex-direction:column`) ocupando el 100 % del ancho del panel. Inputs ampliados a `font-size:15px; padding:8px 10px` para mejor legibilidad en móvil. Motivo: en pantallas estrechas los recuadros eran apenas visibles y dificultaban revisar/corregir los valores extraídos por OCR.
+- **Apilado vertical de tramos en vista MULTI-IVA** (`app/frontend/src/app.js` `renderLineasIvaMulti()`): cada tramo IVA muestra IVA % / BASE TRAMO / CUOTA TRAMO uno debajo de otro, con cabecera "TRAMO N" y botón "✕ Eliminar tramo" en la esquina superior derecha. Mismo cambio replicado en el modal de desglose del panel admin (`app/frontend/src/admin-facturas.js` `renderDesgloseBlocks()`).
+- **Fix botón "Ver" columna Imagen del panel admin** (`app/frontend/src/admin-facturas.js` `verImagenAdmin()`): la función usaba `localStorage.getItem('token')` para construir el header `Authorization`, pero desde el rediseño de auth (token en memoria + RT cookie httpOnly) `localStorage` siempre devuelve `null` y la petición fallaba con 401. Refactorizada para usar `authFetch()` (delega en `Auth.apiFetch`) con refresh automático y retry. Añadido soporte para PDFs (iframe) además de imágenes, cierre con tecla Escape, limpieza de URL.createObjectURL, y `aria-label` en el botón cerrar.
+- **Cache-busters bumpeados**: `app.js?v=20260430-001`, `admin-facturas.js?v=20260430-001`.
+- **Deploy**: `docker compose build frontend && stop frontend && up -d frontend`. Health-check 5/5 verde, HTTPS 200, cache-busters servidos correctamente. Backend no tocado.
+
 ### 2026-04-28 — 🏷️ v2.0.0 promocionado a `main` · refactor v3 modular Awilix DI en runtime
 - **Hito**: cierre completo del descongelado del refactor v3. Tag `v2.0.0` publicado en `main @ a1cda6d`. PR #93 mergeado (squash). Deploy a producción ejecutado con `DESPLEGAR`.
 - **Cronología de la sesión** (UTC):

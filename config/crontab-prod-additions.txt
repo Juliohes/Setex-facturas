@@ -1,0 +1,17 @@
+# Líneas adicionales para añadir al crontab del root del HOST de PRODUCCIÓN.
+# Estas NO se aplican automáticamente — Julio debe añadirlas manualmente con sudo.
+#
+# Aplicar (combina con el crontab activo del root, NO lo reemplaza):
+#   sudo crontab -l > /tmp/cron-current
+#   cat /opt/setex/prod/config/crontab-prod-additions.txt >> /tmp/cron-current
+#   sudo crontab /tmp/cron-current
+#   sudo crontab -l | grep purge-test          # verificar
+#
+# Desactivar:
+#   sudo crontab -l | grep -v purge-test-uploads | sudo crontab -
+
+# ── SANDBOX 2026-05-07 — Purga de actividad de usuarios de pruebas ─────────
+# Cada 5 min borra uploads, ficheros físicos, audit_logs y refresh_tokens de
+# todos los usuarios con is_test=true en BD. El usuario en sí permanece para
+# que pueda seguir haciendo login y subiendo nuevas pruebas.
+*/5 * * * * /opt/setex/prod/scripts/purge-test-uploads.sh >> /var/log/setex/purge-test.log 2>&1

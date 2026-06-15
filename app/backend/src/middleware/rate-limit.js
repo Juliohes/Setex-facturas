@@ -6,11 +6,22 @@
 
 const rateLimit = require('express-rate-limit');
 
+// El rate-limit de auth se cuenta por EMAIL, no por IP. Razón: tras Traefik+nginx
+// el `req.ip` que ve Express es siempre la IP de la red interna Docker (172.22.x.x),
+// con lo cual un único contador por IP bloqueaba a TODOS los usuarios cuando alguien
+// fallaba muchos intentos. Al usar el email como clave, los intentos fallidos
+// bloquean exclusivamente a ese email — el resto de usuarios siguen pudiendo entrar.
+// Fallback a IP cuando la petición no trae email (p.ej. /reset-password con token).
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
   standardHeaders: true,
-  message: { error: 'Demasiados intentos. Espera unos minutos e inténtalo de nuevo.' }
+  keyGenerator: (req) => {
+    const raw = (req.body && typeof req.body.email === 'string') ? req.body.email : '';
+    const email = raw.trim().toLowerCase();
+    return email ? `email:${email}` : `ip:${req.ip || 'unknown'}`;
+  },
+  message: { error: 'Demasiados intentos para este usuario. Espera unos minutos e inténtalo de nuevo.' }
 });
 
 const uploadLimiter = rateLimit({
