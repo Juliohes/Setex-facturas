@@ -27,6 +27,7 @@ const { validateIVACoherencia, normalizeConfirmedLineasIva } = require('./domain
 const { connection: redisClient } = require('./queue/index');
 const { validateVIES } = require('./services/viesValidator');
 const { validateInvoiceCifs } = require('./lib/invoice-cif-validator');
+const { normalizeToFloat } = require('./lib/normalize-amount');
 
 // Rate limiters centralizados (middleware/rate-limit.js)
 const {
@@ -2541,12 +2542,12 @@ app.get('/api/mis-facturas/export.xlsx', authenticateToken, requireActiveCompany
         receptor_nombre:  r.receptor_nombre  || '',
         receptor_nif:     r.receptor_nif     || '',
         fecha_emision:    r.fecha_emision    || '',
-        base_imponible:   r.base_imponible   != null ? parseFloat(r.base_imponible)   : '',
-        iva_porcentaje:   r.iva_porcentaje   != null ? parseFloat(r.iva_porcentaje)   : '',
-        cuota_iva:        r.cuota_iva        != null ? parseFloat(r.cuota_iva)        : '',
-        irpf_porcentaje:  r.irpf_porcentaje  != null ? parseFloat(r.irpf_porcentaje)  : '',
-        cuota_irpf:       r.cuota_irpf       != null ? parseFloat(r.cuota_irpf)       : '',
-        total_factura:    r.total_factura     != null ? parseFloat(r.total_factura)    : '',
+        base_imponible:   normalizeToFloat(r.base_imponible)  ?? '',
+        iva_porcentaje:   normalizeToFloat(r.iva_porcentaje)  ?? '',
+        cuota_iva:        normalizeToFloat(r.cuota_iva)       ?? '',
+        irpf_porcentaje:  normalizeToFloat(r.irpf_porcentaje) ?? '',
+        cuota_irpf:       normalizeToFloat(r.cuota_irpf)      ?? '',
+        total_factura:    normalizeToFloat(r.total_factura)   ?? '',
         moneda:           r.moneda            || 'EUR',
         confidence_level: r.confidence_level  || '',
         uploaded_at:      r.uploaded_at ? new Date(r.uploaded_at).toLocaleString('es-ES') : '',

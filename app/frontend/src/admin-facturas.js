@@ -90,6 +90,7 @@ const EDITABLE_FIELDS = {
   cuota_iva:               'Cuota IVA (€)',
   irpf_porcentaje:         'IRPF %',
   cuota_irpf:              'Cuota IRPF (€)',
+  invoice_type:            'Tipo (compra / venta)',
 };
 
 // Traduce un campo display virtual al campo raw de BD según qué lado coincidió.
@@ -106,15 +107,69 @@ function getActualField(displayField, rowData) {
   return map[displayField] || displayField;
 }
 
+// ── Normalización de importes (espejo de backend lib/normalize-amount.js) ──────
+// Los importes se guardan como string y pueden venir en cualquier formato
+// ("1.234,56", "1,234.56", "1234.56", "1234,56", "1234"). La tabla los muestra
+// siempre como "1.234,56 €" pero el editor los cargaba crudos → discrepancia
+// visible. Normalizamos a formato español canónico tanto al editar como al
+// guardar para que celda, editor y BD coincidan siempre.
+const IMPORTE_FIELDS = new Set(['base_imponible', 'cuota_iva', 'cuota_irpf', 'total_factura']);
+
+function parseImporteToFloat(v) {
+  if (v == null || v === '') return null;
+  const s = String(v).replace(/[€\s]/g, '');
+  if (!s) return null;
+  const hasComma = s.includes(','), hasDot = s.includes('.');
+  let n;
+  if (hasComma && hasDot) {
+    n = s.lastIndexOf(',') > s.lastIndexOf('.')
+      ? parseFloat(s.replace(/\./g, '').replace(',', '.'))
+      : parseFloat(s.replace(/,/g, ''));
+  } else if (hasComma) {
+    const after = s.split(',').pop() || '';
+    n = after.length === 3 ? parseFloat(s.replace(/,/g, '')) : parseFloat(s.replace(',', '.'));
+  } else {
+    n = parseFloat(s);
+  }
+  return isNaN(n) ? null : n;
+}
+
+function toSpanishAmountStr(n) {
+  if (n == null || isNaN(n)) return '';
+  const [int, dec] = Number(n).toFixed(2).split('.');
+  return int.replace(/\B(?=(\d{3})+(?!\d))/g, '.') + ',' + dec;
+}
+
+// Valor que se carga en el input del modal: importes en español "1.234,56"
+// (sin €), el resto tal cual. Garantiza que el editor muestre lo mismo que la celda.
+function toEditableValue(field, rawValue) {
+  if (IMPORTE_FIELDS.has(field)) {
+    const n = parseImporteToFloat(rawValue);
+    if (n != null) return toSpanishAmountStr(n);
+  }
+  return rawValue == null ? '' : String(rawValue);
+}
+
 function openEditModal(rowData, field) {
   editingRow = rowData;
   editingField = field;
   document.getElementById('edit-modal-title').textContent = `Editar — Factura #${rowData.id}`;
   document.getElementById('edit-field-label').textContent = EDITABLE_FIELDS[field] || field;
-  document.getElementById('edit-field-input').value = rowData[field] || '';
+  const inputEl = document.getElementById('edit-field-input');
+  const selectEl = document.getElementById('edit-field-select');
+  if (field === 'invoice_type') {
+    // Campo enumerado → selector (evita valores inválidos por texto libre).
+    inputEl.style.display = 'none';
+    selectEl.style.display = '';
+    selectEl.value = (rowData[field] === 'venta') ? 'venta' : 'compra';
+  } else {
+    selectEl.style.display = 'none';
+    inputEl.style.display = '';
+    inputEl.value = toEditableValue(field, rowData[field]);
+  }
   document.getElementById('edit-error').style.display = 'none';
   document.getElementById('edit-modal').style.display = 'flex';
-  setTimeout(() => document.getElementById('edit-field-input').focus(), 50);
+  setTimeout(() => (field === 'invoice_type' ? selectEl : inputEl).focus(), 50);
 }
 
 function closeEditModal() {
@@ -124,10 +179,25 @@ function closeEditModal() {
 
 async function saveEdit() {
   if (!editingRow || !editingField) return;
-  const newValue = document.getElementById('edit-field-input').value.trim();
+  let newValue = (editingField === 'invoice_type')
+    ? document.getElementById('edit-field-select').value
+    : document.getElementById('edit-field-input').value.trim();
   const errEl = document.getElementById('edit-error');
   errEl.style.display = 'none';
   const saveBtn = document.getElementById('edit-save');
+
+  // Importes: validar y normalizar a formato español canónico "1.234,56" antes
+  // de guardar, para que celda, editor y BD queden siempre coherentes.
+  if (IMPORTE_FIELDS.has(editingField) && newValue !== '') {
+    const n = parseImporteToFloat(newValue);
+    if (n == null) {
+      errEl.textContent = 'Importe no válido. Usa formato 1.234,56';
+      errEl.style.display = 'block';
+      return;
+    }
+    newValue = toSpanishAmountStr(n);
+  }
+
   saveBtn.disabled = true; saveBtn.textContent = 'Guardando...';
 
   // Traducir campo display virtual → campo raw de BD
@@ -442,7 +512,8 @@ function initTable() {
         formatter: makeEditableFormatter('display_empresa'), cellClick: makeEditableCellClick('display_empresa') },
       { title: 'CIF Empresa',      field: 'display_empresa_nif',  width: 130, sorter: 'string',
         formatter: makeEditableFormatter('display_empresa_nif'), cellClick: makeEditableCellClick('display_empresa_nif') },
-      { title: 'TIPO',             field: 'invoice_type',    width: 100, sorter: 'string', formatter: formatTipo, hozAlign: 'center' },
+      { title: 'TIPO',             field: 'invoice_type',    width: 110, sorter: 'string', hozAlign: 'center',
+        formatter: makeEditableFormatter('invoice_type', formatTipo), cellClick: makeEditableCellClick('invoice_type') },
       { title: 'Cliente / Proveedor', field: 'display_contraparte', minWidth: 160, sorter: 'string',
         formatter: makeEditableFormatter('display_contraparte'), cellClick: makeEditableCellClick('display_contraparte') },
       { title: 'CIF Cl/Prov',      field: 'display_contraparte_nif', width: 130, sorter: 'string',
