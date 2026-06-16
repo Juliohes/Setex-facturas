@@ -320,6 +320,12 @@ function formatPct(cell) {
   if (v == null || v === '' || v === '0,0' || v === '0') return '<span style="color:#a0aec0">—</span>';
   return escHtml(String(v)) + '%';
 }
+// Cuota IRPF: igual que IRPF %, cuando es 0 (o vacío) se muestra "—" en vez de "0,00 €".
+function formatCuotaImporteDash(cell) {
+  const n = parseImporteToFloat(cell.getValue());
+  if (n == null || n === 0) return '<span style="color:#a0aec0">—</span>';
+  return formatEuroStr(cell);
+}
 function formatTipo(cell) {
   const v = cell.getValue();
   if (!v) return '<span style="color:#a0aec0">—</span>';
@@ -530,10 +536,10 @@ function initTable() {
       { title: 'IRPF %',           field: 'irpf_porcentaje', width: 80,  sorter: 'string', hozAlign: 'center',
         formatter: makeEditableFormatter('irpf_porcentaje', formatPct), cellClick: makeEditableCellClick('irpf_porcentaje') },
       { title: 'Cuota IRPF',       field: 'cuota_irpf',      width: 110, sorter: 'string', hozAlign: 'right',
-        formatter: makeEditableFormatter('cuota_irpf', formatEuroStr), cellClick: makeEditableCellClick('cuota_irpf') },
+        formatter: makeEditableFormatter('cuota_irpf', formatCuotaImporteDash), cellClick: makeEditableCellClick('cuota_irpf') },
       { title: 'Total',            field: 'total_factura',   width: 120, sorter: 'number', hozAlign: 'right',
         cellStyle: () => ({ fontWeight: '700', color: '#1a365d' }),
-        formatter: makeEditableFormatter('total_factura', formatEuro), cellClick: makeEditableCellClick('total_factura') },
+        formatter: makeEditableFormatter('total_factura', formatEuroStr), cellClick: makeEditableCellClick('total_factura') },
       { title: 'Estado',           field: 'procesado_en',    width: 120, formatter: formatEstado, sorter: 'datetime' },
       { title: 'Imagen',           field: 'file_path',       width: 90,  formatter: formatImagen, hozAlign: 'center', headerSort: false,
         cellClick: (_e, cell) => {
