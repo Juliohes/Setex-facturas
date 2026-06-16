@@ -3183,6 +3183,12 @@ Añade esta línea (backup cada día a las 3:00 AM):
 
 **Aprendizaje NIF→nombre:** confirmado que ya funciona como pide Julio (empresa-cliente por CIF de perfil; contraparte por `company_relationships` aislado por cliente; mejora con cada confirmación). Registro de empresas-cliente y contrapartes entregado en sesión.
 
+**CUARTO DEPLOY 2026-06-16 (solo frontend) — consentimiento usuario + aviso descuadre visible (flujo crítico de captura):**
+- `index.html`: microcopy de **declaración responsable** bajo «Confirmar y guardar» (texto elegido por Julio: "Al confirmar, declaro que he revisado los datos y que son correctos y veraces") + **banner ámbar** `#confirm-descuadre-banner` (oculto por defecto).
+- `app.js` `updateIVACalc`: el descuadre de Total ahora se marca con ✗ (antes el mensaje no lo marcaba, por lo que `⚠ Revisar` no lo detectaba); el banner se muestra/oculta en tiempo real según `hasError` (Base×IVA% o Base+IVA−IRPF). Avisa, NO bloquea. Listener ya cableado a los 5 campos del bloque IVA.
+- Nota: el panel de comprobación del usuario YA tenía validación de coherencia (`updateIVACalc`) desde antes; esta entrega la hace prominente y añade el consentimiento.
+- Cache-buster `app.js?v=20260616-001`, rollback `setex-prod-frontend:prev3-20260616`. Healthy, sitio 200.
+
 **Nota estado git:** el working tree de prod queda en rama `feature/admin-edicion-y-nombre-nif` (= imagen viva). El estado anterior sigue en `recovery/prod-live-20260615`. Ambas en origin.
 
 ---
