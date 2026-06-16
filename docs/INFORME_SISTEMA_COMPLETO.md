@@ -3165,7 +3165,16 @@ Añade esta línea (backup cada día a las 3:00 AM):
 - `app/frontend/src/admin-facturas.html`: `<select id="edit-field-select">` + cache-buster `admin-facturas.js?v=20260615-001` (regla 6).
 - `app/backend/src/server.js`: **bug preexistente corregido** — el export Excel usaba `parseFloat()` sobre importes en formato español (`"996,40"` → `996`, decimales perdidos). Sustituido por `normalizeToFloat()` (importado de `lib/normalize-amount`). Afecta `/api/admin/facturas/export.xlsx`.
 
-**Verificación:** sintaxis OK (`node --check`), import resuelto, lógica de normalización probada. **Pendiente:** verificación visual end-to-end del panel + despliegue controlado (build manual backend+frontend, NO `deploy-prod.yml`) con OK de Julio. Backend del preview/OCR NO tocado (la feature nombre-desde-NIF ya funciona vía `company_relationships` tras confirmación).
+**Verificación:** sintaxis OK (`node --check`), import resuelto, lógica de normalización probada. Backend del preview/OCR NO tocado (la feature nombre-desde-NIF ya funciona vía `company_relationships` tras confirmación).
+
+**DESPLEGADO a producción 2026-06-16 ~08:55 UTC (build manual + swap, NO `deploy-prod.yml`):**
+- Pre-flight: working tree limpio, imágenes previas retageadas `setex-prod-{backend,frontend}:rollback-20260616`, backup BD `setex_db_20260616_085518.sql.gz.gpg` (integridad verificada).
+- Build + swap (`stop`+`up -d`, regla 7). Healthy en ~35s. Imagen viva backend `md5 server.js = 8f3129a…` (confirma el fix en runtime).
+- Smoke post-deploy: `/health` 200 interno + HTTPS externo, smoke-test-http 3/3, cache-buster servido.
+- **Rollback inmediato disponible:** `docker tag setex-prod-{backend,frontend}:rollback-20260616 ...:latest && docker compose up -d` (o `docker load` del backup `prod-images-live.tar.gz`).
+- **Pendiente:** validación visual del cliente/admin (editar importe → coincide tabla/editor; editar TIPO; exportar Excel y comprobar decimales).
+
+**Nota estado git:** el working tree de prod queda en rama `feature/admin-edicion-y-nombre-nif` (= imagen viva). El estado anterior sigue en `recovery/prod-live-20260615`. Ambas en origin.
 
 ---
 
