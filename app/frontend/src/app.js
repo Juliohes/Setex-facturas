@@ -723,7 +723,7 @@ function parsePct(str) {
 function updateIVACalc() {
     const calcEl = document.getElementById('confirm-iva-calc');
     const statusEl = document.getElementById('confirm-iva-status');
-    if (!calcEl) return;
+    const banner = document.getElementById('confirm-descuadre-banner');
 
     const base   = parseAmount(document.getElementById('confirm-base').value);
     const pct    = parsePct(document.getElementById('confirm-iva-pct').value);
@@ -733,6 +733,7 @@ function updateIVACalc() {
 
     const lines = [];
     const TOL = 0.05;
+    let hasError = false; // bandera explícita y robusta (no depende del HTML)
 
     // Verificar base × % = cuota
     if (base !== null && pct !== null && cuota !== null) {
@@ -742,6 +743,7 @@ function updateIVACalc() {
         if (diff <= TOL) {
             lines.push(`<span style="color:#276749;">✓ ${base.toFixed(2).replace('.', ',')} × ${pctDisplay}% = ${cuotaEsp.toFixed(2).replace('.', ',')}€</span>`);
         } else {
+            hasError = true;
             lines.push(`<span style="color:#c53030;">✗ ${base.toFixed(2).replace('.', ',')} × ${pctDisplay}% = ${cuotaEsp.toFixed(2).replace('.', ',')}€ ≠ ${cuota.toFixed(2).replace('.', ',')}€ (diff: ${diff.toFixed(2)}€)</span>`);
         }
     }
@@ -753,6 +755,7 @@ function updateIVACalc() {
         if (diff <= TOL) {
             lines.push(`<span style="color:#276749;">✓ Base + IVA - IRPF = ${totalCalc.toFixed(2).replace('.', ',')}€ = Total ✓</span>`);
         } else {
+            hasError = true;
             lines.push(`<span style="color:#c53030;">✗ Base + IVA - IRPF = ${totalCalc.toFixed(2).replace('.', ',')}€ ≠ Total ${total.toFixed(2).replace('.', ',')}€</span>`);
         }
     }
@@ -763,22 +766,14 @@ function updateIVACalc() {
         lines.push(`<span style="color:#4a90d9;">ℹ Cuota calculada: ${auto.toFixed(2).replace('.', ',')}€</span>`);
     }
 
-    const banner = document.getElementById('confirm-descuadre-banner');
-    if (lines.length > 0) {
-        calcEl.innerHTML = lines.join('<br>');
-        // Estado global IVA
-        const hasError = lines.some(l => l.includes('✗'));
-        if (statusEl) {
-            statusEl.textContent = hasError ? '⚠ Revisar' : '✓ Correcto';
-            statusEl.style.color = hasError ? '#c53030' : '#276749';
-        }
-        // Aviso prominente junto al botón de guardar (avisa, no bloquea).
-        if (banner) banner.style.display = hasError ? 'block' : 'none';
-    } else {
-        calcEl.textContent = '';
-        if (statusEl) statusEl.textContent = '';
-        if (banner) banner.style.display = 'none';
+    if (calcEl) calcEl.innerHTML = lines.length > 0 ? lines.join('<br>') : '';
+    if (statusEl) {
+        statusEl.textContent = lines.length === 0 ? '' : (hasError ? '⚠ Revisar' : '✓ Correcto');
+        statusEl.style.color = hasError ? '#c53030' : '#276749';
     }
+    // Aviso prominente junto al botón de guardar (avisa, no bloquea). Se controla
+    // SIEMPRE, con bandera explícita, para que nunca quede un aviso fantasma.
+    if (banner) banner.style.display = hasError ? 'block' : 'none';
 }
 
 // ── Corrección automática error OCR: confusión coma decimal / punto miles (×1000) ──
