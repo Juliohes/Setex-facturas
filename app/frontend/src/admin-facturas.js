@@ -150,6 +150,61 @@ function toEditableValue(field, rawValue) {
   return rawValue == null ? '' : String(rawValue);
 }
 
+// ── Validación de coherencia aritmética (avisa, NO sobrescribe) ────────────────
+// Compara el cálculo esperado con lo leído/guardado. Si no cuadra (más de 1
+// céntimo de diferencia), las celdas Total y Cuota IVA muestran un aviso. El
+// usuario decide y edita a mano; nunca se modifica un valor automáticamente.
+function parsePct(v) {
+  if (v == null || v === '') return null;
+  const n = parseFloat(String(v).replace(/[%\s]/g, '').replace(',', '.'));
+  return isNaN(n) ? null : n;
+}
+
+function checkCoherencia(row) {
+  const base      = parseImporteToFloat(row.base_imponible);
+  const cuotaIva  = parseImporteToFloat(row.cuota_iva);
+  const cuotaIrpf = parseImporteToFloat(row.cuota_irpf) || 0;
+  const total     = parseImporteToFloat(row.total_factura);
+  const ivaPct    = parsePct(row.iva_porcentaje);
+  const isMulti   = Array.isArray(row.lineas_iva) && row.lineas_iva.length >= 2;
+  const TOL = 0.02; // tolerancia de redondeo (céntimo)
+
+  let totalOk = true, totalEsperado = null;
+  if (base != null && cuotaIva != null && total != null) {
+    totalEsperado = base + cuotaIva - cuotaIrpf;
+    totalOk = Math.abs(totalEsperado - total) <= TOL;
+  }
+  // Cuota IVA esperada solo tiene sentido en mono-IVA (en multi-IVA es suma de tramos).
+  let cuotaIvaOk = true, cuotaIvaEsperada = null;
+  if (!isMulti && base != null && ivaPct != null && cuotaIva != null) {
+    cuotaIvaEsperada = base * ivaPct / 100;
+    cuotaIvaOk = Math.abs(cuotaIvaEsperada - cuotaIva) <= Math.max(TOL, base * 0.001);
+  }
+  return { totalOk, totalEsperado, cuotaIvaOk, cuotaIvaEsperada };
+}
+
+// Formatter del Total: valor + aviso ⚠️ si no cuadra con Base+IVA−IRPF.
+function formatTotalCoherente(cell) {
+  const val = formatEuroStr(cell);
+  const chk = checkCoherencia(cell.getRow().getData());
+  if (!chk.totalOk && chk.totalEsperado != null) {
+    const esp = toSpanishAmountStr(chk.totalEsperado);
+    return `<span style="color:#c05621;">${val}</span> <span title="No cuadra · esperado ${esp} € (Base + Cuota IVA − Cuota IRPF). Revisa y corrige a mano." style="cursor:help;">⚠️</span>`;
+  }
+  return val;
+}
+
+// Formatter de la Cuota IVA: valor + aviso ⚠️ si no cuadra con Base × IVA%.
+function formatCuotaIvaCoherente(cell) {
+  const val = formatEuroStr(cell);
+  const chk = checkCoherencia(cell.getRow().getData());
+  if (!chk.cuotaIvaOk && chk.cuotaIvaEsperada != null) {
+    const esp = toSpanishAmountStr(chk.cuotaIvaEsperada);
+    return `<span style="color:#c05621;">${val}</span> <span title="No cuadra · esperado ${esp} € (Base × IVA%). Revisa y corrige a mano." style="cursor:help;">⚠️</span>`;
+  }
+  return val;
+}
+
 function openEditModal(rowData, field) {
   editingRow = rowData;
   editingField = field;
@@ -532,14 +587,14 @@ function initTable() {
       { title: 'IVA %',            field: 'iva_porcentaje',  width: 110, sorter: 'string', hozAlign: 'center', headerSort: false,
         formatter: formatIvaPctUnified, cellClick: ivaPctUnifiedCellClick },
       { title: 'Cuota IVA',        field: 'cuota_iva',       width: 110, sorter: 'string', hozAlign: 'right',
-        formatter: makeEditableFormatter('cuota_iva', formatEuroStr), cellClick: makeEditableCellClick('cuota_iva') },
+        formatter: makeEditableFormatter('cuota_iva', formatCuotaIvaCoherente), cellClick: makeEditableCellClick('cuota_iva') },
       { title: 'IRPF %',           field: 'irpf_porcentaje', width: 80,  sorter: 'string', hozAlign: 'center',
         formatter: makeEditableFormatter('irpf_porcentaje', formatPct), cellClick: makeEditableCellClick('irpf_porcentaje') },
       { title: 'Cuota IRPF',       field: 'cuota_irpf',      width: 110, sorter: 'string', hozAlign: 'right',
         formatter: makeEditableFormatter('cuota_irpf', formatCuotaImporteDash), cellClick: makeEditableCellClick('cuota_irpf') },
       { title: 'Total',            field: 'total_factura',   width: 120, sorter: 'number', hozAlign: 'right',
         cellStyle: () => ({ fontWeight: '700', color: '#1a365d' }),
-        formatter: makeEditableFormatter('total_factura', formatEuroStr), cellClick: makeEditableCellClick('total_factura') },
+        formatter: makeEditableFormatter('total_factura', formatTotalCoherente), cellClick: makeEditableCellClick('total_factura') },
       { title: 'Estado',           field: 'procesado_en',    width: 120, formatter: formatEstado, sorter: 'datetime' },
       { title: 'Imagen',           field: 'file_path',       width: 90,  formatter: formatImagen, hozAlign: 'center', headerSort: false,
         cellClick: (_e, cell) => {
