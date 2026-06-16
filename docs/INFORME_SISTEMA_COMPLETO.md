@@ -3174,6 +3174,13 @@ Añade esta línea (backup cada día a las 3:00 AM):
 - **Rollback inmediato disponible:** `docker tag setex-prod-{backend,frontend}:rollback-20260616 ...:latest && docker compose up -d` (o `docker load` del backup `prod-images-live.tar.gz`).
 - **Pendiente:** validación visual del cliente/admin (editar importe → coincide tabla/editor; editar TIPO; exportar Excel y comprobar decimales).
 
+**SEGUNDO DEPLOY 2026-06-16 (solo frontend) — fix regresión Total + IRPF:**
+- Bug introducido en `cd6466c`: la columna Total usaba `formatEuro` (`parseFloat`), por lo que un importe guardado en español (`"2.000,00"`) se mostraba `"2,00 €"` en la tabla (el valor real era correcto; solo la visualización). Unificada a `formatEuroStr`.
+- Cuota IRPF a 0 ahora muestra `—` (como IRPF %) en vez de `0,00 €` (`formatCuotaImporteDash`).
+- Cache-buster `?v=20260616-001`. Build+swap solo frontend, healthy, smoke 3/3, rollback `setex-prod-frontend:prev-20260616`.
+
+**PENDIENTE DE DISEÑO (pedido por Julio 2026-06-16):** Total autocalculado = base_imponible + cuota_iva − cuota_irpf (recalcular solo al editar componentes, real y visual; editable manual solo como excepción). Reforzar aprendizaje NIF→nombre (ya activo vía `company_relationships`/`known_cifs`, aislado por cliente).
+
 **Nota estado git:** el working tree de prod queda en rama `feature/admin-edicion-y-nombre-nif` (= imagen viva). El estado anterior sigue en `recovery/prod-live-20260615`. Ambas en origin.
 
 ---
