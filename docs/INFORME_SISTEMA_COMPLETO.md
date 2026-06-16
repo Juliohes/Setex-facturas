@@ -3154,5 +3154,20 @@ Añade esta línea (backup cada día a las 3:00 AM):
 
 ---
 
+### 2026-06-15 — Fix panel admin: normalización de importes + export Excel (rama feature)
+
+**Contexto:** Julio reporta que en el panel admin "en la tabla se ve un valor y al editar aparece otro", que algún campo no deja editar, y pide que todos sean editables. Diagnóstico sobre el monolito vivo de prod (rama `feature/admin-edicion-y-nombre-nif` desde `recovery/prod-live-20260615`).
+
+**Causa raíz (importes):** los importes se guardan como string en formato inconsistente (BD real tiene `"131,98"` con coma y `"146.20"` con punto en la misma columna). La tabla los normaliza siempre a `"1.234,56 €"` (`formatEuroStr`) pero el editor cargaba el valor crudo → discrepancia visible.
+
+**Cambios (commit `cd6466c`):**
+- `app/frontend/src/admin-facturas.js`: helpers `parseImporteToFloat` / `toSpanishAmountStr` / `toEditableValue` (espejo de `lib/normalize-amount.js`); el editor muestra importes en formato español igual que la celda y los guarda normalizados. Round-trip idempotente verificado (10/10 casos). Columna TIPO (`invoice_type`) ahora editable con selector compra/venta (`openEditModal`/`saveEdit` soportan `<select>`).
+- `app/frontend/src/admin-facturas.html`: `<select id="edit-field-select">` + cache-buster `admin-facturas.js?v=20260615-001` (regla 6).
+- `app/backend/src/server.js`: **bug preexistente corregido** — el export Excel usaba `parseFloat()` sobre importes en formato español (`"996,40"` → `996`, decimales perdidos). Sustituido por `normalizeToFloat()` (importado de `lib/normalize-amount`). Afecta `/api/admin/facturas/export.xlsx`.
+
+**Verificación:** sintaxis OK (`node --check`), import resuelto, lógica de normalización probada. **Pendiente:** verificación visual end-to-end del panel + despliegue controlado (build manual backend+frontend, NO `deploy-prod.yml`) con OK de Julio. Backend del preview/OCR NO tocado (la feature nombre-desde-NIF ya funciona vía `company_relationships` tras confirmación).
+
+---
+
 *SETEX Captura Facturas · setex-facturas.es*
 *Documento de referencia — actualizar con cada sesión de desarrollo*
