@@ -3179,7 +3179,9 @@ Añade esta línea (backup cada día a las 3:00 AM):
 - Cuota IRPF a 0 ahora muestra `—` (como IRPF %) en vez de `0,00 €` (`formatCuotaImporteDash`).
 - Cache-buster `?v=20260616-001`. Build+swap solo frontend, healthy, smoke 3/3, rollback `setex-prod-frontend:prev-20260616`.
 
-**PENDIENTE DE DISEÑO (pedido por Julio 2026-06-16):** Total autocalculado = base_imponible + cuota_iva − cuota_irpf (recalcular solo al editar componentes, real y visual; editable manual solo como excepción). Reforzar aprendizaje NIF→nombre (ya activo vía `company_relationships`/`known_cifs`, aislado por cliente).
+**TERCER DEPLOY 2026-06-16 (solo frontend) — aviso de coherencia aritmética:** decisión de Julio = validar y AVISAR, no sobrescribir (el OCR puede tener razón y hay excepciones: recargo equivalencia, suplidos). `checkCoherencia()` compara `Base+CuotaIVA−CuotaIRPF` vs Total y `Base×IVA%` vs Cuota IVA (tolerancia 1 céntimo); si no cuadra, la celda muestra ⚠️ con el valor esperado en tooltip. Multi-IVA excluido del check de cuota. Todo editable a mano. Cache-buster `?v=20260616-002`, rollback `setex-prod-frontend:prev2-20260616`. Lógica probada (5 casos incl. formatos mixtos/IRPF).
+
+**Aprendizaje NIF→nombre:** confirmado que ya funciona como pide Julio (empresa-cliente por CIF de perfil; contraparte por `company_relationships` aislado por cliente; mejora con cada confirmación). Registro de empresas-cliente y contrapartes entregado en sesión.
 
 **Nota estado git:** el working tree de prod queda en rama `feature/admin-edicion-y-nombre-nif` (= imagen viva). El estado anterior sigue en `recovery/prod-live-20260615`. Ambas en origin.
 
