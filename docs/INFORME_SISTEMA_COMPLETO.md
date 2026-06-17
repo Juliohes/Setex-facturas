@@ -3189,6 +3189,11 @@ Añade esta línea (backup cada día a las 3:00 AM):
 - Nota: el panel de comprobación del usuario YA tenía validación de coherencia (`updateIVACalc`) desde antes; esta entrega la hace prominente y añade el consentimiento.
 - Cache-buster `app.js?v=20260616-001`, rollback `setex-prod-frontend:prev3-20260616`. Healthy, sitio 200.
 
+**QUINTO DEPLOY 2026-06-17 (solo frontend) — aviso de descuadre robusto (bandera explícita):**
+- `app.js` `updateIVACalc`: el aviso de descuadre se gobierna ahora con una bandera `hasError` explícita (no inferida del texto del mensaje), eliminando el falso negativo cuando el descuadre venía solo de `Base+IVA−IRPF≠Total`. El banner `#confirm-descuadre-banner` se muestra/oculta de forma fiable en tiempo real. Sigue avisando, NO bloquea.
+- `index.html`: declaración responsable en **rojo** para mayor visibilidad. Cache-buster `app.js?v=20260616-002`.
+- Commit `a999498` (estaba hecho pero sin desplegar; pendiente recogido en `kk_instrucciones_16_06_2026`). Build+swap solo frontend (NO `deploy-prod.yml`), healthy ~21s, sitio `200`, `app.js` servido = `?v=20260616-002` con `hasError` ×6 y `confirm-descuadre-banner` presente. Rollback `setex-prod-frontend:prev4-20260616` (build -001 previo). `fix-permissions.sh` sin cambios. Rama pusheada a origin (`b619167..a999498`).
+
 **Nota estado git:** el working tree de prod queda en rama `feature/admin-edicion-y-nombre-nif` (= imagen viva). El estado anterior sigue en `recovery/prod-live-20260615`. Ambas en origin.
 
 ---
