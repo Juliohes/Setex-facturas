@@ -2283,6 +2283,29 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
       logger.info(`[Admin Confirm] Receptor forzado a empresa cliente: ${finalReceptorNombre} (${finalReceptorNif})`);
     }
 
+    // Proveedor (emisor) definitivo — variable explícita para poder forzar el lado
+    // del user en facturas de venta sin alterar finalNif (usado en carpeta/known_cifs).
+    let finalProveedorNif    = finalNif;
+    let finalProveedorNombre = cleanStr(confirmed_proveedor_nombre || campos.proveedor_nombre || ocrFull.proveedor_nombre);
+
+    // ── IDENTIDAD DEL USER = FUENTE DE VERDAD DEL REGISTRO (no del OCR) ──────────
+    // El usuario está autenticado: su CIF y nombre se conocen con certeza desde su
+    // registro (users.company_*). El lado propio de la factura (receptor en compra,
+    // emisor en venta) NUNCA debe depender de lo que lea la IA: así se garantiza
+    // que para un mismo CIF aparezca SIEMPRE el mismo nombre, el registrado.
+    // El flujo admin ya fuerza su lado desde la empresa-cliente (bloque anterior),
+    // por eso se excluye aquí (validationUserNif/Name ya valdrían lo mismo).
+    if (!previewClientCompanyData && validationUserNif && validationUserName) {
+      if (invoiceType === 'venta') {
+        finalProveedorNif    = validationUserNif;
+        finalProveedorNombre = validationUserName;
+      } else {
+        finalReceptorNif    = validationUserNif;
+        finalReceptorNombre = validationUserName;
+      }
+      logger.info(`[User-Identity] Lado propio (${invoiceType}) fijado desde registro: ${validationUserName} (${validationUserNif})`);
+    }
+
     // INSERT en BD — procesado_en=NOW() (procesamiento síncrono)
     const dbResult = await pool.query(
       `INSERT INTO uploads (
@@ -2298,8 +2321,8 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,NOW(),$25) RETURNING id`,
       [
         userInfo.userId, fileInfo.filename, fileInfo.mimetype, fileInfo.size,
-        finalNif,
-        cleanStr(confirmed_proveedor_nombre || campos.proveedor_nombre || ocrFull.proveedor_nombre),
+        finalProveedorNif,
+        finalProveedorNombre,
         normFecha,
         normTotal,
         finalReceptorNif,
