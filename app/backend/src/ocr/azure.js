@@ -130,15 +130,32 @@ function extractLineasIvaAzure(fields) {
     const obj = item.valueObject || {};
     const amountField = obj.Amount || obj.TaxAmount;
     const rateField   = obj.Rate   || obj.TaxRate;
+    // Fallback histórico: el schema oficial 2024-11-30-ga de prebuilt-invoice
+    // NO incluye BaseAmount/TaxBase en TaxDetails (solo Amount y Rate) — se
+    // mantienen las lecturas por si Microsoft los añade, pero la base real
+    // se DERIVA por aritmética más abajo (fix multi-IVA 2026-07-03).
     const baseField   = obj.BaseAmount || obj.TaxBase;
 
-    const cuota = amountField?.valueCurrency?.amount ?? amountField?.valueNumber ?? null;
+    let cuota = amountField?.valueCurrency?.amount ?? amountField?.valueNumber ?? null;
     const rateRaw = rateField?.valueNumber ?? rateField?.valueString ?? null;
-    const base  = baseField?.valueCurrency?.amount ?? baseField?.valueNumber ?? null;
-
-    if (cuota == null) continue; // sin cuota → línea no útil
+    let base  = baseField?.valueCurrency?.amount ?? baseField?.valueNumber ?? null;
 
     const rateNorm = normalizeRate(rateRaw);
+
+    // Derivaciones aritméticas (fix 2026-07-03):
+    //   - tramo exento (rate 0) sin cuota → cuota = 0 (antes se descartaba y
+    //     la factura multi-IVA degradaba a mono-IVA perdiendo el desglose)
+    //   - cuota presente y rate > 0 sin base → base = cuota ÷ (rate/100)
+    if (cuota == null && rateNorm === 0) cuota = 0;
+    if (cuota == null && base != null && rateNorm != null) {
+      cuota = Math.round(base * rateNorm) / 100;
+    }
+    if (cuota == null) continue; // sin cuota ni forma de derivarla → línea no útil
+
+    if (base == null && rateNorm != null && rateNorm > 0) {
+      base = Math.round((cuota / (rateNorm / 100)) * 100) / 100;
+    }
+
     const productos = rateNorm != null ? extractProductosFromItems(fields, rateNorm) : [];
 
     lineas.push({
@@ -342,4 +359,6 @@ async function extractInvoice(filePath, mimeType, apiKey, endpoint, context = {}
   };
 }
 
-module.exports = { extractInvoice };
+// extractLineasIvaAzure y normalizeRate se exportan para tests unitarios
+// (fixtures de TaxDetails sin red) — no forman parte del contrato público.
+module.exports = { extractInvoice, extractLineasIvaAzure, normalizeRate };

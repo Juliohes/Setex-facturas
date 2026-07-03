@@ -13,7 +13,7 @@ const TIPOS_IVA_ESPANA = [0, 4, 5, 10, 21]; // exento, superreducido, reducido+,
  */
 function parseSpanishAmount(str) {
   if (str == null) return null;
-  let s = String(str).trim().replace(/[€$\s]/g, '');
+  const s = String(str).trim().replace(/[€$\s]/g, '');
   if (!s || s === '' || s === 'null') return null;
 
   const hasComma = s.includes(',');
@@ -50,6 +50,56 @@ function parsePercent(str) {
   // Si el valor es >= 1 asumimos que es porcentaje entero (21 → 0.21)
   // Si es < 1 asumimos que ya es decimal (0.21 → 0.21)
   return n < 1 ? n : n / 100;
+}
+
+/**
+ * Parsea un porcentaje al entero visible (21, 10, 4) — NO al decimal 0.21.
+ * parsePercent() convierte para cálculo matemático; este para comparar/mostrar.
+ * Acepta "21", "21,0", "21.0", "21%", 0.21 → 21. Devuelve null si no parseable.
+ */
+function parseRateEntero(raw) {
+  if (raw == null) return null;
+  const clean = String(raw).replace(',', '.').replace('%', '').trim();
+  const n = parseFloat(clean);
+  if (!Number.isFinite(n)) return null;
+  return n < 1 && n > 0 ? n * 100 : n;   // 0.21 → 21; 21 → 21; 0 → 0 (exento)
+}
+
+/** Formatea un número a importe español "1.234,56". */
+function fmtAmountEs(n) {
+  return Number.isFinite(n)
+    ? n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : null;
+}
+
+/**
+ * Completa por aritmética los huecos de cada tramo IVA (fix multi-IVA 2026-07-03):
+ *   - base ausente y cuota+% presentes (% > 0)  → base  = cuota ÷ (%/100)
+ *   - cuota ausente y base+% presentes          → cuota = base × %/100
+ *   - cuota ausente y % = 0 (tramo exento)      → cuota = "0,00"
+ * Necesario porque Azure DI prebuilt-invoice NO devuelve BaseAmount por tramo
+ * (schema oficial 2024-11-30-ga: TaxDetails solo trae Amount y Rate).
+ * Muta y devuelve el mismo array para poder encadenar.
+ */
+function fillDerivedBases(lineas) {
+  if (!Array.isArray(lineas)) return lineas;
+  for (const l of lineas) {
+    if (!l) continue;
+    const pct = parseRateEntero(l.porcentaje);
+    if (pct == null) continue;
+    const base  = parseSpanishAmount(l.base);
+    const cuota = parseSpanishAmount(l.cuota);
+    if (cuota == null && pct === 0) {
+      l.cuota = '0,00';
+    } else if (cuota == null && base != null) {
+      l.cuota = fmtAmountEs(Math.round(base * pct) / 100);
+    }
+    if (base == null && pct > 0) {
+      const c = parseSpanishAmount(l.cuota);
+      if (c != null) l.base = fmtAmountEs(Math.round((c / (pct / 100)) * 100) / 100);
+    }
+  }
+  return lineas;
 }
 
 /**
@@ -208,29 +258,37 @@ function mergeLineasIva(openaiLineas, azureLineas) {
   if (o.length === 0) return normalizeProductos(a);
   if (a.length === 0) return normalizeProductos(o);
 
-  // Construir índice por porcentaje para cruzar tramos entre motores.
+  // Construir índice por porcentaje NUMÉRICO normalizado para cruzar tramos
+  // entre motores. Fix 2026-07-03: antes se indexaba por string literal y
+  // "21" (OpenAI) ≠ "21,0" (Azure) NO cruzaba → el mismo tramo se duplicaba
+  // y las sumas de bases/cuotas salían dobladas en facturas multi-IVA.
+  const keyOf = (l) => {
+    const r = parseRateEntero(l && l.porcentaje);
+    return r == null ? null : String(Math.round(r * 10) / 10); // "21", "10", "0"
+  };
+
   const byPct = new Map();
   for (const l of a) {
-    const pct = String(l.porcentaje || '').trim();
-    if (pct) byPct.set(pct, { ...l, productos: Array.isArray(l.productos) ? l.productos : [] });
+    const k = keyOf(l);
+    if (k != null) byPct.set(k, { ...l, productos: Array.isArray(l.productos) ? l.productos : [] });
   }
 
   for (const l of o) {
-    const pct = String(l.porcentaje || '').trim();
-    if (!pct) continue;
-    const existing = byPct.get(pct);
+    const k = keyOf(l);
+    if (k == null) continue;
+    const existing = byPct.get(k);
     const oProds = Array.isArray(l.productos) ? l.productos : [];
     if (!existing) {
       // Tramo solo visto por OpenAI
-      byPct.set(pct, { ...l, productos: oProds });
+      byPct.set(k, { ...l, productos: oProds });
       continue;
     }
     // Tramo visto por ambos: preferir base/cuota de Azure (más exacto) y
     // productos fusionados con OpenAI prioritario en descripciones.
     const mergedProds = mergeProductos(oProds, existing.productos);
-    byPct.set(pct, {
+    byPct.set(k, {
       base:       existing.base       || l.base,
-      porcentaje: pct,
+      porcentaje: existing.porcentaje || l.porcentaje,
       cuota:      existing.cuota      || l.cuota,
       productos:  mergedProds
     });
@@ -310,15 +368,8 @@ function normalizeConfirmedLineasIva(rawLineas) {
   let dominantRate = null;
   let dominantCuota = -1;
 
-  // Parse porcentaje directo al entero visible (21, 10, 4) — NO al decimal 0.21
-  // parsePercent() del módulo convierte para cálculo matemático, no para display.
-  const parseRateEntero = (raw) => {
-    if (raw == null) return null;
-    const clean = String(raw).replace(',', '.').replace('%', '').trim();
-    const n = parseFloat(clean);
-    if (!Number.isFinite(n)) return null;
-    return n < 1 ? n * 100 : n;   // 0.21 → 21; 21 → 21
-  };
+  // parseRateEntero es ahora helper de módulo (compartido con mergeLineasIva
+  // y fillDerivedBases) — misma semántica que la versión inline anterior.
 
   for (let i = 0; i < rawLineas.length; i++) {
     const l = rawLineas[i] || {};
@@ -370,4 +421,12 @@ function normalizeConfirmedLineasIva(rawLineas) {
   };
 }
 
-module.exports = { validateIVACoherencia, mergeLineasIva, parseSpanishAmount, parsePercent, normalizeConfirmedLineasIva };
+module.exports = {
+  validateIVACoherencia,
+  mergeLineasIva,
+  parseSpanishAmount,
+  parsePercent,
+  parseRateEntero,
+  fillDerivedBases,
+  normalizeConfirmedLineasIva,
+};
