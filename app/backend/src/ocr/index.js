@@ -1,22 +1,26 @@
 // src/ocr/index.js
-// Orquestador OCR DUAL — ejecuta OpenAI GPT-4.1 + Azure Document Intelligence en PARALELO.
-// Cuando ambos motores coinciden en NIF + fecha + total → dual_confirmed:true (máxima fiabilidad).
+// Orquestador OCR multi-motor — ejecuta los motores activos en PARALELO.
+// Cuando dos motores coinciden en NIF + fecha + total → dual_confirmed:true (máxima fiabilidad).
 // Cuando discrepan → reconciliación con dígito de control + lectura enfocada CIF como árbitro.
 //
 // MOTORES:
-//   "openai" — GPT-4.1 Vision (activo siempre)
-//   "azure"  — Azure Document Intelligence prebuilt-invoice (sin alucinaciones, $0.0015/factura)
+//   "openai"  — GPT-4.1 Vision (activo siempre)
+//   "azure"   — Azure Document Intelligence prebuilt-invoice (sin alucinaciones, $0.0015/factura)
+//   "mistral" — Mistral OCR 4 (modelo OCR específico, annotations JSON, ~$0.004/factura)
 //
 // MODO (features.json → ocr_mode):
-//   "dual"    — ambos en paralelo (DEFECTO, máxima confianza)
+//   "dual"    — OpenAI + Azure en paralelo (DEFECTO)
+//   "triple"  — OpenAI + Azure + Mistral en paralelo (votación 2-de-3 en importes)
 //   "openai"  — solo OpenAI
 //   "azure"   — solo Azure
+//   "mistral" — solo Mistral OCR 4
 'use strict';
 
-const fs     = require('fs');
-const openai = require('./openai');
-const azure  = require('./azure');
-const { mergeLineasIva } = require('./validateIVA');
+const fs      = require('fs');
+const openai  = require('./openai');
+const azure   = require('./azure');
+const mistral = require('./mistral');
+const { mergeLineasIva, fillDerivedBases, normalizeConfirmedLineasIva, parseSpanishAmount } = require('./validateIVA');
 const { validateSpanishTaxId } = require('./validateCIF');
 
 function getSecret(name) {
@@ -57,11 +61,19 @@ async function tryAzure(filePath, mimeType, context) {
   return await azure.extractInvoice(filePath, mimeType, apiKey, endpoint, context);
 }
 
+async function tryMistral(filePath, mimeType, context) {
+  const apiKey = getSecret('mistral_api_key');
+  if (isPlaceholder(apiKey)) {
+    throw new Error('Mistral OCR: mistral_api_key no configurada — añade el secret en secrets/ del entorno activo');
+  }
+  return await mistral.extractInvoice(filePath, mimeType, apiKey, context);
+}
+
 // ─── Normalización para comparar ─────────────────────────────────────────────
 
 function normalizeToFloat(str) {
   if (!str) return null;
-  let s = String(str).trim().replace(/[€$\s]/g, '');
+  const s = String(str).trim().replace(/[€$\s]/g, '');
   if (!s) return null;
   if (s.includes(',') && s.includes('.')) {
     return s.lastIndexOf(',') > s.lastIndexOf('.')
@@ -91,18 +103,128 @@ function normNif(n) {
   return n ? n.toUpperCase().replace(/[\s\-\.]/g, '') : null;
 }
 
-// ─── Comparador y fusionador de resultados duales ─────────────────────────────
+/** amountsAgree estricto: exige ambos valores presentes (amountsAgree devuelve true con null). */
+function amountsBothAgree(a, b) {
+  const fa = normalizeToFloat(a);
+  const fb = normalizeToFloat(b);
+  if (fa == null || fb == null) return false;
+  return amountsAgree(a, b);
+}
 
-function compareOCRResults(openaiRes, azureRes, logger) {
+// ─── Integración del tercer motor (Mistral OCR 4) ─────────────────────────────
+// Solo se invoca en modo triple con los 3 motores vivos. Reglas:
+//   1. Relleno: campos null del merge dual se completan con la lectura Mistral.
+//   2. lineas_iva: fusión con el desglose Mistral (mismo mergeLineasIva).
+//   3. Votación 2-de-3 en importes: si el valor fusionado discrepa de Mistral
+//      pero Mistral coincide con el OTRO motor primario, gana la mayoría.
+function integrateMistralResult(merged, oF, aF, mF, logger) {
+  // 1. Relleno de huecos en campos simples
+  const FILLABLE = [
+    'numero_factura', 'proveedor_nombre', 'receptor_nombre', 'fecha_emision',
+    'base_imponible', 'iva_porcentaje', 'cuota_iva', 'total',
+  ];
+  for (const k of FILLABLE) {
+    if (merged[k] == null && mF[k] != null) {
+      merged[k] = mF[k];
+      logger.info(`[TripleOCR] Campo ${k} rellenado por Mistral: "${mF[k]}"`);
+    }
+  }
+  if (!merged.proveedor_nif && mF.proveedor_nif) merged.proveedor_nif = normNif(mF.proveedor_nif);
+  if (!merged.receptor_nif  && mF.receptor_nif)  merged.receptor_nif  = normNif(mF.receptor_nif);
+
+  // 2. Desglose multi-IVA: fusionar tramos Mistral con los ya fusionados
+  if (Array.isArray(mF.lineas_iva) && mF.lineas_iva.length > 0) {
+    merged.lineas_iva = mergeLineasIva(merged.lineas_iva, mF.lineas_iva);
+  }
+
+  // 3. Votación 2-de-3 en importes agregados
+  for (const k of ['base_imponible', 'cuota_iva', 'total']) {
+    const m = mF[k];
+    if (m == null) continue;
+    const cur = merged[k];
+    if (cur == null || amountsBothAgree(cur, m)) continue; // ya coincide o ya rellenado
+    // cur ≠ Mistral: ¿algún motor primario cuyo valor difiera del elegido respalda a Mistral?
+    const backed = [oF[k], aF[k]].some(v => v != null && !amountsBothAgree(v, cur) && amountsBothAgree(v, m));
+    if (backed) {
+      logger.warn(`[TripleOCR] Votación 2-de-3 en ${k}: "${cur}" → "${m}" (Mistral + un motor primario coinciden)`);
+      merged[k] = m;
+    }
+  }
+}
+
+// ─── Reconciliación de agregados multi-IVA (fix 2026-07-03) ───────────────────
+// Con 2+ tramos: deriva bases que falten (Azure DI no da BaseAmount por tramo),
+// valida cada línea y fuerza base_imponible = Σ bases, cuota_iva = Σ cuotas,
+// iva_porcentaje = tipo dominante. Guard de cordura contra líneas mal leídas:
+// el balance con el total debe ser plausible (se admite gap positivo hasta el
+// 30% de la base — IRPF implícito máximo razonable, aún sin detectar aquí).
+function reconcileMultiIvaAggregates(campos, logger) {
+  if (!Array.isArray(campos.lineas_iva) || campos.lineas_iva.length < 2) return;
+
+  fillDerivedBases(campos.lineas_iva);
+  const norm = normalizeConfirmedLineasIva(campos.lineas_iva);
+  if (!norm.lineas || norm.errors.length > 0) {
+    logger.warn(`[OCR] Reconciliación multi-IVA no aplicada: ${norm.errors.join('; ') || 'sin líneas válidas'}`);
+    return;
+  }
+
+  const sumBase  = parseSpanishAmount(norm.base);
+  const sumCuota = parseSpanishAmount(norm.cuota);
+  const totN     = parseSpanishAmount(campos.total);
+  const irpfN    = parseSpanishAmount(campos.cuota_irpf) || 0;
+
+  if (totN != null && sumBase != null && sumCuota != null) {
+    const gap = sumBase + sumCuota - irpfN - totN; // > 0 → posible IRPF implícito
+    const tol = Math.max(0.30, totN * 0.02);
+    if (gap < -tol || gap > sumBase * 0.30 + tol) {
+      logger.warn(`[OCR] Reconciliación multi-IVA descartada por incoherencia con total: ΣB=${norm.base} ΣC=${norm.cuota} total=${campos.total} gap=${gap.toFixed(2)}€ — solo se rellenan huecos`);
+      if (campos.base_imponible == null) campos.base_imponible = norm.base;
+      if (campos.cuota_iva == null)      campos.cuota_iva      = norm.cuota;
+      if (campos.iva_porcentaje == null) campos.iva_porcentaje = norm.porcentaje;
+      campos.lineas_iva = norm.lineas;
+      return;
+    }
+  }
+
+  if (campos.base_imponible !== norm.base || campos.cuota_iva !== norm.cuota) {
+    logger.info(`[OCR] Agregados reconciliados desde lineas_iva: base "${campos.base_imponible}"→"${norm.base}" cuota "${campos.cuota_iva}"→"${norm.cuota}" tipo dominante ${norm.porcentaje}%`);
+  }
+  campos.lineas_iva     = norm.lineas;
+  campos.base_imponible = norm.base;
+  campos.cuota_iva      = norm.cuota;
+  campos.iva_porcentaje = norm.porcentaje;
+}
+
+// ─── Comparador y fusionador de resultados multi-motor ────────────────────────
+
+function compareOCRResults(openaiRes, azureRes, mistralRes, logger) {
+  // Si Mistral produjo resultado válido y uno de los dos motores primarios
+  // falló, Mistral ocupa su hueco: el flujo dual sigue funcionando con dos
+  // fuentes reales en lugar de degradar a motor único.
+  const mistralValido = mistralRes && mistralRes.es_factura_valida !== false;
+  if (mistralValido && (!openaiRes || openaiRes.es_factura_valida === false)) {
+    logger.info('[DualOCR] OpenAI sin resultado — Mistral OCR 4 ocupa su hueco en la fusión');
+    openaiRes = mistralRes;
+    mistralRes = null;
+  } else if (mistralValido && (!azureRes || azureRes.es_factura_valida === false)) {
+    logger.info('[DualOCR] Azure sin resultado — Mistral OCR 4 ocupa su hueco en la fusión');
+    azureRes = mistralRes;
+    mistralRes = null;
+  }
+
   if (!openaiRes && !azureRes) return null;
 
   if (!openaiRes || openaiRes.es_factura_valida === false) {
     logger.info('[DualOCR] Solo Azure produjo resultado válido');
-    return { ...azureRes, dual_confirmed: false, missing_engine: 'openai', ocr_engine: 'dual_openai_azure' };
+    const single = { ...azureRes, dual_confirmed: false, missing_engine: 'openai', ocr_engine: 'dual_openai_azure' };
+    if (single.campos) reconcileMultiIvaAggregates(single.campos, logger);
+    return single;
   }
   if (!azureRes || azureRes.es_factura_valida === false) {
     logger.info('[DualOCR] Solo OpenAI produjo resultado válido');
-    return { ...openaiRes, dual_confirmed: false, missing_engine: 'azure', ocr_engine: 'dual_openai_azure' };
+    const single = { ...openaiRes, dual_confirmed: false, missing_engine: 'azure', ocr_engine: 'dual_openai_azure' };
+    if (single.campos) reconcileMultiIvaAggregates(single.campos, logger);
+    return single;
   }
 
   const oF = openaiRes.campos || {};
@@ -166,6 +288,19 @@ function compareOCRResults(openaiRes, azureRes, logger) {
     es_factura_valida: openaiRes.es_factura_valida !== false || azureRes.es_factura_valida !== false,
   };
 
+  // ── Integración Mistral OCR 4 (modo triple): relleno + votación 2-de-3 ──────
+  if (mistralRes && mistralRes.es_factura_valida !== false) {
+    integrateMistralResult(merged, oF, aF, mistralRes.campos || {}, logger);
+  }
+
+  // ── Reconciliación multi-IVA (fix 2026-07-03) ────────────────────────────────
+  // Con 2+ tramos, los agregados DEBEN ser la suma del desglose. Antes la base
+  // agregada venía del SubTotal de Azure (≠ Σ bases con descuentos/portes) y
+  // nadie garantizaba coherencia entre columnas agregadas y lineas_iva.
+  // Debe ejecutarse ANTES de la salvaguarda IRPF: una base mal sumada generaba
+  // retenciones IRPF fantasma por el cálculo del balance.
+  reconcileMultiIvaAggregates(merged, logger);
+
   // ── Salvaguarda aritmética IRPF ──────────────────────────────────────────────
   // Si el OCR no detectó IRPF pero Total < Base + Cuota_IVA (con tolerancia 0,05€),
   // la diferencia debe ser IRPF: rellenamos por cálculo. Cubre facturas donde el
@@ -228,6 +363,12 @@ function compareOCRResults(openaiRes, azureRes, logger) {
       engine: azureRes.ocr_engine,
       time_s: azureRes.processing_time_s,
     },
+    mistral_result: mistralRes ? {
+      campos: mistralRes.campos || {},
+      confidence: mistralRes.confidence,
+      engine: mistralRes.ocr_engine,
+      time_s: mistralRes.processing_time_s,
+    } : null,
     nif_status: nifStatus,
     nif_discrepancy: nifStatus === 'conflict' ? { openai: oNif, azure: aNif } : null,
   };
@@ -250,17 +391,22 @@ async function extractInvoiceOCR(filePath, mimeType, fileName, logger, context =
   const cfg  = getConfig();
   const mode = cfg.ocr_mode || 'dual';
 
-  // ── Modo DUAL (defecto) ───────────────────────────────────────────────────
-  if (mode === 'dual') {
-    logger.info(`[OCR] Modo dual: lanzando OpenAI + Azure DI en paralelo para ${fileName} | tipo=${context.invoice_type || 'no_especificado'}`);
+  // ── Modo DUAL (defecto) / TRIPLE (con Mistral OCR 4) ──────────────────────
+  if (mode === 'dual' || mode === 'triple') {
+    const conMistral = mode === 'triple';
+    logger.info(`[OCR] Modo ${mode}: lanzando OpenAI + Azure DI${conMistral ? ' + Mistral OCR 4' : ''} en paralelo para ${fileName} | tipo=${context.invoice_type || 'no_especificado'}`);
 
-    const [openaiSettled, azureSettled] = await Promise.allSettled([
+    const jobs = [
       tryOpenAI(filePath, mimeType, context),
       tryAzure(filePath, mimeType, context),
-    ]);
+    ];
+    if (conMistral) jobs.push(tryMistral(filePath, mimeType, context));
 
-    let openaiRes = null;
-    let azureRes  = null;
+    const [openaiSettled, azureSettled, mistralSettled] = await Promise.allSettled(jobs);
+
+    let openaiRes  = null;
+    let azureRes   = null;
+    let mistralRes = null;
 
     if (openaiSettled.status === 'fulfilled') {
       openaiRes = openaiSettled.value;
@@ -276,12 +422,21 @@ async function extractInvoiceOCR(filePath, mimeType, fileName, logger, context =
       logger.warn(`[OCR] Azure DI FALLÓ: ${azureSettled.reason?.message}`);
     }
 
-    const result = compareOCRResults(openaiRes, azureRes, logger);
+    if (conMistral && mistralSettled) {
+      if (mistralSettled.status === 'fulfilled') {
+        mistralRes = mistralSettled.value;
+        logger.info(`[OCR] Mistral OCR 4 OK: tiempo=${mistralRes.processing_time_s}s valida=${mistralRes.es_factura_valida} total=${mistralRes.campos?.total} nif=${mistralRes.campos?.proveedor_nif} lineasIva=${mistralRes.campos?.lineas_iva?.length || 0}`);
+      } else {
+        logger.warn(`[OCR] Mistral OCR 4 FALLÓ: ${mistralSettled.reason?.message}`);
+      }
+    }
+
+    const result = compareOCRResults(openaiRes, azureRes, mistralRes, logger);
     if (result) {
-      logger.info(`[OCR] Resultado dual: dual_confirmed=${result.dual_confirmed} confidence=${result.confidence?.toFixed(2)} nif=${result.campos?.proveedor_nif} lineas_iva=${result.campos?.lineas_iva?.length || 0}`);
+      logger.info(`[OCR] Resultado ${mode}: dual_confirmed=${result.dual_confirmed} confidence=${result.confidence?.toFixed(2)} nif=${result.campos?.proveedor_nif} lineas_iva=${result.campos?.lineas_iva?.length || 0}`);
       await _secondPassReceptorIfNeeded(result, filePath, mimeType, context, logger);
     } else {
-      logger.warn('[OCR] Ambos motores fallaron — no hay resultado');
+      logger.warn('[OCR] Todos los motores fallaron — no hay resultado');
     }
     return result;
   }
@@ -293,12 +448,16 @@ async function extractInvoiceOCR(filePath, mimeType, fileName, logger, context =
       result = await tryOpenAI(filePath, mimeType, context);
     } else if (mode === 'azure') {
       result = await tryAzure(filePath, mimeType, context);
+    } else if (mode === 'mistral') {
+      result = await tryMistral(filePath, mimeType, context);
     } else {
       logger.warn(`[OCR] Modo desconocido "${mode}" → usando OpenAI`);
       result = await tryOpenAI(filePath, mimeType, context);
     }
     logger.info(`[OCR] Motor ${mode}: tiempo=${result.processing_time_s}s valida=${result.es_factura_valida} total=${result.campos?.total}`);
     const wrapped = { ...result, dual_confirmed: false };
+    // La coherencia agregados=Σtramos aplica también con un solo motor
+    if (wrapped.campos) reconcileMultiIvaAggregates(wrapped.campos, logger);
     await _secondPassReceptorIfNeeded(wrapped, filePath, mimeType, context, logger);
     return wrapped;
   } catch (err) {
@@ -360,4 +519,6 @@ async function extractCIFOnlyOCR(filePath, mimeType) {
   }
 }
 
-module.exports = { extractInvoiceOCR, extractCIFOnlyOCR };
+// reconcileMultiIvaAggregates e integrateMistralResult se exportan para tests
+// unitarios (sin red) — no forman parte del contrato público del orquestador.
+module.exports = { extractInvoiceOCR, extractCIFOnlyOCR, reconcileMultiIvaAggregates, integrateMistralResult };
