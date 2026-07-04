@@ -103,6 +103,32 @@ function fillDerivedBases(lineas) {
 }
 
 /**
+ * Elimina artefactos "fila resumen" del desglose (fix multi-IVA 2026-07-04).
+ * Azure DI a veces emite una entrada extra en TaxDetails SIN tipo cuya cuota
+ * es la SUMA de las demás (la línea "Total IVA" del pie de la factura).
+ * Detectado empíricamente en la validación E2E de staging. Si hay ≥2 tramos
+ * tipados y una línea sin tipo cuya cuota ≈ Σ cuotas tipadas (±0,05€), es la
+ * fila resumen: se descarta. Devuelve un array nuevo (no muta).
+ */
+function dropResumenArtifacts(lineas) {
+  if (!Array.isArray(lineas)) return lineas;
+  const typed   = lineas.filter(l => parseRateEntero(l && l.porcentaje) != null);
+  const untyped = lineas.filter(l => parseRateEntero(l && l.porcentaje) == null);
+  if (typed.length < 2 || untyped.length === 0) return lineas;
+
+  const sumCuotas = typed.reduce((acc, l) => acc + (parseSpanishAmount(l.cuota) || 0), 0);
+  const sumBases  = typed.reduce((acc, l) => acc + (parseSpanishAmount(l.base)  || 0), 0);
+  const keepUntyped = untyped.filter(l => {
+    const c = parseSpanishAmount(l && l.cuota);
+    const b = parseSpanishAmount(l && l.base);
+    const esResumenCuota = c != null && Math.abs(c - sumCuotas) <= 0.05;
+    const esResumenBase  = b != null && sumBases > 0 && Math.abs(b - sumBases) <= 0.05;
+    return !(esResumenCuota || esResumenBase);
+  });
+  return typed.concat(keepUntyped);
+}
+
+/**
  * Valida la coherencia matemática de los campos de IVA.
  *
  * Comprobaciones:
@@ -428,5 +454,6 @@ module.exports = {
   parsePercent,
   parseRateEntero,
   fillDerivedBases,
+  dropResumenArtifacts,
   normalizeConfirmedLineasIva,
 };

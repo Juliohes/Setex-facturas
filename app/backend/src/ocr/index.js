@@ -20,7 +20,7 @@ const fs      = require('fs');
 const openai  = require('./openai');
 const azure   = require('./azure');
 const mistral = require('./mistral');
-const { mergeLineasIva, fillDerivedBases, normalizeConfirmedLineasIva, parseSpanishAmount } = require('./validateIVA');
+const { mergeLineasIva, fillDerivedBases, dropResumenArtifacts, normalizeConfirmedLineasIva, parseSpanishAmount } = require('./validateIVA');
 const { validateSpanishTaxId } = require('./validateCIF');
 
 function getSecret(name) {
@@ -161,6 +161,15 @@ function integrateMistralResult(merged, oF, aF, mF, logger) {
 function reconcileMultiIvaAggregates(campos, logger) {
   if (!Array.isArray(campos.lineas_iva) || campos.lineas_iva.length < 2) return;
 
+  // Filtrar la "fila resumen" que Azure emite a veces como TaxDetail extra
+  // (sin tipo, cuota = Σ cuotas) — detectada en la validación E2E 2026-07-04.
+  const filtradas = dropResumenArtifacts(campos.lineas_iva);
+  if (filtradas.length !== campos.lineas_iva.length) {
+    logger.info(`[OCR] Desglose IVA: descartada fila resumen espuria (${campos.lineas_iva.length}→${filtradas.length} tramos)`);
+    campos.lineas_iva = filtradas;
+    if (campos.lineas_iva.length < 2) return;
+  }
+
   fillDerivedBases(campos.lineas_iva);
   const norm = normalizeConfirmedLineasIva(campos.lineas_iva);
   if (!norm.lineas || norm.errors.length > 0) {
@@ -177,10 +186,13 @@ function reconcileMultiIvaAggregates(campos, logger) {
     const gap = sumBase + sumCuota - irpfN - totN; // > 0 → posible IRPF implícito
     const tol = Math.max(0.30, totN * 0.02);
     if (gap < -tol || gap > sumBase * 0.30 + tol) {
-      logger.warn(`[OCR] Reconciliación multi-IVA descartada por incoherencia con total: ΣB=${norm.base} ΣC=${norm.cuota} total=${campos.total} gap=${gap.toFixed(2)}€ — solo se rellenan huecos`);
+      logger.warn(`[OCR] Reconciliación multi-IVA descartada por incoherencia con total: ΣB=${norm.base} ΣC=${norm.cuota} total=${campos.total} gap=${gap.toFixed(2)}€ — solo se rellenan huecos (desglose posiblemente incompleto, ej. tramo exento no emitido)`);
       if (campos.base_imponible == null) campos.base_imponible = norm.base;
       if (campos.cuota_iva == null)      campos.cuota_iva      = norm.cuota;
-      if (campos.iva_porcentaje == null) campos.iva_porcentaje = norm.porcentaje;
+      // El tipo dominante SÍ se deriva del desglose incluso aquí: es
+      // definicionalmente el tramo de mayor cuota (evita tipos absurdos tipo
+      // "14,6" del fallback TotalTax/SubTotal de Azure).
+      campos.iva_porcentaje = norm.porcentaje;
       campos.lineas_iva = norm.lineas;
       return;
     }

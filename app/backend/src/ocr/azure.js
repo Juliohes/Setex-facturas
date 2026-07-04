@@ -186,13 +186,16 @@ function extractIvaPorcentaje(fields) {
     if (val) return val;
   }
 
-  // 2. Calcular desde TaxDetails (primer tipo encontrado, el de mayor importe)
+  // 2. Calcular desde TaxDetails (tipo del tramo de mayor importe)
+  // Fix 2026-07-04: Azure devuelve Rate como valueString ("21%") en facturas
+  // españolas reales — antes solo se leía valueNumber y el rate se perdía,
+  // cayendo al fallback TotalTax/SubTotal que produce tipos absurdos (14,6%).
   if (fields.TaxDetails && Array.isArray(fields.TaxDetails.valueArray) && fields.TaxDetails.valueArray.length > 0) {
     let maxRate = null;
     let maxCuota = -1;
     for (const item of fields.TaxDetails.valueArray) {
       const obj   = item.valueObject || {};
-      const rate  = obj.Rate?.valueNumber ?? null;
+      const rate  = normalizeRate(obj.Rate?.valueNumber ?? obj.Rate?.valueString ?? null);
       const cuota = obj.Amount?.valueCurrency?.amount ?? obj.Amount?.valueNumber ?? 0;
       if (rate != null && cuota > maxCuota) { maxCuota = cuota; maxRate = rate; }
     }

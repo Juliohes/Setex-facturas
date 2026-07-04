@@ -126,3 +126,36 @@ test('normalizeConfirmedLineasIva: tramo exento cuenta en la base', () => {
   assert.equal(norm.base, '130,00');
   assert.equal(norm.cuota, '21,00');
 });
+
+// ── dropResumenArtifacts (fix 2026-07-04, detectado en E2E staging) ────────────
+
+const { dropResumenArtifacts } = require('../../src/domain/validators/iva');
+
+test('dropResumenArtifacts: elimina la fila resumen de Azure (sin tipo, cuota = Σ cuotas)', () => {
+  const lineas = [
+    { base: '600,00', porcentaje: '21,0', cuota: '126,00', productos: [] },
+    { base: '450,00', porcentaje: '10,0', cuota: '45,00',  productos: [] },
+    { base: null,     porcentaje: null,   cuota: '171,00', productos: [] }, // "Total IVA" del pie
+  ];
+  const out = dropResumenArtifacts(lineas);
+  assert.equal(out.length, 2);
+  assert.ok(out.every(l => l.porcentaje != null));
+});
+
+test('dropResumenArtifacts: conserva líneas sin tipo que NO son resumen', () => {
+  const lineas = [
+    { base: '600,00', porcentaje: '21,0', cuota: '126,00', productos: [] },
+    { base: '450,00', porcentaje: '10,0', cuota: '45,00',  productos: [] },
+    { base: '80,00',  porcentaje: null,   cuota: '8,00',   productos: [] }, // tramo real sin tipo legible
+  ];
+  const out = dropResumenArtifacts(lineas);
+  assert.equal(out.length, 3);
+});
+
+test('dropResumenArtifacts: no toca desgloses sin líneas sin tipo', () => {
+  const lineas = [
+    { base: '600,00', porcentaje: '21,0', cuota: '126,00', productos: [] },
+    { base: '450,00', porcentaje: '10,0', cuota: '45,00',  productos: [] },
+  ];
+  assert.equal(dropResumenArtifacts(lineas).length, 2);
+});
