@@ -578,6 +578,16 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-07-04 (tarde) — Modo TRIPLE validado E2E con los 3 motores · keys operativas
+- **Keys**: Julio aportó keys reales (Mistral + OpenAI staging nueva con scope `model.request`); colocadas en `secrets/` y fichero temporal destruido con `shred -u`. La key OpenAI rota de staging queda resuelta.
+- **Hallazgo permisos**: los secrets del proyecto usan `644` (dir `700 deploy`) porque el `appuser` uid 1001 del contenedor ≠ `deploy` — un `600` rompe la lectura con "Permission denied" silencioso (motor cae a error "no configurada"). Documentado como patrón.
+- **Hallazgo hot-reload**: editar `features.json` con herramientas que reemplazan el archivo (nuevo inode) rompe el bind-mount del contenedor — sigue viendo el contenido viejo hasta reiniciar. Para cambio en caliente real: escribir in-place (`>` truncado) o `stop` + `up -d`.
+- `app/backend/src/config/features.json`: `ocr_mode: "triple"` activado en staging para periodo de validación.
+- **Validación E2E triple** (llamadas reales a los 3 motores):
+  - Mono-IVA (muestra real): `dual_confirmed=true`, 3 motores coinciden (OpenAI 5,4s · Azure 11,4s · Mistral 5,6s en paralelo), campos exactos.
+  - Multi-IVA (21%+10%+exento): 3 tramos completos — el exento que Azure omite lo aportan OpenAI/Mistral sin duplicación; base agregada = Σ tramos (1.170,00); tipo dominante 21,0; sin IRPF fantasma; fila resumen espuria filtrada; productos asociados por tramo (2+2+1).
+- **Pendiente**: periodo de observación en staging con facturas reales; decidir modo por defecto para prod (coste triple: +~$0,004/factura ≈ +$24/mes a 6k facturas); push + PR a develop (decisión commit `fbd3d86`); aplicación quirúrgica a prod (regla 11); añadir Mistral a `smoke-test-ocr.js` al promocionar.
+
 ### 2026-07-04 — Validación E2E staging del fix multi-IVA + 2 fixes adicionales + deploy
 - **Deploy staging**: compose con secret `mistral_api_key` (OK explícito de Julio, regla 1), rebuild + stop + up -d. Backend healthy. Secret con PLACEHOLDER hasta que Julio aporte la key real (el código desactiva Mistral limpiamente vía `isPlaceholder`).
 - **Validación E2E** con el pipeline dual real (`extractInvoiceOCR` vía docker exec) sobre factura de muestra + factura sintética multi-IVA (21%+10%+exento): extracción y coherencia correctas.
