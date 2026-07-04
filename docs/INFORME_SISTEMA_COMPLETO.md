@@ -578,6 +578,17 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-07-04 — Validación E2E staging del fix multi-IVA + 2 fixes adicionales + deploy
+- **Deploy staging**: compose con secret `mistral_api_key` (OK explícito de Julio, regla 1), rebuild + stop + up -d. Backend healthy. Secret con PLACEHOLDER hasta que Julio aporte la key real (el código desactiva Mistral limpiamente vía `isPlaceholder`).
+- **Validación E2E** con el pipeline dual real (`extractInvoiceOCR` vía docker exec) sobre factura de muestra + factura sintética multi-IVA (21%+10%+exento): extracción y coherencia correctas.
+- `app/backend/src/domain/validators/iva.js`: nuevo `dropResumenArtifacts` — Azure emite a veces un TaxDetail extra sin tipo cuya cuota = Σ cuotas (línea "Total IVA" del pie); bloqueaba la reconciliación.
+- `app/backend/src/ocr/azure.js`: `extractIvaPorcentaje` lee `Rate.valueString` ("21%") además de `valueNumber` — antes caía al fallback y producía tipos absurdos (14,6%).
+- `app/backend/src/ocr/index.js`: el tipo dominante se deriva siempre del desglose, también en la rama del guard de cordura.
+- Tests: suite 79/79 ✅.
+- **🔴 HALLAZGO CRÍTICO preexistente**: la `openai_api_key` de staging devuelve **401 missing_scope (model.request)** — staging lleva operando solo con Azure. Solo Julio puede reemplazar la key. (El smoke cron 04:30 solo corre en prod, por eso no saltó.)
+- **Hallazgo**: contenedor backend Alpine sin fuentes (fontconfig) — irrelevante para OCR de fotos reales, relevante para generar fixtures dentro del contenedor.
+- **Pendiente**: key real de Mistral + key OpenAI staging válida → activar `ocr_mode: "triple"` y validar; push de rama + PR a develop (decisión de Julio por commit local `fbd3d86` previo en develop).
+
 ### 2026-07-03 — Fix multi-IVA (base imponible) + integración Mistral OCR 4
 - **Contexto**: diagnóstico del fallo "el OCR no lee bien la base del IVA y falla con varios IVAs". Causa raíz verificada contra el schema oficial `2024-11-30-ga` de Azure DI `prebuilt-invoice`: `TaxDetails` NO devuelve `BaseAmount` por tramo (solo `Amount` y `Rate`) → la base por tramo llegaba siempre null y el agregado dependía de `SubTotal` (≠ Σ bases). Además `mergeLineasIva` cruzaba tramos por string literal ("21" ≠ "21,0") duplicando tramos, el tramo exento (0%) se descartaba, y una base mal sumada hacía que la salvaguarda IRPF inventara retenciones fantasma.
 - `app/backend/src/domain/validators/iva.js`: cruce de tramos por porcentaje numérico normalizado + helpers `parseRateEntero`/`fillDerivedBases` (base = cuota ÷ tipo) — fix duplicación de tramos.
