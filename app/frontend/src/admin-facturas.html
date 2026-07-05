@@ -10,25 +10,9 @@
 </head>
 <body>
 
-  <div id="login-screen" style="display:none;">
-    <div class="login-card">
-      <div class="login-logo"><span class="se">SE</span><span class="tex">TEX</span></div>
-      <h1 class="login-title">Panel de Administración</h1>
-      <p class="login-subtitle">Acceso exclusivo para administradores</p>
-      <form id="login-form" autocomplete="on">
-        <div class="login-field">
-          <label for="login-email">Correo electrónico</label>
-          <input type="email" id="login-email" name="email" placeholder="tu@email.com" required autocomplete="email">
-        </div>
-        <div class="login-field">
-          <label for="login-password">Contraseña</label>
-          <input type="password" id="login-password" name="password" placeholder="••••••••" required autocomplete="current-password">
-        </div>
-        <p id="login-error" class="login-error" style="display:none;"></p>
-        <button type="submit" id="login-btn" class="login-btn">Entrar</button>
-      </form>
-    </div>
-  </div>
+  <!-- El login del panel vive en /admin-login.html (2026-07-05). El formulario
+       que había aquí era código muerto: nginx bloquea este HTML sin cookie
+       admin, así que jamás llegaba a mostrarse. -->
 
   <div id="app" style="display:none;">
 
@@ -259,7 +243,7 @@
 
   <script src="tabulator.min.js"></script>
   <script src="pdf.min.js?v=3.11.174"></script>
-  <script src="auth.js?v=20260414-003"></script>
-  <script src="admin-facturas.js?v=20260616-002"></script>
+  <script src="auth.js?v=20260705-001"></script>
+  <script src="admin-facturas.js?v=20260705-001"></script>
 </body>
 </html>

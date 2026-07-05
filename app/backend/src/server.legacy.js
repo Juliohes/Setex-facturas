@@ -3384,10 +3384,21 @@ app.get('/api/admin/facturas', authenticateToken, requireAdmin, async (req, res)
 });
 
 // GET /api/admin/facturas/usuarios — lista de usuarios para filtro (solo admin)
+// 2026-07-05: incluye datos de empresa (users.company_* + client_companies por
+// matching de CIF, mismo patrón que el listado principal) para que el filtro
+// del panel muestre NOMBRES DE EMPRESA en lugar de emails. Cambio aditivo:
+// el contrato { usuarios: [{ id, email, ... }] } se mantiene.
 app.get('/api/admin/facturas/usuarios', authenticateToken, requireAdmin, async (_req, res) => {
   try {
     // SANDBOX: ocultar usuarios de pruebas del dropdown de filtro
-    const result = await pool.query('SELECT id, email FROM users WHERE is_test IS NOT TRUE ORDER BY email');
+    const result = await pool.query(`
+      SELECT us.id, us.email, us.company_name, us.company_nif,
+             cc.nombre AS company_nombre_registrado, cc.codigo_cliente
+      FROM users us
+      LEFT JOIN client_companies cc
+        ON UPPER(REPLACE(us.company_nif, ' ', '')) = UPPER(REPLACE(cc.cif, ' ', ''))
+      WHERE us.is_test IS NOT TRUE
+      ORDER BY COALESCE(cc.nombre, us.company_name, us.email)`);
     res.json({ usuarios: result.rows });
   } catch (err) {
     logger.error('Admin usuarios error:', err);
