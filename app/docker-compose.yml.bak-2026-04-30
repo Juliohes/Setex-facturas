@@ -36,8 +36,6 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
-    ports:
-      - "2222:22"
     networks:
       - internal
     volumes:
@@ -58,7 +56,6 @@ services:
       - openai_api_key
       - azure_di_key
       - azure_di_endpoint
-      - mistral_api_key
       - smtp_user
       - smtp_pass
       - redis_password
@@ -113,7 +110,7 @@ services:
     restart: unless-stopped
     networks:
       - internal
-      - traefik_default
+      - n8n_default
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/health || exit 1"]
       interval: 30s
@@ -122,7 +119,7 @@ services:
       start_period: 10s
     labels:
       - "traefik.enable=true"
-      - "traefik.docker.network=traefik_default"
+      - "traefik.docker.network=n8n_default"
       # HTTP → HTTPS redirect
       - "traefik.http.routers.${SETEX_ROUTER}-http.rule=Host(`${SETEX_DOMAIN}`)"
       - "traefik.http.routers.${SETEX_ROUTER}-http.entrypoints=web"
@@ -159,7 +156,7 @@ services:
       # Service
       - "traefik.http.services.${SETEX_ROUTER}.loadbalancer.server.port=80"
       # ── xanflatest.com → setex-facturas.es (redirect 302) ──
-      # Migrado desde file provider de Traefik (cleanup 2026-04-27).
+      # Migrado desde /docker/n8n/traefik-dynamic/setex.yml (cleanup 2026-04-27).
       # 302 (no permanente) porque xanflatest.com puede reasignarse a otro
       # proyecto en el futuro — si llega ese día, BORRAR estas 9 labels.
       # Solo prod: staging no sirve xanflatest.com.
@@ -188,7 +185,7 @@ services:
           memory: ${MEM_LIMIT_FRONTEND}
 
 networks:
-  traefik_default:
+  n8n_default:
     external: true
   internal:
     driver: bridge
@@ -204,8 +201,6 @@ secrets:
     file: ${SETEX_SECRETS_DIR}/azure_di_key.txt
   azure_di_endpoint:
     file: ${SETEX_SECRETS_DIR}/azure_di_endpoint.txt
-  mistral_api_key:
-    file: ${SETEX_SECRETS_DIR}/mistral_api_key.txt
   smtp_user:
     file: ${SETEX_SECRETS_DIR}/smtp_user.txt
   smtp_pass:

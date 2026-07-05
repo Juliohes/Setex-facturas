@@ -13,6 +13,15 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="apple-mobile-web-app-title" content="Setex">
     <link rel="apple-touch-icon" href="/icons/icon-192x192-v5.png">
+    <style>
+      /* Cuadros plegables del modal de confirmación */
+      details.box-collapsible > summary { -webkit-tap-highlight-color: transparent; }
+      details.box-collapsible > summary::-webkit-details-marker { display: none; }
+      details.box-collapsible > summary::marker { content: ''; }
+      details.box-collapsible .box-arrow { display:inline-block; transition: transform .15s ease; transform-origin: center; }
+      details.box-collapsible[open] > summary .box-arrow { transform: rotate(0deg); }
+      details.box-collapsible:not([open]) > summary .box-arrow { transform: rotate(-90deg); }
+    </style>
 </head>
 <body>
     <div id="app">
@@ -193,72 +202,81 @@
                 </div>
               </div>
 
-              <!-- ── SECCIÓN IVA ─────────────────────────────────────────── -->
-              <div style="border:1px solid #bee3f8; border-radius:8px; padding:14px; background:#ebf8ff; margin-bottom:16px;">
-                <div style="font-size:11px; font-weight:700; color:#2b6cb0; letter-spacing:.06em; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center;">
-                  <span id="confirm-iva-title">DESGLOSE IVA</span>
+              <!-- ── CUADRO 1: DESGLOSE IVA POR TRAMOS (plegable, abierto si hay datos) ── -->
+              <details id="box-tramos" open class="box-collapsible" style="border:1px solid #bee3f8; border-radius:8px; background:#ebf8ff; margin-bottom:12px;">
+                <summary style="font-size:11px; font-weight:700; color:#2b6cb0; letter-spacing:.06em; padding:12px 14px; cursor:pointer; list-style:none; display:flex; justify-content:space-between; align-items:center;">
+                  <span><span class="box-arrow">▾</span>&nbsp;DESGLOSE IVA POR TRAMOS</span>
                   <span id="confirm-iva-status" style="font-size:11px; font-weight:700;"></span>
-                </div>
-
-                <!-- Vista MONO-IVA (factura con un solo tipo) -->
-                <div id="confirm-iva-mono">
-                  <!-- Base imponible + IVA % + Cuota IVA en fila -->
-                  <div style="display:flex; gap:8px; margin-bottom:8px;">
-                    <div style="flex:2;">
-                      <label style="display:block; font-size:10px; font-weight:700; color:#4a90d9; margin-bottom:3px;">BASE IMPONIBLE</label>
-                      <input type="text" id="confirm-base" maxlength="15" placeholder="0,00" style="font-size:14px; border-color:#90cdf4; background:#fff;" />
+                </summary>
+                <div style="padding:0 14px 14px;">
+                  <!-- Vista MONO-IVA (factura con un solo tipo) -->
+                  <div id="confirm-iva-mono">
+                    <div style="display:flex; flex-direction:column; gap:10px;">
+                      <div>
+                        <label style="display:block; font-size:11px; font-weight:700; color:#4a90d9; margin-bottom:4px;">BASE IMPONIBLE (€)</label>
+                        <input type="text" id="confirm-base" maxlength="15" placeholder="0,00" style="width:100%; font-size:15px; padding:8px 10px; border:1px solid #90cdf4; border-radius:6px; background:#fff; box-sizing:border-box;" />
+                      </div>
+                      <div>
+                        <label style="display:block; font-size:11px; font-weight:700; color:#4a90d9; margin-bottom:4px;">IVA %</label>
+                        <input type="text" id="confirm-iva-pct" maxlength="5" placeholder="21" inputmode="numeric" style="width:100%; font-size:15px; padding:8px 10px; border:1px solid #90cdf4; border-radius:6px; background:#fff; text-align:center; box-sizing:border-box;" />
+                      </div>
+                      <div>
+                        <label style="display:block; font-size:11px; font-weight:700; color:#4a90d9; margin-bottom:4px;">CUOTA IVA (€)</label>
+                        <input type="text" id="confirm-cuota-iva" maxlength="15" placeholder="0,00" style="width:100%; font-size:15px; padding:8px 10px; border:1px solid #90cdf4; border-radius:6px; background:#fff; box-sizing:border-box;" />
+                      </div>
                     </div>
-                    <div style="flex:1;">
-                      <label style="display:block; font-size:10px; font-weight:700; color:#4a90d9; margin-bottom:3px;">IVA %</label>
-                      <input type="text" id="confirm-iva-pct" maxlength="5" placeholder="21,0" style="font-size:14px; border-color:#90cdf4; background:#fff; text-align:center;" />
+                  </div>
+
+                  <!-- Vista MULTI-IVA (factura con varios tramos) — renderizada por renderLineasIvaMulti() -->
+                  <div id="confirm-iva-multi" style="display:none;">
+                    <div style="font-size:11px; color:#2c5282; margin-bottom:8px; padding:6px 8px; background:#fff5f0; border:1px dashed #fc8181; border-radius:4px;">
+                      🧾 Esta factura tiene <strong>varios tipos de IVA</strong>. Revisa y ajusta cada tramo por separado.
                     </div>
-                    <div style="flex:2;">
-                      <label style="display:block; font-size:10px; font-weight:700; color:#4a90d9; margin-bottom:3px;">CUOTA IVA</label>
-                      <input type="text" id="confirm-cuota-iva" maxlength="15" placeholder="0,00" style="font-size:14px; border-color:#90cdf4; background:#fff;" />
+                    <div id="confirm-lineas-iva-blocks"></div>
+                  </div>
+                </div>
+              </details>
+
+              <!-- ── CUADRO 2: RETENCIÓN IRPF (plegable, abierto si hay IRPF) ── -->
+              <details id="box-irpf" class="box-collapsible" style="border:1px solid #fbd38d; border-radius:8px; background:#fffaf0; margin-bottom:12px;">
+                <summary style="font-size:11px; font-weight:700; color:#c05621; letter-spacing:.06em; padding:12px 14px; cursor:pointer; list-style:none; display:flex; justify-content:space-between; align-items:center;">
+                  <span><span class="box-arrow">▾</span>&nbsp;RETENCIÓN IRPF</span>
+                  <span id="irpf-status" style="font-size:11px; font-weight:700;"></span>
+                </summary>
+                <div style="padding:0 14px 14px;">
+                  <div style="display:flex; flex-direction:column; gap:10px;">
+                    <div>
+                      <label style="display:block; font-size:11px; font-weight:700; color:#c05621; margin-bottom:4px;">RETENCIÓN IRPF %</label>
+                      <input type="text" id="confirm-irpf-pct" maxlength="5" placeholder="0,00" style="width:100%; font-size:15px; padding:8px 10px; border:1px solid #fbd38d; border-radius:6px; background:#fff; text-align:center; box-sizing:border-box;" />
+                    </div>
+                    <div>
+                      <label style="display:block; font-size:11px; font-weight:700; color:#c05621; margin-bottom:4px;">CUOTA IRPF (retención €)</label>
+                      <input type="text" id="confirm-cuota-irpf" maxlength="15" placeholder="0,00" style="width:100%; font-size:15px; padding:8px 10px; border:1px solid #fbd38d; border-radius:6px; background:#fff; box-sizing:border-box;" />
+                    </div>
+                    <div>
+                      <button id="btn-remove-irpf" title="Quitar IRPF" style="width:100%; background:transparent; border:1px solid #fbd38d; border-radius:6px; padding:6px 10px; font-size:12px; cursor:pointer; color:#c05621;">✕ Quitar IRPF</button>
                     </div>
                   </div>
                 </div>
+                <!-- legacy hidden (referenciado por updateIVACalc/showIRPFSection) — no se elimina para no romper listeners -->
+                <div id="irpf-section" style="display:none;"></div>
+                <div id="irpf-toggle-row" style="display:none;"><button id="btn-toggle-irpf"></button></div>
+              </details>
 
-                <!-- Vista MULTI-IVA (factura con varios tramos) -->
-                <!-- Renderizada dinámicamente por app.js:renderLineasIvaMulti() -->
-                <div id="confirm-iva-multi" style="display:none;">
-                  <div style="font-size:11px; color:#2c5282; margin-bottom:8px; padding:6px 8px; background:#fff5f0; border:1px dashed #fc8181; border-radius:4px;">
-                    🧾 Esta factura tiene <strong>varios tipos de IVA</strong>. Revisa y ajusta cada tramo por separado con sus productos.
-                  </div>
-                  <div id="confirm-lineas-iva-blocks"></div>
-                  <div id="confirm-lineas-iva-summary" style="margin-top:10px; padding:8px 10px; background:#fff; border:1px solid #bee3f8; border-radius:4px; font-size:12px; color:#2c5282;">
-                    <!-- Resumen auto-calculado: Suma bases + Suma cuotas + Tipo dominante -->
-                  </div>
-                </div>
-
-                <!-- Botón para añadir/mostrar IRPF manualmente -->
-                <div id="irpf-toggle-row" style="margin-bottom:6px;">
-                  <button id="btn-toggle-irpf" style="font-size:11px; color:#c05621; background:transparent; border:1px solid #fbd38d; border-radius:6px; padding:4px 10px; cursor:pointer; width:100%;">
-                    ➕ Añadir retención IRPF
-                  </button>
-                </div>
-
-                <!-- IRPF — visible cuando OCR lo detecta o el usuario lo activa -->
-                <div id="irpf-section" style="display:none; flex-direction:row; gap:8px; margin-bottom:8px; align-items:flex-end;">
-                  <div style="flex:1;">
-                    <label style="display:block; font-size:10px; font-weight:700; color:#c05621; margin-bottom:3px;">RETENCIÓN IRPF %</label>
-                    <input type="text" id="confirm-irpf-pct" maxlength="5" placeholder="15,0" style="font-size:14px; border-color:#fbd38d; background:#fff; text-align:center;" />
-                  </div>
-                  <div style="flex:2;">
-                    <label style="display:block; font-size:10px; font-weight:700; color:#c05621; margin-bottom:3px;">CUOTA IRPF (retención)</label>
-                    <input type="text" id="confirm-cuota-irpf" maxlength="15" placeholder="0,00" style="font-size:14px; border-color:#fbd38d; background:#fff;" />
-                  </div>
-                  <div style="display:flex; align-items:flex-end; padding-bottom:2px;">
-                    <button id="btn-remove-irpf" title="Quitar IRPF" style="background:transparent; border:1px solid #e2e8f0; border-radius:6px; padding:6px 8px; font-size:13px; cursor:pointer; color:#a0aec0;">✕</button>
-                  </div>
-                </div>
-
-                <!-- Cálculo en tiempo real (solo mono-IVA) -->
-                <div id="confirm-iva-calc" style="font-size:11px; color:#4a5568; margin-top:6px; padding:6px 8px; background:#fff; border-radius:4px; border:1px solid #bee3f8;"></div>
+              <!-- ── CUADRO 3: RESUMEN GENERAL (no plegable, siempre visible al final) ── -->
+              <div id="box-resumen" style="border:1px solid #1a365d; border-radius:8px; padding:14px; background:#fff; margin-bottom:12px;">
+                <div style="font-size:11px; font-weight:700; color:#1a365d; letter-spacing:.06em; margin-bottom:12px;">RESUMEN</div>
+                <div id="confirm-lineas-iva-summary"></div>
               </div>
 
               <div id="confirm-message" style="margin-bottom:8px;"></div>
-              <button id="btn-confirm-invoice" class="btn-primary" style="margin-bottom:8px;">✓ Confirmar y guardar</button>
+              <!-- Validación CIF emisor/receptor vs usuario logueado: rojos bloqueantes / amarillos informativos -->
+              <div id="confirm-cif-validation" style="display:none; margin-bottom:8px;"></div>
+              <!-- Aviso prominente de descuadre aritmético (lo controla updateIVACalc) -->
+              <div id="confirm-descuadre-banner" style="display:none; margin-bottom:10px; padding:11px 13px; background:#fffaf0; border:1px solid #f6ad55; border-radius:7px; color:#9c4221; font-size:13px; font-weight:600; line-height:1.4;">⚠ Los importes no cuadran. Revisa Base, IVA, IRPF y Total antes de guardar.</div>
+              <button id="btn-confirm-invoice" class="btn-primary" style="margin-bottom:6px;">✓ Confirmar y guardar</button>
+              <!-- Declaración responsable: el usuario asume la veracidad de los datos al guardar -->
+              <p id="confirm-consent" style="font-size:13px; color:#c53030; font-weight:700; margin:0 0 12px; line-height:1.5; text-align:center; background:#fff5f5; border:1px solid #fed7d7; border-radius:7px; padding:9px 12px;">Al confirmar, declaro que he revisado los datos y que son correctos y veraces.</p>
               <button id="btn-cancel-invoice" style="background:linear-gradient(135deg,#e53e3e,#c53030); color:white;">✗ Repetir foto</button>
             </div>
           </div>
@@ -284,7 +302,8 @@
         </div>
     </div>
     <script src="auth.js?v=20260414-004"></script>
-    <script src="app.js?v=20260421-004"></script>
+    <script src="cif-validator.js?v=20260507-003"></script>
+    <script src="app.js?v=20260616-002"></script>
     <script>
         // ── Service Worker: registro + detección de actualizaciones ─────────
         if ('serviceWorker' in navigator) {

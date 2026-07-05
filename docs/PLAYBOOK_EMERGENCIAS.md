@@ -82,6 +82,20 @@ docker compose -f /opt/setex/prod/app/docker-compose.yml start backend
 docker exec setex-prod-postgres pg_dump -U setex_user setex_db | gzip > /tmp/pre-restore-$(date +%Y%m%d-%H%M%S).sql.gz
 ```
 
+### ⛔ Backups con bloqueo RGPD — NO restaurar
+
+Algunos backups están vetados para restauración por contener datos personales que ya fueron eliminados conforme al **art. 17 RGPD (derecho al olvido)**. Restaurarlos reintroduciría esos datos en producción y constituiría una **brecha de cumplimiento**.
+
+| Backup (patrón fichero) | Bloqueo desde | Motivo |
+|---|---|---|
+| `setex_db_20260507_*.sql.gz.gpg` y anteriores | 2026-05-14 (purga programada) | Limpieza total de facturas y usuarios no tech/admin del 2026-05-07 (ver entrada en `INFORME_SISTEMA_COMPLETO.md` §18 fecha 2026-05-07). Contiene PII de 8 usuarios eliminados y 63 empresas-cliente borradas. |
+
+**Acciones operativas obligatorias**:
+
+1. **2026-05-14 (purga programada)**: ejecutar `shred -u -v -n 3 -z /opt/setex/shared/backups/postgres/setex_db_2026050[1-7]_*.sql.gz.gpg` y replicar el borrado en el VPS offsite `72.62.189.27`. La rotación natural del cron (retención 7 días) los habrá eliminado para entonces, pero **verificar manualmente** que no queden copias colgando.
+2. A partir de esa fecha: **NO descifrar ni restaurar ningún backup con timestamp ≤ `20260507`**, ni siquiera para auditoría interna. Si surge una necesidad técnica genuina (por ejemplo, recuperar un dato técnico no-PII), abrir un ticket interno y consultar al DPO antes de tocar el archivo.
+3. Si necesitas hacer un rollback masivo posterior al 2026-05-07 y solo dispones de un backup anterior, **no es opción**: parte cero desde un dump sintético o desde el `seed-staging.sh`. Restaurar un backup pre-purga reintroduce los datos eliminados de los 8 usuarios y vulnera el art. 17.
+
 ## Recuperar un commit borrado por accidente
 
 Git mantiene los commits 30 días en el reflog aunque borres la rama:

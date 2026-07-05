@@ -1,39 +1,22 @@
 # SETEX — Roadmap trimestral 2026
 
-Última actualización: **2026-04-27 23:55 UTC** — tras cierre FASE 1B Etapas 0-4 (PRs #85, #86 + PR cierre pendiente squash).
+Última actualización: **2026-05-06** — v2.0.0 promocionado el 2026-04-28 09:36 UTC pero **revertido quirúrgicamente el mismo día** por bug LL-002 (contrato `/api/admin/facturas`). Producción runtime corre el monolito 4308 líneas (`server.js`). Detalles: `.claude/CLAUDE.md` §10.2.
 
 ---
 
-## 🎯 Siguiente acción del proyecto · FASE 1B Etapas 5-6 (validación + swap)
+## 🎯 Siguiente bloque del proyecto · post-rollback v2.0.0 (LL-002)
 
-**Estado**: el descongelado del refactor v3 está **listo para swap**. Plumbing completo en `develop`:
-- 5 rutas `auth_request` portadas y testadas (PR #86 mergeado).
-- Test de paridad legacy↔v3 corre en CI (cada PR a develop/main valida que no regresamos).
-- Healthcheck container apunta a la ruta crítica → unhealthy automático si falta.
-- Smoke HTTP post-deploy bloquea promoción si la superficie API se rompe.
+**Q2 ejecutado parcialmente**: v3 modular se intentó promocionar a runtime el 2026-04-28 pero se revirtió quirúrgicamente el mismo día por bug LL-002 (contrato roto en `/api/admin/facturas`). Producción runtime corre el monolito 4308 líneas (`server.js`), container Up >6 días healthy. Lo siguiente (ver Bloque C del plan estratégico 2026-05-05 en `.claude/CLAUDE.md`):
 
-**Acciones manuales que faltan** (no automatizables hoy):
-
-1. **Etapa 5 — Validación staging 24-48h**:
-   - Disparar `deploy-staging.yml` (push a develop o `workflow_dispatch`).
-   - Staging arranca con monolito (server.js = 4308 líneas, NO el v3 todavía).
-   - Smoke post-deploy debe pasar verde inmediato.
-   - Dejar correr 24-48h vigilando: `docker logs setex-staging-backend`, watchdog, alertas.
-   - Si todo verde → seguir a Etapa 6.
-
-2. **Etapa 6 — Swap final del v3 a runtime + tag v2.0.0**:
-   - Branch nuevo `refactor/v3-swap-runtime-2026-XX-XX` desde develop.
-   - `mv src/server.js src/server.legacy.js` y `mv src/server.next.js src/server.js`.
-   - Ajustar `package.json` (`start:next` → `start:legacy`) y `eslint.config.js` (excepción `max-lines` a `server.legacy.js`).
-   - PR a develop, CI paridad seguirá pasando, merge.
-   - Deploy a staging automático, smoke verde.
-   - 24-48h adicionales en staging.
-   - Si todo OK: PR develop → main + tag `v2.0.0` + `Deploy a producción (manual)` con `DESPLEGAR`.
-   - Plan detallado: `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md` sección 6.
+1. **Refrescar documentos vivos** con realidad post-rollback (en curso, sesión 2026-05-05): CLAUDE.md, MACROPLAN, PLAN-FASE-4, ROADMAP.
+2. **Reforzar paridad CI con shape de respuesta JSON** (no solo status code 200): tests de body shape para endpoints críticos.
+3. **Mergear formalmente `508d7ae`** (revert) a main para sincronizar git con runtime.
+4. **Re-planificar Etapas 5-6** del refactor v3 con la nueva infraestructura de paridad.
+5. **Solo entonces**: Q3 cleanup (borrar `gemini.js`, `paddleocr.js` ya planificado).
 
 ---
 
-## Q2 2026 (abril–junio)
+## Q2 2026 (abril–junio) — Mayoría completada · v2.0.0 revertido (LL-002)
 
 ### 🚨 Críticas para cerrar al 100% el plan de migración
 
@@ -44,11 +27,18 @@
 - [x] **PR #84 cleanup post-cutover mergeado a main + deploy a producción** ✅ (2026-04-27 11:21 UTC)
 - [x] **FASE 1B Etapa 0 — Rollback en `develop`** ✅ (PR #85, squash `6c9f65b`, 2026-04-27 15:55 UTC)
 - [x] **FASE 1B Etapa 1 — Portar 5 rutas `auth_request` faltantes al v3** ✅ (PR #86, squash `5513b5f`, 2026-04-27)
-- [x] **FASE 1B Etapa 2 — Test paridad legacy↔v3 + integración CI** ✅ (PR cierre, 2026-04-27)
-- [x] **FASE 1B Etapa 3 — Healthcheck container endurecido** ✅ (PR cierre, 2026-04-27)
-- [x] **FASE 1B Etapa 4 — Smoke HTTP post-deploy en workflows staging+prod** ✅ (PR cierre, 2026-04-27)
-- [ ] **FASE 1B Etapa 5 — Validación staging 24-48h** (acción manual de Julio)
-- [ ] **FASE 1B Etapa 6 — Swap v3 a runtime + tag `v2.0.0` + promoción a prod** (acción manual de Julio, post-Etapa 5)
+- [x] **FASE 1B Etapa 2-4 — Paridad CI + healthcheck + smoke HTTP + HSTS staging** ✅ (PR #87, squash `214a357`, 2026-04-27)
+- [x] **LL-001 + smoke docker exec** ✅ (PR #88, squash `70f9e86`, 2026-04-27)
+- [x] **FASE 1B Etapa 5 — Vigilancia staging-watch + smoke tolerante bloqueo horario** ✅ (PR #89, squash `5048433`, 2026-04-28)
+- [x] **FASE 1B Etapa 6 — Swap v3 a runtime** ✅ (PR #90, squash `5bd668f`, 2026-04-28)
+- [x] **Hotfix logger silencioso** ✅ (PR #91, squash `b77c852`, 2026-04-28 — bug crítico cazado en runtime de Etapa 6)
+- [x] **🏷️ v2.0.0 promocionado a `main`** ✅ (PR #93, squash `a1cda6d`, 2026-04-28 09:33 UTC, tag annotated)
+- [x] **🚀 Deploy a producción ejecutado** ✅ (workflow_dispatch DESPLEGAR, 2026-04-28 09:36 UTC)
+- [x] **Verificación E2E producción** ✅ (server.js v3 60 líneas, 4/4 containers healthy, smoke 3/3, HSTS 10 años, login Zod-validated 400/401 correcto)
+
+> ⚠️ **AVISO POST-ROLLBACK 2026-04-28**: aunque las tareas anteriores marcadas ✅ se ejecutaron correctamente en su momento, el deploy a producción **se revirtió quirúrgicamente el mismo 2026-04-28** por bug LL-002 (contrato `/api/admin/facturas`). Producción runtime corre el monolito 4308 líneas, NO el v3 modular. El revert (`508d7ae`) NO está mergeado a main. La promoción real de v2.0.0 queda **pendiente** hasta completar el Bloque C del plan estratégico 2026-05-05 (ver `.claude/CLAUDE.md` §10.2 + REGLA 11).
+
+> Plan ejecutable detallado: [PLAN-FASE-4-DESCONGELADO-V3.md](plans/PLAN-FASE-4-DESCONGELADO-V3.md)
 
 ### 🔧 Tareas operacionales nuevas (detectadas durante el cleanup 2026-04-27)
 
@@ -100,7 +90,7 @@
 
 ### Si el flujo Q2 + FASE 1B van bien
 
-- [ ] **Tag `v2.0.0` publicado** (post FASE 1B etapa 6 · refactor v3 en runtime estable 7+ días)
+- [ ] **Tag `v2.0.0` re-promovido tras LL-002 cerrado** (requiere completar Bloque C del plan estratégico 2026-05-05: paridad CI body shape + revert sincronizado a main + re-validación staging 24-48h)
 - [ ] **Multi-empresa**: soporte para que un usuario gestione facturas de varias empresas (separadas por workspace). Implica cambios en `users` ↔ `companies` (many-to-many).
 - [ ] **Notificaciones email** cuando se procesa una factura (ya hay infra SMTP).
 - [ ] **Backups offsite a S3/Backblaze B2** (~$1/mes) además de la replicación VPS-secundario actual. Hoy el VPS secundario `72.62.189.27` está OK pero ambos son Hostinger → mismo proveedor = riesgo correlacionado.
@@ -135,7 +125,7 @@ Cada 3 meses, Julio (o auditor externo) ejecuta:
 
 ## Indicadores que vigilar (KPIs)
 
-| Indicador | Hoy (2026-04-27) | Objetivo Q3 |
+| Indicador | Hoy (2026-05-06, post-rollback v2.0.0) | Objetivo Q3 |
 |---|---|---|
 | Vulnerabilidades Dependabot abiertas | 0 (cerrada GHSA-w5hq-g745-h8pq el 27-Abr vía override uuid@14) | 0 |
 | Cobertura tests automatizados | 0% (a pesar de `tests/architecture.test.js` + contracts en develop, no se ejecutan en CI todavía) | 30% (validators, calculators, paridad legacy↔v3 vía FASE 1B etapa 2) |
@@ -149,7 +139,7 @@ Cada 3 meses, Julio (o auditor externo) ejecuta:
 
 ## Riesgos residuales conocidos
 
-1. **Refactor v3 congelado en `develop`** (2026-04-27): mientras no se ejecute la Etapa 0 de FASE 1B, cualquier `deploy-staging.yml` desde develop reproduciría el incidente Round 16. **Mitigación inmediata**: hacer Etapa 0 antes de cualquier otro trabajo en develop.
+1. **Descalce git vs runtime tras LL-002** (2026-04-28): `origin/main` declara v2.0.0 desplegado pero producción corre el monolito (rollback quirúrgico). Cualquier `docker compose build && docker compose up -d` desde main reintroduciría el bug LL-002. **Mitigación**: REGLA 11 documentada en CLAUDE.md §4. **Resolución pendiente**: Bloque C plan estratégico 2026-05-05 (mergear `508d7ae` a main + reforzar paridad CI).
 2. **Deuda de ownership root:root** en `/opt/setex/{prod,staging}`: contamina a deploys futuros. Mitigación inmediata aplicada el 27-Abr; mitigación permanente pendiente (chown automatizado en `fix-permissions.sh`).
 3. **Dependencia única de OpenAI + Azure DI**: si ambos caen el mismo día, OCR no funciona. Smoke test diario detecta, pero no resuelve.
 4. **Backups solo locales + replicación VPS-secundario Hostinger**: si Hostinger cae globalmente (poco probable pero posible), perdemos ambos. Mitigación pendiente: S3/B2 (Q3).

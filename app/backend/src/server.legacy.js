@@ -26,6 +26,8 @@ const { validateSpanishTaxId, checkDigitCIF } = require('./domain/validators/nif
 const { validateIVACoherencia, normalizeConfirmedLineasIva, fillDerivedBases } = require('./domain/validators/iva');
 const { connection: redisClient } = require('./queue/index');
 const { validateVIES } = require('./services/viesValidator');
+const { validateInvoiceCifs } = require('./lib/invoice-cif-validator');
+const { normalizeToFloat } = require('./lib/normalize-amount');
 
 // Rate limiters centralizados (middleware/rate-limit.js)
 const {
@@ -327,6 +329,14 @@ async function initDB() {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT false;
     -- HAL-002: token_version para revocación de sesiones tras cambio de contraseña
     ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 1;
+    -- SANDBOX 2026-05-07: usuarios de pruebas (no aparecen en panel admin, se purgan
+    -- sus uploads y audit_logs cada 60s via services/test-cleanup.js)
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT false;
+    CREATE INDEX IF NOT EXISTS idx_users_is_test ON users(is_test) WHERE is_test = true;
+    -- Empresas-cliente de prueba (vinculadas a usuarios is_test). Se filtran de los
+    -- endpoints admin para que la cuenta sandbox no contamine el catálogo real.
+    ALTER TABLE client_companies ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT false;
+    CREATE INDEX IF NOT EXISTS idx_client_companies_is_test ON client_companies(is_test) WHERE is_test = true;
     -- allowed_emails — tabla obsoleta reemplazada por client_companies
     -- Extensión para Levenshtein (distancia de edición en CIFs con typos)
     CREATE EXTENSION IF NOT EXISTS fuzzystrmatch;
@@ -549,15 +559,18 @@ async function authenticateToken(req, res, next) {
     // Solo si el JWT tiene token_version (tokens nuevos emitidos tras el update)
     if (user.userId && user.token_version !== undefined) {
       try {
-        const vCheck = await pool.query('SELECT token_version, is_admin FROM users WHERE id = $1', [user.userId]);
+        const vCheck = await pool.query('SELECT token_version, is_admin, role FROM users WHERE id = $1', [user.userId]);
         if (vCheck.rows.length === 0) {
           return res.status(403).json({ error: 'Usuario no encontrado' });
         }
         if (vCheck.rows[0].token_version !== user.token_version) {
           return res.status(403).json({ error: 'Sesión expirada. Vuelve a iniciar sesión.' });
         }
-        // Actualizar is_admin desde BD (fuente de verdad) aunque el JWT diga otra cosa
+        // Actualizar is_admin y role desde BD (fuente de verdad). Ignoramos lo que diga
+        // el JWT porque el rol pudo cambiar tras emitir el token (ej: degradación tras
+        // detectar abuso, promoción, etc). Defensa contra token-stale.
         user.is_admin = vCheck.rows[0].is_admin;
+        user.role     = vCheck.rows[0].role || 'user';
       } catch (dbErr) {
         // SEC-004: fail-secure — si no se puede verificar token_version, rechazar la petición
         // (evita que tokens revocados queden activos durante una degradación de PostgreSQL)
@@ -823,9 +836,9 @@ app.post('/api/auth/refresh', refreshLimiter, async (req, res) => {
       return res.status(401).json({ error: 'Sesión expirada' });
     }
 
-    // Cargar datos del usuario (token_version e is_admin siempre de BD — fuente de verdad)
+    // Cargar datos del usuario (token_version, is_admin y role siempre de BD — fuente de verdad)
     const userRes = await client.query(
-      'SELECT id, email, is_admin, token_version FROM users WHERE id = $1',
+      'SELECT id, email, is_admin, role, token_version FROM users WHERE id = $1',
       [rt.user_id]
     );
     if (!userRes.rows.length) {
@@ -848,9 +861,9 @@ app.post('/api/auth/refresh', refreshLimiter, async (req, res) => {
 
     await client.query('COMMIT');
 
-    // Nuevo AT (15 min, en el body)
+    // Nuevo AT (15 min, en el body). Incluye role para que el frontend conozca privilegios.
     const accessToken = jwt.sign(
-      { userId: user.id, email: user.email, is_admin: user.is_admin === true, token_version: user.token_version || 1 },
+      { userId: user.id, email: user.email, is_admin: user.is_admin === true, role: user.role || 'user', token_version: user.token_version || 1 },
       jwtSecretCached,
       { expiresIn: '15m' }
     );
@@ -1015,10 +1028,12 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
     }
 
     // Empresa activa y aprobada → emitir AT (15min) + RT cookie (mismo sistema que login)
+    // Nota: role se lee de BD en authenticateToken; este payload solo lo informa cliente.
     const atPayload = {
       userId: result.rows[0].id,
       email,
       is_admin: false,
+      role: 'user',
       token_version: 1,
     };
     const accessToken = jwt.sign(atPayload, jwtSecretCached, { expiresIn: '15m' });
@@ -1026,6 +1041,15 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
     const regRt = await createRefreshToken(result.rows[0].id, regFamilyId, false);
     setRtCookie(res, regRt.raw, regRt.expiresAt);
     auditLog('REGISTER_SUCCESS', { email }, result.rows[0].id, req.ip);
+    // Vigilancia humana: alertar a soporte técnico cuando alguien usa un CIF
+    // del catálogo pre-aprobado para registrarse. El correo permite detectar
+    // posibles suplantaciones (los CIFs son datos públicos).
+    sendAdminAutoApprovedEmail({
+      email,
+      cif:    cleanCompanyNif,
+      nombre: cleanCompanyName || `Empresa ${cleanCompanyNif}`,
+      ip:     req.ip,
+    }).catch(() => {});
     res.json({ accessToken, expiresIn: 900, user: { id: result.rows[0].id, email } });
   } catch (err) {
     logger.error('Register error:', err);
@@ -1101,6 +1125,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
       userId: user.id,
       email: user.email,
       is_admin: user.is_admin === true,
+      role: user.role || 'user',
       token_version: user.token_version || 1,
     };
     const accessToken = jwt.sign(atPayload, jwtSecretCached, { expiresIn: '15m' });
@@ -1684,6 +1709,24 @@ app.post('/api/upload-preview', authenticateToken, requireActiveCompany, uploadL
       }
     }
 
+    // ── Validación coincidencia CIF emisor/receptor con usuario logueado ─────
+    // Bloqueante en frontend (modal) y en /api/upload-confirm (defensa profunda).
+    // Excepción admin con empresa cliente seleccionada: userCompanyNif/Name ya
+    // han sido reasignados arriba (líneas 1542-1543) → la validación se hace
+    // contra la empresa cliente, no contra el admin.
+    const cifValidation = validateInvoiceCifs({
+      invoiceType:     invoiceTypeFromUser,
+      emisorNif:       campos.proveedor_nif,
+      emisorNombre:    campos.proveedor_nombre,
+      receptorNif:     campos.receptor_nif,
+      receptorNombre:  campos.receptor_nombre,
+      userNif:         userCompanyNif,
+      userNombre:      userCompanyName,
+    });
+    if (cifValidation.blocking) {
+      logger.warn(`[CIF-Match] Bloqueante en ${fileInfo.filename}: ${cifValidation.errors.map(e => e.code).join(',')}`);
+    }
+
     // ── Validación matemática del IVA ──────────────────────────────────────────
     const ivaValidation = validateIVACoherencia(campos);
     if (!ivaValidation.valid) {
@@ -1943,6 +1986,8 @@ app.post('/api/upload-preview', authenticateToken, requireActiveCompany, uploadL
       },
       ocr_corrected:          ocrCorrected,
       suggested_counterparty: suggestedCounterparty,
+      cif_validation: cifValidation,
+      user_company: { nif: userCompanyNif, nombre: userCompanyName },
     });
   } catch (err) {
     logger.error('Upload-preview error:', err);
@@ -2003,6 +2048,50 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
     const finalNif   = confirmed_nif   ? confirmed_nif.toUpperCase().replace(/[^A-Z0-9]/g, '')  : campos.proveedor_nif;
     const finalFecha = confirmed_fecha ? confirmed_fecha.trim() : campos.fecha_emision;
     const finalTotal = confirmed_total ? confirmed_total.trim() : campos.total;
+
+    // ── Validación CIF emisor/receptor vs usuario (defensa en profundidad) ───
+    // El frontend ya valida y bloquea el botón, pero un cliente HTTP malicioso
+    // podría saltarse ese check. Repetimos en backend con los valores confirmados.
+    // Excepción admin: si el preview viene con empresa cliente seleccionada
+    // (panel admin operando en nombre de un cliente), validamos contra el CIF
+    // de esa empresa cliente, no contra el del admin.
+    let validationUserNif  = null;
+    let validationUserName = null;
+    if (previewClientCompanyData && previewClientCompanyData.cif) {
+      validationUserNif  = String(previewClientCompanyData.cif).toUpperCase().replace(/[^A-Z0-9]/g, '');
+      validationUserName = previewClientCompanyData.nombre || null;
+    } else {
+      const userProfileForCifVal = await pool.query(
+        'SELECT company_nif, company_name FROM users WHERE id = $1',
+        [preview.userInfo.userId]
+      );
+      validationUserNif = userProfileForCifVal.rows[0]?.company_nif
+        ? userProfileForCifVal.rows[0].company_nif.toUpperCase().replace(/[^A-Z0-9]/g, '')
+        : null;
+      validationUserName = userProfileForCifVal.rows[0]?.company_name || null;
+    }
+    const cifValidationConfirm = validateInvoiceCifs({
+      invoiceType:    preview.invoice_type || 'compra',
+      emisorNif:      confirmed_nif              || campos.proveedor_nif,
+      emisorNombre:   confirmed_proveedor_nombre || campos.proveedor_nombre,
+      receptorNif:    confirmed_receptor_nif     || campos.receptor_nif,
+      receptorNombre: confirmed_receptor_nombre  || campos.receptor_nombre,
+      userNif:        validationUserNif,
+      userNombre:     validationUserName,
+    });
+    if (cifValidationConfirm.blocking) {
+      logger.warn(`[CIF-Match-Confirm] Bloqueante user=${userInfo.userId} preview=${preview_id}: ${cifValidationConfirm.errors.map(e => e.code).join(',')}`);
+      auditLog('UPLOAD_BLOCKED_CIF_MISMATCH', {
+        codes: cifValidationConfirm.errors.map(e => e.code),
+        invoice_type: preview.invoice_type || 'compra',
+      }, userInfo.userId, req.ip);
+      return res.status(400).json({
+        success: false,
+        cif_mismatch: true,
+        errors: cifValidationConfirm.errors,
+        error: cifValidationConfirm.errors[0].message,
+      });
+    }
 
     // Validar campos obligatorios tras confirmación
     const missing = [];
@@ -2212,6 +2301,29 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
       logger.info(`[Admin Confirm] Receptor forzado a empresa cliente: ${finalReceptorNombre} (${finalReceptorNif})`);
     }
 
+    // Proveedor (emisor) definitivo — variable explícita para poder forzar el lado
+    // del user en facturas de venta sin alterar finalNif (usado en carpeta/known_cifs).
+    let finalProveedorNif    = finalNif;
+    let finalProveedorNombre = cleanStr(confirmed_proveedor_nombre || campos.proveedor_nombre || ocrFull.proveedor_nombre);
+
+    // ── IDENTIDAD DEL USER = FUENTE DE VERDAD DEL REGISTRO (no del OCR) ──────────
+    // El usuario está autenticado: su CIF y nombre se conocen con certeza desde su
+    // registro (users.company_*). El lado propio de la factura (receptor en compra,
+    // emisor en venta) NUNCA debe depender de lo que lea la IA: así se garantiza
+    // que para un mismo CIF aparezca SIEMPRE el mismo nombre, el registrado.
+    // El flujo admin ya fuerza su lado desde la empresa-cliente (bloque anterior),
+    // por eso se excluye aquí (validationUserNif/Name ya valdrían lo mismo).
+    if (!previewClientCompanyData && validationUserNif && validationUserName) {
+      if (invoiceType === 'venta') {
+        finalProveedorNif    = validationUserNif;
+        finalProveedorNombre = validationUserName;
+      } else {
+        finalReceptorNif    = validationUserNif;
+        finalReceptorNombre = validationUserName;
+      }
+      logger.info(`[User-Identity] Lado propio (${invoiceType}) fijado desde registro: ${validationUserName} (${validationUserNif})`);
+    }
+
     // INSERT en BD — procesado_en=NOW() (procesamiento síncrono)
     const dbResult = await pool.query(
       `INSERT INTO uploads (
@@ -2227,8 +2339,8 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,NOW(),$25) RETURNING id`,
       [
         userInfo.userId, fileInfo.filename, fileInfo.mimetype, fileInfo.size,
-        finalNif,
-        cleanStr(confirmed_proveedor_nombre || campos.proveedor_nombre || ocrFull.proveedor_nombre),
+        finalProveedorNif,
+        finalProveedorNombre,
         normFecha,
         normTotal,
         finalReceptorNif,
@@ -2376,6 +2488,12 @@ app.get('/api/facturas/:id/imagen', authenticateToken, requireActiveCompany, asy
     // Validar que el path es interno (prevenir path traversal)
     const safePath = path.resolve(file_path);
     if (!safePath.startsWith('/app/uploads/')) return res.status(403).json({ error: 'Acceso denegado' });
+    // El recurso se embebe en <iframe> same-origin desde la SPA. X-Frame-Options:DENY
+    // (helmet frameguard) bloquea ese embebido incluso mismo origen en navegadores
+    // modernos. Sustituimos por frame-ancestors 'self' (CSP nivel 2, sucesora moderna)
+    // que mantiene la protección anti-clickjacking permitiendo el render legítimo.
+    res.removeHeader('X-Frame-Options');
+    res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
     res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(filename)}`);
     res.setHeader('Cache-Control', 'private, max-age=3600');
     res.sendFile(safePath);
@@ -2397,6 +2515,10 @@ app.get('/api/admin/facturas/:id/imagen', authenticateToken, requireAdmin, async
     if (!file_path) return res.status(404).json({ error: 'Imagen no disponible localmente' });
     const safePath = path.resolve(file_path);
     if (!safePath.startsWith('/app/uploads/')) return res.status(403).json({ error: 'Acceso denegado' });
+    // Misma corrección que el endpoint usuario: permitir embebido same-origin del PDF
+    // en <iframe> del panel admin sin abrir clickjacking (frame-ancestors 'self').
+    res.removeHeader('X-Frame-Options');
+    res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
     res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(filename)}`);
     res.setHeader('Cache-Control', 'private, max-age=3600');
     res.sendFile(safePath);
@@ -2461,12 +2583,12 @@ app.get('/api/mis-facturas/export.xlsx', authenticateToken, requireActiveCompany
         receptor_nombre:  r.receptor_nombre  || '',
         receptor_nif:     r.receptor_nif     || '',
         fecha_emision:    r.fecha_emision    || '',
-        base_imponible:   r.base_imponible   != null ? parseFloat(r.base_imponible)   : '',
-        iva_porcentaje:   r.iva_porcentaje   != null ? parseFloat(r.iva_porcentaje)   : '',
-        cuota_iva:        r.cuota_iva        != null ? parseFloat(r.cuota_iva)        : '',
-        irpf_porcentaje:  r.irpf_porcentaje  != null ? parseFloat(r.irpf_porcentaje)  : '',
-        cuota_irpf:       r.cuota_irpf       != null ? parseFloat(r.cuota_irpf)       : '',
-        total_factura:    r.total_factura     != null ? parseFloat(r.total_factura)    : '',
+        base_imponible:   normalizeToFloat(r.base_imponible)  ?? '',
+        iva_porcentaje:   normalizeToFloat(r.iva_porcentaje)  ?? '',
+        cuota_iva:        normalizeToFloat(r.cuota_iva)       ?? '',
+        irpf_porcentaje:  normalizeToFloat(r.irpf_porcentaje) ?? '',
+        cuota_irpf:       normalizeToFloat(r.cuota_irpf)      ?? '',
+        total_factura:    normalizeToFloat(r.total_factura)   ?? '',
         moneda:           r.moneda            || 'EUR',
         confidence_level: r.confidence_level  || '',
         uploaded_at:      r.uploaded_at ? new Date(r.uploaded_at).toLocaleString('es-ES') : '',
@@ -2520,7 +2642,7 @@ app.get('/api/client-companies', authenticateToken, async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT id, nombre, cif, codigo_cliente FROM client_companies
-       WHERE activa = true AND pendiente = false
+       WHERE activa = true AND pendiente = false AND is_test IS NOT TRUE
        ORDER BY nombre ASC`
     );
     res.json(result.rows);
@@ -2718,12 +2840,27 @@ app.get('/api/vies/:nif', authenticateToken, requireActiveCompany, viesLimiter, 
 const FEATURES_PATH = '/app/src/config/features.json';
 const VALID_ENGINES = ['openai', 'azure', 'dual'];
 
-// Admin middleware — verifica is_admin del JWT (fuente de verdad: BD) o email legacy
+// Middleware de autorización por rol (modelo 2026-05-06).
+// - requireAdmin permite cualquier privilegio del back-office: tech O admin.
+// - requireTech limita a SOPORTE TÉCNICO. Endpoints de plataforma sensibles
+//   (security.json, motor OCR, link de empresas, hard-delete de empresas,
+//   mutación catalogo global) deben usar requireTech en vez de requireAdmin.
+// Fuente de verdad: req.user.role poblado desde BD por authenticateToken.
+// Fallback a is_admin para compatibilidad si role no estuviera (no debería pasar).
 function requireAdmin(req, res, next) {
-  const isAdmin = req.user.is_admin === true; // SEC-019: solo is_admin de BD, no fallback por email
-  if (!isAdmin) {
-    auditLog('ADMIN_ACCESS_DENIED', { email: req.user.email, path: req.path }, req.user.userId, req.ip);
+  const role = req.user.role;
+  const allowed = role === 'tech' || role === 'admin' || (req.user.is_admin === true && !role);
+  if (!allowed) {
+    auditLog('ADMIN_ACCESS_DENIED', { email: req.user.email, path: req.path, role }, req.user.userId, req.ip);
     return res.status(403).json({ error: 'Acceso restringido a administradores' });
+  }
+  next();
+}
+
+function requireTech(req, res, next) {
+  if (req.user.role !== 'tech') {
+    auditLog('TECH_ACCESS_DENIED', { email: req.user.email, path: req.path, role: req.user.role }, req.user.userId, req.ip);
+    return res.status(403).json({ error: 'Acceso restringido a soporte técnico' });
   }
   next();
 }
@@ -2819,7 +2956,11 @@ async function logCompanyAudit(companyId, adminId, action, notes, metadata) {
   }
 }
 
-// Envía email a todos los admins activos cuando se registra una nueva empresa pendiente
+// Envía email a administradores cuando se registra una nueva empresa pendiente.
+// 2026-05-28: ampliado a is_admin=true (incluye tech + admin). Decisión Julio:
+// todos los administradores deben recibir los avisos operativos, no solo el
+// equipo técnico. Los privilegios de requireTech NO se ven afectados — siguen
+// limitados a role='tech'.
 async function sendAdminPendingEmail(companyData) {
   if (!emailTransporter || !smtpUserCached) return;
   try {
@@ -2852,10 +2993,64 @@ async function sendAdminPendingEmail(companyData) {
         <p><a href="https://setex-facturas.es/admin-facturas.html">Revisar en el panel de administración →</a></p>
       `
     });
-    logger.info(`[sendAdminPendingEmail] Notificación enviada a ${admins.rows.length} admins para empresa ${companyData.cif}`);
+    logger.info(`[sendAdminPendingEmail] Notificación enviada a ${admins.rows.length} administradores para empresa ${companyData.cif}`);
   } catch (err) {
     logger.error('[sendAdminPendingEmail] error:', err.message);
     // No lanzar — el fallo del email no debe bloquear el registro
+  }
+}
+
+// Envía notificación a administradores cuando un usuario se autoregistra usando
+// un CIF ya pre-aprobado (catálogo `client_companies` con activa=true, pendiente=false).
+// Sirve para vigilancia humana de posibles suplantaciones — el CIF es público,
+// alguien podría registrarse haciéndose pasar por una empresa real.
+// 2026-05-28: ampliado a is_admin=true (incluye tech + admin) por petición de Julio.
+async function sendAdminAutoApprovedEmail(data) {
+  if (!emailTransporter || !smtpUserCached) return;
+  try {
+    const admins = await pool.query(`SELECT email FROM users WHERE is_admin = true`);
+    if (!admins.rows.length) return;
+    const adminEmails = admins.rows.map(r => r.email).join(',');
+
+    // ¿Hay otros usuarios ya registrados con el mismo CIF? Bandera de aviso.
+    const otrosRes = await pool.query(
+      `SELECT email FROM users
+        WHERE UPPER(REPLACE(company_nif, ' ', '')) = $1
+          AND email <> $2
+          AND is_test IS NOT TRUE`,
+      [data.cif, data.email]
+    );
+    const otrosEmails = otrosRes.rows.map(r => r.email);
+    const aviso = otrosEmails.length
+      ? `<p style="color:#c53030;"><strong>⚠ Aviso:</strong> ya hay ${otrosEmails.length} usuario(s) registrado(s) con este CIF: <code>${otrosEmails.map(e => escapeHtml(e)).join(', ')}</code>. Verifica manualmente que no haya suplantación.</p>`
+      : `<p style="color:#276749;">✓ Primer registro para este CIF — sin coincidencias previas.</p>`;
+
+    await emailTransporter.sendMail({
+      from: `"SETEX Facturas" <${smtpUserCached}>`,
+      to: adminEmails,
+      subject: `[SETEX] Nuevo registro auto-aprobado — ${data.nombre} (${data.cif})`,
+      html: `
+        <h2>Nuevo registro auto-aprobado</h2>
+        <p>Una empresa del catálogo pre-aprobado ha sido usada por un usuario nuevo para registrarse. <strong>Recibió acceso inmediato sin pasar por aprobación admin.</strong></p>
+        <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;">
+          <tr><td><strong>Email del registrante</strong></td><td>${escapeHtml(data.email)}</td></tr>
+          <tr><td><strong>Nombre declarado</strong></td><td>${escapeHtml(data.nombre)}</td></tr>
+          <tr><td><strong>CIF/NIF</strong></td><td><code>${escapeHtml(data.cif)}</code></td></tr>
+          <tr><td><strong>IP origen</strong></td><td>${escapeHtml(data.ip || '-')}</td></tr>
+          <tr><td><strong>Fecha</strong></td><td>${new Date().toLocaleString('es-ES')}</td></tr>
+        </table>
+        ${aviso}
+        <p><strong>Si no reconoces este registro o el email parece sospechoso:</strong></p>
+        <ul>
+          <li>Desactiva la cuenta: <code>UPDATE client_companies SET activa=false WHERE cif='${escapeHtml(data.cif)}';</code></li>
+          <li>O contacta primero con la empresa real para verificar.</li>
+        </ul>
+        <p><a href="https://setex-facturas.es/admin-facturas.html">Abrir panel de administración →</a></p>
+      `
+    });
+    logger.info(`[sendAdminAutoApprovedEmail] Alerta enviada a ${admins.rows.length} tech: nuevo registro ${data.email} (CIF=${data.cif})`);
+  } catch (err) {
+    logger.error('[sendAdminAutoApprovedEmail] error:', err.message);
   }
 }
 
@@ -2926,12 +3121,15 @@ function setAdminCookie(res, user, ttlDays) {
 // ── requireActiveCompany — verifica en BD que la empresa del usuario está activa y aprobada ──
 // SIEMPRE verifica en BD (no confía solo en JWT). Fail-secure: si la BD falla → 503.
 // Admins (is_admin=true) siempre pasan sin restricción.
+// Sandbox (is_test=true): también pasan sin restricción, su actividad se purga
+// periódicamente y no afecta a la BD productiva.
 async function requireActiveCompany(req, res, next) {
   if (req.user?.is_admin === true) return next();
   try {
     const userRow = await pool.query(
-      'SELECT company_nif FROM users WHERE id = $1', [req.user.userId]
+      'SELECT company_nif, is_test FROM users WHERE id = $1', [req.user.userId]
     );
+    if (userRow.rows[0]?.is_test === true) return next();
     const nif = userRow.rows[0]?.company_nif;
     if (!nif) {
       return res.status(403).json({
@@ -3123,6 +3321,8 @@ app.get('/api/admin/facturas', authenticateToken, requireAdmin, async (req, res)
       conditions.push(`UPPER(REPLACE(us.company_nif, ' ', '')) = $${p++}`);
       params.push(cleanCif);
     }
+    // SANDBOX: ocultar facturas de usuarios de pruebas (is_test=true) del panel admin
+    conditions.push(`us.is_test IS NOT TRUE`);
 
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
@@ -3186,7 +3386,8 @@ app.get('/api/admin/facturas', authenticateToken, requireAdmin, async (req, res)
 // GET /api/admin/facturas/usuarios — lista de usuarios para filtro (solo admin)
 app.get('/api/admin/facturas/usuarios', authenticateToken, requireAdmin, async (_req, res) => {
   try {
-    const result = await pool.query('SELECT id, email FROM users ORDER BY email');
+    // SANDBOX: ocultar usuarios de pruebas del dropdown de filtro
+    const result = await pool.query('SELECT id, email FROM users WHERE is_test IS NOT TRUE ORDER BY email');
     res.json({ usuarios: result.rows });
   } catch (err) {
     logger.error('Admin usuarios error:', err);
@@ -3229,6 +3430,8 @@ app.get('/api/admin/facturas/export.xlsx', authenticateToken, requireAdmin, asyn
       conditions.push(`UPPER(REPLACE(us.company_nif, ' ', '')) = $${p++}`);
       params.push(cleanCif);
     }
+    // SANDBOX: ocultar facturas de usuarios de pruebas también del export Excel
+    conditions.push(`us.is_test IS NOT TRUE`);
 
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
@@ -3722,7 +3925,9 @@ app.get('/api/admin/client-companies', authenticateToken, requireAdmin, async (_
              MAX(up.uploaded_at) AS ultima_factura
       FROM client_companies cc
       LEFT JOIN users u ON UPPER(REPLACE(u.company_nif, ' ', '')) = UPPER(REPLACE(cc.cif, ' ', ''))
+                       AND u.is_test IS NOT TRUE
       LEFT JOIN uploads up ON up.user_id = u.id
+      WHERE cc.is_test IS NOT TRUE
       GROUP BY cc.id
       ORDER BY cc.pendiente DESC, cc.activa DESC, cc.nombre ASC
     `);
@@ -3837,7 +4042,7 @@ app.get('/api/admin/companies/pending', authenticateToken, requireAdmin, async (
              COUNT(u.id) AS num_users
       FROM client_companies cc
       LEFT JOIN users u ON UPPER(REPLACE(u.company_nif, ' ', '')) = UPPER(REPLACE(cc.cif, ' ', ''))
-      WHERE cc.pendiente = true
+      WHERE cc.pendiente = true AND cc.is_test IS NOT TRUE
       GROUP BY cc.id
       ORDER BY cc.requested_at ASC NULLS LAST, cc.created_at ASC
     `);
@@ -4091,6 +4296,7 @@ app.post('/api/admin/companies/:id/link', authenticateToken, requireAdmin, requi
 // ─── Admin: gestión de usuarios y empresas ────────────────────────────────────
 app.get('/api/admin/users', authenticateToken, requireAdmin, async (_req, res) => {
   try {
+    // SANDBOX: ocultar usuarios de pruebas del listado del panel admin
     const r = await pool.query(`
       SELECT u.id, u.email, u.company_name, u.created_at,
              COUNT(up.id)::INT AS total_facturas,
@@ -4098,6 +4304,7 @@ app.get('/api/admin/users', authenticateToken, requireAdmin, async (_req, res) =
              SUM(CASE WHEN up.total_factura ~ '^[0-9]+(\.[0-9]+)?$' THEN up.total_factura::NUMERIC ELSE 0 END)::NUMERIC(15,2) AS total_importe
       FROM users u
       LEFT JOIN uploads up ON up.user_id = u.id
+      WHERE u.is_test IS NOT TRUE
       GROUP BY u.id
       ORDER BY u.company_name NULLS LAST, u.email
     `);
@@ -4317,6 +4524,11 @@ async function start() {
       logger.warn('[Cleanup] Error en limpieza de uploads:', err.message);
     }
   }, 60 * 60 * 1000);
+
+  // SANDBOX: purga periódica (cada 60s) de uploads/audit/tokens de usuarios is_test=true
+  // No requiere cron del sistema; corre dentro del propio proceso Node.
+  const { startTestCleanup } = require('./services/test-cleanup');
+  startTestCleanup({ pool, logger, intervalMs: 60_000 });
 
   app.listen(PORT, '0.0.0.0', () => {
     logger.info(`Server running on port ${PORT}`);

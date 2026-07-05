@@ -16,10 +16,10 @@
 | Mantenedor | Julio |
 | Versión del plan | 2.0 (plan híbrido — combina lo mejor del Plan A externo y del Plan B interno basado en estado real) |
 | Fecha creación | 2026-04-20 |
-| Última actualización | **2026-04-27 23:55 UTC** (FASE 1B Etapas 0-4 cerradas y mergeadas a develop · v3 listo para swap pendiente solo de validación staging 24-48h) |
-| Estado global | 🟢 **v1.1.0 + PR #84 en prod · monolito estable**. 🟢 **Refactor v3 DESCONGELADO en `develop`** — 5 rutas portadas + paridad CI + healthcheck endurecido + smoke HTTP post-deploy. 🟡 Pendiente: validación staging 24-48h (Etapa 5) y swap a runtime + tag v2.0.0 (Etapa 6). Plan: `docs/plans/PLAN-FASE-4-DESCONGELADO-V3.md`. |
-| Release activo | **v1.1.0 + PR #84** en `main @ 788ff6a` (deploy-prod.yml 2026-04-27 11:21 UTC). Backend container con `uuid@14.0.0` override (GHSA-w5hq-g745-h8pq cerrada). El swap a v3 (Etapa 6) cambiará el release a v2.0.0. |
-| Tags publicados | v1.0.0, v1.0.1, v1.0.2, **v1.1.0**, v2.0.0-rc1 (rollback 22-Abr). Próximo tag previsto: **v2.0.0** tras swap v3 estable 7+ días en prod. |
+| Última actualización | **2026-04-28 09:40 UTC** (🏷️ v2.0.0 promocionado a main + deploy a producción exitoso · refactor v3 modular Awilix DI EN RUNTIME REAL en prod) |
+| Estado global | 🟢 **v2.0.0 EN PRODUCCIÓN**. Refactor v3 modular Awilix DI corre en `setex-prod-backend` desde 2026-04-28 09:36 UTC. server.js = 60 líneas (entry point a createApp). server.legacy.js = monolito v1.1.0 4308 líneas (rollback rápido vía `npm run start:legacy`). Defensas activas: paridad CI 1:1, healthcheck endurecido, smoke HTTP post-deploy bloqueante, logger funcional con tests, rollback < 30s. Multi-IVA preservado idéntico a v1.1.0. |
+| Release activo | **v2.0.0** en `main @ a1cda6d` (deploy-prod.yml 2026-04-28 09:36 UTC). Container `setex-prod-backend` corre v3 modular Awilix DI con logger funcional. Backend logs: `redis ready · pg pool ready · SMTP smtp.gmail.com:587 verified · SETEX backend (v3) escuchando pid:1 port:3000`. |
+| Tags publicados | v1.0.0, v1.0.1, v1.0.2, v1.1.0, v2.0.0-rc1 (rollback 22-Abr), **v2.0.0** (28-Abr · refactor v3 en runtime). |
 
 ### Reglas del documento
 
