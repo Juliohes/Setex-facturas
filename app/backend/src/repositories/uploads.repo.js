@@ -164,12 +164,18 @@ class UploadsRepository {
   }
 
   async listDistinctUploaders() {
+    // 2026-07-05: espejo de la SQL del monolito (/api/admin/facturas/usuarios):
+    // TODOS los usuarios no-test con sus datos de empresa (users.company_* +
+    // client_companies por matching de CIF) para que el filtro del panel
+    // muestre nombres de empresa. Antes: solo uploaders, sin empresa.
     const r = await this.pool.query(
-      `SELECT DISTINCT us.id, us.email, COUNT(u.id)::int AS upload_count
+      `SELECT us.id, us.email, us.company_name, us.company_nif,
+              cc.nombre AS company_nombre_registrado, cc.codigo_cliente
        FROM users us
-       INNER JOIN uploads u ON u.user_id = us.id
-       GROUP BY us.id, us.email
-       ORDER BY upload_count DESC`
+       LEFT JOIN client_companies cc
+         ON UPPER(REPLACE(us.company_nif, ' ', '')) = UPPER(REPLACE(cc.cif, ' ', ''))
+       WHERE us.is_test IS NOT TRUE
+       ORDER BY COALESCE(cc.nombre, us.company_name, us.email)`
     );
     return r.rows;
   }

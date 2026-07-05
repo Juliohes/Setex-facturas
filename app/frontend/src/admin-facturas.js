@@ -20,43 +20,14 @@ async function authFetch(url, opts = {}) {
   return Auth.apiFetch(url, opts);
 }
 
-async function doLogin(email, password) {
-  const res = await fetch(`${API_URL}/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password }),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Credenciales incorrectas');
-  Auth.handleLoginResponse(data);
-  return Auth.getToken();
-}
+// El login del panel vive en /admin-login.html (2026-07-05). Las antiguas
+// doLogin/setupLoginForm/showLogin/hideLogin eran código muerto: nginx bloquea
+// este HTML sin cookie admin, así que el formulario embebido jamás se veía.
 async function checkAdminAccess(_token) {
   const res = await authFetch(`${API_URL}/admin/facturas/usuarios`);
   if (res.status === 403) throw new Error('Tu cuenta no tiene permisos de administrador.');
   if (!res.ok) throw new Error('Error de conexión con el servidor.');
   return await res.json();
-}
-function showLogin() { document.getElementById('login-screen').style.display = 'flex'; }
-function hideLogin() { document.getElementById('login-screen').style.display = 'none'; }
-function setupLoginForm(onSuccess) {
-  document.getElementById('login-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const btn = document.getElementById('login-btn');
-    const email = document.getElementById('login-email').value.trim();
-    const password = document.getElementById('login-password').value;
-    document.getElementById('login-error').style.display = 'none';
-    btn.disabled = true; btn.textContent = 'Comprobando...';
-    try {
-      const token = await doLogin(email, password);
-      const authData = await checkAdminAccess(token);
-      hideLogin(); onSuccess(authData);
-    } catch (err) {
-      const el = document.getElementById('login-error');
-      el.textContent = err.message; el.style.display = 'block';
-      btn.disabled = false; btn.textContent = 'Entrar';
-    }
-  });
 }
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
@@ -1453,7 +1424,12 @@ function launchApp(authData) {
   const select = document.getElementById('f-usuario');
   (authData.usuarios || []).forEach(u => {
     const opt = document.createElement('option');
-    opt.value = u.id; opt.textContent = u.email; select.appendChild(opt);
+    // 2026-07-05: mostrar el NOMBRE DE EMPRESA del usuario (registrado en
+    // client_companies > declarado en users) — email solo como fallback si
+    // el usuario no tiene empresa asignada. El value sigue siendo user_id.
+    opt.value = u.id;
+    opt.textContent = u.company_nombre_registrado || u.company_name || u.email;
+    select.appendChild(opt);
   });
 
   initTabs();
@@ -1507,8 +1483,7 @@ function launchApp(authData) {
     // Borrar cookie httpOnly admin en el servidor (JS no puede borrarla directamente)
     try { await fetch(`${API_URL}/auth/logout`, { method: 'POST', headers: { 'X-Requested-With': 'XMLHttpRequest' } }); } catch {}
     localStorage.removeItem('token');
-    document.getElementById('app').style.display = 'none';
-    showLogin();
+    window.location.href = '/admin-login.html';
   });
   document.getElementById('f-proveedor').addEventListener('keydown', e => {
     if (e.key === 'Enter') { currentFilters = getFilters(); loadData(currentFilters); }
@@ -1652,8 +1627,8 @@ window._linkToCompany = async function(targetId, targetNombre) {
 };
 
 async function init() {
-  // Callback cross-tab: si se cierra sesión en otra pestaña → redirigir al login
-  window.__authOnLogout = () => { window.location.href = '/?next=admin'; };
+  // Callback cross-tab: si se cierra sesión en otra pestaña → redirigir al login admin
+  window.__authOnLogout = () => { window.location.href = '/admin-login.html'; };
 
   const ok = await Auth.init();
   if (ok && Auth.isLoggedIn()) {
@@ -1672,8 +1647,8 @@ async function init() {
       await Auth.logout().catch(() => {});
     }
   }
-  // Sin sesión válida o sin permisos: redirigir al login principal con intención admin.
-  window.location.href = '/?next=admin';
+  // Sin sesión válida o sin permisos: redirigir al login dedicado de admin.
+  window.location.href = '/admin-login.html';
 }
 
 // ── Multi-IVA 2026-04-21 parte 4/7 — Modal desglose admin ────────────────────

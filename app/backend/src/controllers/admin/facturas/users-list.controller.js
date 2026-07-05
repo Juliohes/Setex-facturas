@@ -8,7 +8,9 @@ function makeAdminFacturasUsersListController({ uploadsRepo } = {}) {
 
   return async function adminFacturasUsersListController(req, res) {
     const rows = await uploadsRepo.listDistinctUploaders();
-    res.json({ items: rows });
+    // Contrato alineado con el monolito: { usuarios } — el shape { items }
+    // era exactamente el patrón de bug LL-002 (frontend espera `usuarios`).
+    res.json({ usuarios: rows });
   };
 }
 
