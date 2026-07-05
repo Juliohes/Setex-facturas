@@ -578,6 +578,13 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-07-05 — Merge PR #114 · incidente red n8n_default (PR #115) · Mistral en smoke nocturno
+- **PR #114 mergeado a develop** (squash `e035026`): fix multi-IVA + Mistral OCR 4 modo triple.
+- **Incidente deploy CI (3 fallos, staging caído ~10 min, restaurado)**: ① reflog de rama root-owned (deuda ownership: sesiones Claude como root — mitigado con chown selectivo `-user root -o -group root`, staging y prod a 0); ② timeout SSH transitorio del runner (fail2ban descartado: solo IPs residenciales); ③ **mina LL-002-style**: develop referenciaba la red externa `n8n_default` inexistente — el rename a `traefik_default` vivía solo en la rama nunca mergeada `feature/staging-traefik-network-rename-2026-05-06` y en disco. `docker compose up` del frontend desde develop tumbó staging.
+- `app/docker-compose.yml` — **PR #115** (squash `7ca9219`): rename `n8n_default`→`traefik_default` conservando el secret mistral. Supersede la rama del rename (borrable). Deploy CI posterior **VERDE** end-to-end (sync+rebuild+swap+health+smoke HTTP).
+- `scripts/smoke-test-ocr.js` — **PR #115**: test Mistral OCR 4 (petición real `/v1/ocr` + `document_annotation_format` json_schema strict; skip con warning si secret placeholder). Verificado staging 4/4 y prod 4/4 (Mistral 2,2-2,3 s). Copiado quirúrgicamente a prod (cron 04:30 ya lo ejecuta con Mistral).
+- **Lección operativa**: sesiones de Claude Code como root generan refs git root-owned que rompen el `git reset` del CI — ejecutar chown selectivo tras operaciones git, o migrar las sesiones a usuario deploy (candidato a ROADMAP).
+
 ### 2026-07-04 (tarde) — Modo TRIPLE validado E2E con los 3 motores · keys operativas
 - **Keys**: Julio aportó keys reales (Mistral + OpenAI staging nueva con scope `model.request`); colocadas en `secrets/` y fichero temporal destruido con `shred -u`. La key OpenAI rota de staging queda resuelta.
 - **Hallazgo permisos**: los secrets del proyecto usan `644` (dir `700 deploy`) porque el `appuser` uid 1001 del contenedor ≠ `deploy` — un `600` rompe la lectura con "Permission denied" silencioso (motor cae a error "no configurada"). Documentado como patrón.
