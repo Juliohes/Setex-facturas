@@ -578,6 +578,14 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-07-06 — Motores OCR Gemini 3 Flash y Gemini 3.1 Pro + modo "multi" configurable
+- `app/backend/src/ocr/gemini.js` (NUEVO): motor Google Gemini vía `generateContent` v1beta con salida estructurada JSON Schema. UN módulo parametrizado → dos motores: `gemini_flash` y `gemini_pro`. **IDs de modelo en caliente** en features.json (`ocr_gemini_flash_model`/`ocr_gemini_pro_model`, defaults `gemini-3-flash-preview` y `gemini-3.1-pro-preview`) porque la familia Gemini 3.x está en PREVIEW y Google rota IDs. Nota verificada contra docs oficiales: "Gemini 3 Pro" no existe como ID — el Pro de la familia es 3.1 ($2/$12 por M tokens; Flash $0.50/$3).
+- `app/backend/src/ocr/index.js`: orquestador generalizado — registro `EXTRA_ENGINES` (mistral, gemini_flash, gemini_pro) + nuevo modo **"multi"** (dual + lista `ocr_multi_engines`); `integrateMistralResult` → `integrateExtraEngineResult` genérico (alias retrocompat conservado); promoción del primer extra válido al hueco de un primario caído; `extra_results[]` en la traza. Modos previos `dual`/`triple` intactos — **el modo activo sigue "triple"**: nada cambia hasta activar "multi".
+- Votación conservadora: los extras rellenan huecos y solo corrigen un importe con respaldo de un motor PRIMARIO (openai/azure); los extras no se respaldan entre sí.
+- `app/docker-compose.yml`: secret `gemini_api_key` (una sola key Google AI Studio para ambos modelos). **Placeholder creado en secrets/ de staging Y prod ANTES del deploy** (lección incidente 2226-07-04: el compose referencia ficheros que deben existir). El código desactiva los motores limpiamente vía `isPlaceholder`.
+- Tests: +4 (suite 83/83 ✅).
+- **Pendiente**: key real de Google AI Studio (solo Julio) → E2E staging en modo "multi" con los 5 motores → decidir modo por defecto y promoción a prod.
+
 ### 2026-07-06 — nginx: absolute_redirect off (redirecciones relativas)
 - `app/frontend/nginx.conf`: `absolute_redirect off;` a nivel de server — los `return 302 /ruta` emitían `Location: http://<host>/ruta` (esquema http detrás de Traefik); inocuo con HSTS preload pero impuro. Ahora `Location: /ruta` relativo. Sintaxis validada con `nginx -t` en la imagen antes de merge. Trabajo realizado dentro de la ventana de seguridad 00-06 (smoke HTTP del CI es consciente de la ventana: 403 esperado ≠ fallo).
 

@@ -146,3 +146,48 @@ test('mistral schema: json_schema válido con los 15 campos del contrato interno
   for (const k of esperados) assert.ok(props[k], `falta campo ${k} en el schema`);
   assert.deepEqual(INVOICE_ANNOTATION_SCHEMA.json_schema.schema.required, esperados);
 });
+
+// ── Gemini 3 (2026-07-06): parseo, schema y motor extra genérico ───────────────
+
+const { extractResponseText, INVOICE_JSON_SCHEMA, DEFAULT_MODELS } = require('../../src/ocr/gemini');
+const { integrateExtraEngineResult } = require('../../src/ocr/index');
+
+test('gemini.extractResponseText: extrae el texto del shape generateContent', () => {
+  const data = { candidates: [{ content: { parts: [{ text: '{"total":"1,00"}' }] } }] };
+  assert.equal(extractResponseText(data), '{"total":"1,00"}');
+  assert.equal(extractResponseText({}), null);
+  assert.equal(extractResponseText({ candidates: [{ content: { parts: [] } }] }), null);
+});
+
+test('gemini schema: 15 campos del contrato interno y modelos por defecto', () => {
+  const esperados = [
+    'numero_factura', 'fecha_emision', 'proveedor_nombre', 'proveedor_nif',
+    'receptor_nombre', 'receptor_nif', 'base_imponible', 'iva_porcentaje',
+    'cuota_iva', 'lineas_iva', 'irpf_porcentaje', 'cuota_irpf', 'total',
+    'moneda', 'es_factura_valida',
+  ];
+  for (const k of esperados) assert.ok(INVOICE_JSON_SCHEMA.properties[k], `falta ${k}`);
+  assert.deepEqual(INVOICE_JSON_SCHEMA.required, esperados);
+  assert.equal(DEFAULT_MODELS.flash, 'gemini-3-flash-preview');
+  assert.equal(DEFAULT_MODELS.pro, 'gemini-3.1-pro-preview');
+});
+
+test('integrateExtraEngineResult: mismo comportamiento que el integrador de Mistral', () => {
+  const merged = { base_imponible: '100,00', cuota_iva: null, total: '1.760,00' };
+  const oF = { total: '1.760,00' };
+  const aF = { total: '1.560,00' };
+  // gemini_pro coincide con Azure → mayoría corrige el total; cuota rellena hueco
+  integrateExtraEngineResult(merged, oF, aF, { cuota_iva: '21,00', total: '1.560,00' }, 'gemini_pro', silentLogger);
+  assert.equal(merged.cuota_iva, '21,00');
+  assert.equal(merged.total, '1.560,00');
+});
+
+test('integrateExtraEngineResult: dos extras secuenciales no se respaldan entre sí', () => {
+  const merged = { base_imponible: '1.000,00', cuota_iva: '210,00', total: '1.210,00' };
+  const oF = { total: '1.210,00' };
+  const aF = { total: '1.210,00' };
+  // Ambos extras discrepan igual entre sí, pero SIN respaldo de un primario → no ganan
+  integrateExtraEngineResult(merged, oF, aF, { total: '9.999,99' }, 'mistral', silentLogger);
+  integrateExtraEngineResult(merged, oF, aF, { total: '9.999,99' }, 'gemini_flash', silentLogger);
+  assert.equal(merged.total, '1.210,00', 'los primarios son el ancla');
+});

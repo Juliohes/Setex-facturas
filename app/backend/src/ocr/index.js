@@ -4,22 +4,29 @@
 // Cuando discrepan → reconciliación con dígito de control + lectura enfocada CIF como árbitro.
 //
 // MOTORES:
-//   "openai"  — GPT-4.1 Vision (activo siempre)
-//   "azure"   — Azure Document Intelligence prebuilt-invoice (sin alucinaciones, $0.0015/factura)
-//   "mistral" — Mistral OCR 4 (modelo OCR específico, annotations JSON, ~$0.004/factura)
+//   "openai"       — GPT-4.1 Vision (primario, activo siempre)
+//   "azure"        — Azure DI prebuilt-invoice (primario, sin alucinaciones, $0.0015/factura)
+//   "mistral"      — Mistral OCR 4 (extra; annotations JSON, ~$0.004/factura)
+//   "gemini_flash" — Google Gemini 3 Flash (extra; PREVIEW, ~$0.002/factura)
+//   "gemini_pro"   — Google Gemini 3.1 Pro (extra; PREVIEW, ~$0.01/factura)
 //
 // MODO (features.json → ocr_mode):
 //   "dual"    — OpenAI + Azure en paralelo (DEFECTO)
-//   "triple"  — OpenAI + Azure + Mistral en paralelo (votación 2-de-3 en importes)
-//   "openai"  — solo OpenAI
-//   "azure"   — solo Azure
-//   "mistral" — solo Mistral OCR 4
+//   "triple"  — dual + Mistral (votación 2-de-3 en importes)
+//   "multi"   — dual + extras de features.json ocr_multi_engines
+//               (default ["mistral","gemini_flash","gemini_pro"])
+//   "openai" | "azure" | "mistral" | "gemini_flash" | "gemini_pro" — motor único
+//
+// Los IDs de modelo Gemini son configurables en caliente (features.json →
+// ocr_gemini_flash_model / ocr_gemini_pro_model) porque Gemini 3.x está en
+// preview y Google rota los IDs con poco preaviso.
 'use strict';
 
 const fs      = require('fs');
 const openai  = require('./openai');
 const azure   = require('./azure');
 const mistral = require('./mistral');
+const gemini  = require('./gemini');
 const { mergeLineasIva, fillDerivedBases, dropResumenArtifacts, normalizeConfirmedLineasIva, parseSpanishAmount } = require('./validateIVA');
 const { validateSpanishTaxId } = require('./validateCIF');
 
@@ -69,6 +76,26 @@ async function tryMistral(filePath, mimeType, context) {
   return await mistral.extractInvoice(filePath, mimeType, apiKey, context);
 }
 
+async function tryGemini(filePath, mimeType, context, cfg, label) {
+  const apiKey = getSecret('gemini_api_key');
+  if (isPlaceholder(apiKey)) {
+    throw new Error(`Gemini ${label}: gemini_api_key no configurada — añade el secret en secrets/ del entorno activo`);
+  }
+  const modelId = label === 'pro'
+    ? (cfg.ocr_gemini_pro_model || gemini.DEFAULT_MODELS.pro)
+    : (cfg.ocr_gemini_flash_model || gemini.DEFAULT_MODELS.flash);
+  return await gemini.extractInvoice(filePath, mimeType, apiKey, context, modelId, label);
+}
+
+// Registro de motores EXTRA (todo lo que no es el dual primario openai+azure).
+// Añadir un motor nuevo = módulo ocr/<motor>.js + una entrada aquí.
+const EXTRA_ENGINES = {
+  mistral:      (fp, mt, ctx, _cfg) => tryMistral(fp, mt, ctx),
+  gemini_flash: (fp, mt, ctx, cfg) => tryGemini(fp, mt, ctx, cfg, 'flash'),
+  gemini_pro:   (fp, mt, ctx, cfg) => tryGemini(fp, mt, ctx, cfg, 'pro'),
+};
+const DEFAULT_MULTI_ENGINES = ['mistral', 'gemini_flash', 'gemini_pro'];
+
 // ─── Normalización para comparar ─────────────────────────────────────────────
 
 function normalizeToFloat(str) {
@@ -111,43 +138,44 @@ function amountsBothAgree(a, b) {
   return amountsAgree(a, b);
 }
 
-// ─── Integración del tercer motor (Mistral OCR 4) ─────────────────────────────
-// Solo se invoca en modo triple con los 3 motores vivos. Reglas:
-//   1. Relleno: campos null del merge dual se completan con la lectura Mistral.
-//   2. lineas_iva: fusión con el desglose Mistral (mismo mergeLineasIva).
-//   3. Votación 2-de-3 en importes: si el valor fusionado discrepa de Mistral
-//      pero Mistral coincide con el OTRO motor primario, gana la mayoría.
-function integrateMistralResult(merged, oF, aF, mF, logger) {
+// ─── Integración de motores EXTRA (Mistral, Gemini Flash/Pro…) ────────────────
+// Se invoca una vez por motor extra vivo, en orden de configuración. Reglas:
+//   1. Relleno: campos null del merge se completan con la lectura del extra.
+//   2. lineas_iva: fusión de tramos (mismo mergeLineasIva, sin duplicar).
+//   3. Votación en importes: si el valor fusionado discrepa del extra pero el
+//      extra coincide con un motor PRIMARIO cuyo valor difiere del elegido,
+//      gana la mayoría. Los extras no se respaldan entre sí (conservador:
+//      los primarios openai+azure son el ancla de confianza).
+function integrateExtraEngineResult(merged, oF, aF, xF, engineLabel, logger) {
   // 1. Relleno de huecos en campos simples
   const FILLABLE = [
     'numero_factura', 'proveedor_nombre', 'receptor_nombre', 'fecha_emision',
     'base_imponible', 'iva_porcentaje', 'cuota_iva', 'total',
   ];
   for (const k of FILLABLE) {
-    if (merged[k] == null && mF[k] != null) {
-      merged[k] = mF[k];
-      logger.info(`[TripleOCR] Campo ${k} rellenado por Mistral: "${mF[k]}"`);
+    if (merged[k] == null && xF[k] != null) {
+      merged[k] = xF[k];
+      logger.info(`[MultiOCR] Campo ${k} rellenado por ${engineLabel}: "${xF[k]}"`);
     }
   }
-  if (!merged.proveedor_nif && mF.proveedor_nif) merged.proveedor_nif = normNif(mF.proveedor_nif);
-  if (!merged.receptor_nif  && mF.receptor_nif)  merged.receptor_nif  = normNif(mF.receptor_nif);
+  if (!merged.proveedor_nif && xF.proveedor_nif) merged.proveedor_nif = normNif(xF.proveedor_nif);
+  if (!merged.receptor_nif  && xF.receptor_nif)  merged.receptor_nif  = normNif(xF.receptor_nif);
 
-  // 2. Desglose multi-IVA: fusionar tramos Mistral con los ya fusionados
-  if (Array.isArray(mF.lineas_iva) && mF.lineas_iva.length > 0) {
-    merged.lineas_iva = mergeLineasIva(merged.lineas_iva, mF.lineas_iva);
+  // 2. Desglose multi-IVA: fusionar tramos del extra con los ya fusionados
+  if (Array.isArray(xF.lineas_iva) && xF.lineas_iva.length > 0) {
+    merged.lineas_iva = mergeLineasIva(merged.lineas_iva, xF.lineas_iva);
   }
 
-  // 3. Votación 2-de-3 en importes agregados
+  // 3. Votación en importes agregados (respaldo de un primario obligatorio)
   for (const k of ['base_imponible', 'cuota_iva', 'total']) {
-    const m = mF[k];
-    if (m == null) continue;
+    const x = xF[k];
+    if (x == null) continue;
     const cur = merged[k];
-    if (cur == null || amountsBothAgree(cur, m)) continue; // ya coincide o ya rellenado
-    // cur ≠ Mistral: ¿algún motor primario cuyo valor difiera del elegido respalda a Mistral?
-    const backed = [oF[k], aF[k]].some(v => v != null && !amountsBothAgree(v, cur) && amountsBothAgree(v, m));
+    if (cur == null || amountsBothAgree(cur, x)) continue; // ya coincide o ya rellenado
+    const backed = [oF[k], aF[k]].some(v => v != null && !amountsBothAgree(v, cur) && amountsBothAgree(v, x));
     if (backed) {
-      logger.warn(`[TripleOCR] Votación 2-de-3 en ${k}: "${cur}" → "${m}" (Mistral + un motor primario coinciden)`);
-      merged[k] = m;
+      logger.warn(`[MultiOCR] Votación en ${k}: "${cur}" → "${x}" (${engineLabel} + un motor primario coinciden)`);
+      merged[k] = x;
     }
   }
 }
@@ -209,19 +237,28 @@ function reconcileMultiIvaAggregates(campos, logger) {
 
 // ─── Comparador y fusionador de resultados multi-motor ────────────────────────
 
-function compareOCRResults(openaiRes, azureRes, mistralRes, logger) {
-  // Si Mistral produjo resultado válido y uno de los dos motores primarios
-  // falló, Mistral ocupa su hueco: el flujo dual sigue funcionando con dos
-  // fuentes reales en lugar de degradar a motor único.
-  const mistralValido = mistralRes && mistralRes.es_factura_valida !== false;
-  if (mistralValido && (!openaiRes || openaiRes.es_factura_valida === false)) {
-    logger.info('[DualOCR] OpenAI sin resultado — Mistral OCR 4 ocupa su hueco en la fusión');
-    openaiRes = mistralRes;
-    mistralRes = null;
-  } else if (mistralValido && (!azureRes || azureRes.es_factura_valida === false)) {
-    logger.info('[DualOCR] Azure sin resultado — Mistral OCR 4 ocupa su hueco en la fusión');
-    azureRes = mistralRes;
-    mistralRes = null;
+function compareOCRResults(openaiRes, azureRes, extraResults, logger) {
+  // extraResults: array [{ name, res }] de motores extra vivos (mistral,
+  // gemini_flash, gemini_pro…), en orden de configuración.
+  const extras = (extraResults || []).filter(x => x && x.res);
+
+  // Si un motor primario falló y hay extras válidos, el PRIMER extra válido
+  // ocupa su hueco: el flujo dual sigue funcionando con dos fuentes reales
+  // en lugar de degradar a motor único.
+  const promoteExtra = (slotName) => {
+    const idx = extras.findIndex(x => x.res.es_factura_valida !== false);
+    if (idx === -1) return null;
+    const [promoted] = extras.splice(idx, 1);
+    logger.info(`[DualOCR] ${slotName} sin resultado — ${promoted.name} ocupa su hueco en la fusión`);
+    return promoted.res;
+  };
+  if (!openaiRes || openaiRes.es_factura_valida === false) {
+    const p = promoteExtra('OpenAI');
+    if (p) openaiRes = p;
+  }
+  if (!azureRes || azureRes.es_factura_valida === false) {
+    const p = promoteExtra('Azure');
+    if (p) azureRes = p;
   }
 
   if (!openaiRes && !azureRes) return null;
@@ -300,9 +337,11 @@ function compareOCRResults(openaiRes, azureRes, mistralRes, logger) {
     es_factura_valida: openaiRes.es_factura_valida !== false || azureRes.es_factura_valida !== false,
   };
 
-  // ── Integración Mistral OCR 4 (modo triple): relleno + votación 2-de-3 ──────
-  if (mistralRes && mistralRes.es_factura_valida !== false) {
-    integrateMistralResult(merged, oF, aF, mistralRes.campos || {}, logger);
+  // ── Integración de motores extra (triple/multi): relleno + votación ─────────
+  for (const extra of extras) {
+    if (extra.res.es_factura_valida !== false) {
+      integrateExtraEngineResult(merged, oF, aF, extra.res.campos || {}, extra.name, logger);
+    }
   }
 
   // ── Reconciliación multi-IVA (fix 2026-07-03) ────────────────────────────────
@@ -375,12 +414,19 @@ function compareOCRResults(openaiRes, azureRes, mistralRes, logger) {
       engine: azureRes.ocr_engine,
       time_s: azureRes.processing_time_s,
     },
-    mistral_result: mistralRes ? {
-      campos: mistralRes.campos || {},
-      confidence: mistralRes.confidence,
-      engine: mistralRes.ocr_engine,
-      time_s: mistralRes.processing_time_s,
-    } : null,
+    // Traza por motor extra (mistral, gemini_flash, gemini_pro…)
+    extra_results: extras.map(x => ({
+      name: x.name,
+      campos: x.res.campos || {},
+      confidence: x.res.confidence,
+      engine: x.res.ocr_engine,
+      time_s: x.res.processing_time_s,
+    })),
+    // Retrocompat #114: mistral_result se mantiene si Mistral participó como extra
+    mistral_result: (() => {
+      const m = extras.find(x => x.name === 'mistral');
+      return m ? { campos: m.res.campos || {}, confidence: m.res.confidence, engine: m.res.ocr_engine, time_s: m.res.processing_time_s } : null;
+    })(),
     nif_status: nifStatus,
     nif_discrepancy: nifStatus === 'conflict' ? { openai: oNif, azure: aNif } : null,
   };
@@ -403,22 +449,33 @@ async function extractInvoiceOCR(filePath, mimeType, fileName, logger, context =
   const cfg  = getConfig();
   const mode = cfg.ocr_mode || 'dual';
 
-  // ── Modo DUAL (defecto) / TRIPLE (con Mistral OCR 4) ──────────────────────
-  if (mode === 'dual' || mode === 'triple') {
-    const conMistral = mode === 'triple';
-    logger.info(`[OCR] Modo ${mode}: lanzando OpenAI + Azure DI${conMistral ? ' + Mistral OCR 4' : ''} en paralelo para ${fileName} | tipo=${context.invoice_type || 'no_especificado'}`);
+  // ── Modos multi-motor: DUAL (defecto) / TRIPLE (+Mistral) / MULTI (lista) ──
+  if (mode === 'dual' || mode === 'triple' || mode === 'multi') {
+    // Motores extra según modo. En "multi", la lista viene de features.json
+    // (ocr_multi_engines) filtrada contra el registro EXTRA_ENGINES.
+    let extraNames = [];
+    if (mode === 'triple') extraNames = ['mistral'];
+    if (mode === 'multi') {
+      const wanted = Array.isArray(cfg.ocr_multi_engines) && cfg.ocr_multi_engines.length > 0
+        ? cfg.ocr_multi_engines
+        : DEFAULT_MULTI_ENGINES;
+      extraNames = wanted.filter(n => EXTRA_ENGINES[n]);
+      const desconocidos = wanted.filter(n => !EXTRA_ENGINES[n]);
+      if (desconocidos.length) logger.warn(`[OCR] ocr_multi_engines contiene motores desconocidos (ignorados): ${desconocidos.join(', ')}`);
+    }
+
+    logger.info(`[OCR] Modo ${mode}: lanzando OpenAI + Azure DI${extraNames.length ? ' + ' + extraNames.join(' + ') : ''} en paralelo para ${fileName} | tipo=${context.invoice_type || 'no_especificado'}`);
 
     const jobs = [
       tryOpenAI(filePath, mimeType, context),
       tryAzure(filePath, mimeType, context),
+      ...extraNames.map(n => EXTRA_ENGINES[n](filePath, mimeType, context, cfg)),
     ];
-    if (conMistral) jobs.push(tryMistral(filePath, mimeType, context));
+    const settled = await Promise.allSettled(jobs);
+    const [openaiSettled, azureSettled] = settled;
 
-    const [openaiSettled, azureSettled, mistralSettled] = await Promise.allSettled(jobs);
-
-    let openaiRes  = null;
-    let azureRes   = null;
-    let mistralRes = null;
+    let openaiRes = null;
+    let azureRes  = null;
 
     if (openaiSettled.status === 'fulfilled') {
       openaiRes = openaiSettled.value;
@@ -434,16 +491,19 @@ async function extractInvoiceOCR(filePath, mimeType, fileName, logger, context =
       logger.warn(`[OCR] Azure DI FALLÓ: ${azureSettled.reason?.message}`);
     }
 
-    if (conMistral && mistralSettled) {
-      if (mistralSettled.status === 'fulfilled') {
-        mistralRes = mistralSettled.value;
-        logger.info(`[OCR] Mistral OCR 4 OK: tiempo=${mistralRes.processing_time_s}s valida=${mistralRes.es_factura_valida} total=${mistralRes.campos?.total} nif=${mistralRes.campos?.proveedor_nif} lineasIva=${mistralRes.campos?.lineas_iva?.length || 0}`);
+    const extraResults = [];
+    extraNames.forEach((name, i) => {
+      const s = settled[i + 2];
+      if (s.status === 'fulfilled') {
+        const r = s.value;
+        extraResults.push({ name, res: r });
+        logger.info(`[OCR] ${name} OK: tiempo=${r.processing_time_s}s valida=${r.es_factura_valida} total=${r.campos?.total} nif=${r.campos?.proveedor_nif} lineasIva=${r.campos?.lineas_iva?.length || 0}`);
       } else {
-        logger.warn(`[OCR] Mistral OCR 4 FALLÓ: ${mistralSettled.reason?.message}`);
+        logger.warn(`[OCR] ${name} FALLÓ: ${s.reason?.message}`);
       }
-    }
+    });
 
-    const result = compareOCRResults(openaiRes, azureRes, mistralRes, logger);
+    const result = compareOCRResults(openaiRes, azureRes, extraResults, logger);
     if (result) {
       logger.info(`[OCR] Resultado ${mode}: dual_confirmed=${result.dual_confirmed} confidence=${result.confidence?.toFixed(2)} nif=${result.campos?.proveedor_nif} lineas_iva=${result.campos?.lineas_iva?.length || 0}`);
       await _secondPassReceptorIfNeeded(result, filePath, mimeType, context, logger);
@@ -460,8 +520,8 @@ async function extractInvoiceOCR(filePath, mimeType, fileName, logger, context =
       result = await tryOpenAI(filePath, mimeType, context);
     } else if (mode === 'azure') {
       result = await tryAzure(filePath, mimeType, context);
-    } else if (mode === 'mistral') {
-      result = await tryMistral(filePath, mimeType, context);
+    } else if (EXTRA_ENGINES[mode]) {
+      result = await EXTRA_ENGINES[mode](filePath, mimeType, context, cfg);
     } else {
       logger.warn(`[OCR] Modo desconocido "${mode}" → usando OpenAI`);
       result = await tryOpenAI(filePath, mimeType, context);
@@ -531,6 +591,10 @@ async function extractCIFOnlyOCR(filePath, mimeType) {
   }
 }
 
-// reconcileMultiIvaAggregates e integrateMistralResult se exportan para tests
-// unitarios (sin red) — no forman parte del contrato público del orquestador.
-module.exports = { extractInvoiceOCR, extractCIFOnlyOCR, reconcileMultiIvaAggregates, integrateMistralResult };
+// reconcileMultiIvaAggregates e integrateExtraEngineResult se exportan para
+// tests unitarios (sin red) — no forman parte del contrato público.
+// integrateMistralResult: alias retrocompat (#114) del integrador genérico.
+const integrateMistralResult = (merged, oF, aF, mF, logger) =>
+  integrateExtraEngineResult(merged, oF, aF, mF, 'mistral', logger);
+
+module.exports = { extractInvoiceOCR, extractCIFOnlyOCR, reconcileMultiIvaAggregates, integrateExtraEngineResult, integrateMistralResult };
