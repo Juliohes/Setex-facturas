@@ -578,6 +578,46 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-07-05 — Merge PR #114 · incidente red n8n_default (PR #115) · Mistral en smoke nocturno
+- **PR #114 mergeado a develop** (squash `e035026`): fix multi-IVA + Mistral OCR 4 modo triple.
+- **Incidente deploy CI (3 fallos, staging caído ~10 min, restaurado)**: ① reflog de rama root-owned (deuda ownership: sesiones Claude como root — mitigado con chown selectivo `-user root -o -group root`, staging y prod a 0); ② timeout SSH transitorio del runner (fail2ban descartado: solo IPs residenciales); ③ **mina LL-002-style**: develop referenciaba la red externa `n8n_default` inexistente — el rename a `traefik_default` vivía solo en la rama nunca mergeada `feature/staging-traefik-network-rename-2026-05-06` y en disco. `docker compose up` del frontend desde develop tumbó staging.
+- `app/docker-compose.yml` — **PR #115** (squash `7ca9219`): rename `n8n_default`→`traefik_default` conservando el secret mistral. Supersede la rama del rename (borrable). Deploy CI posterior **VERDE** end-to-end (sync+rebuild+swap+health+smoke HTTP).
+- `scripts/smoke-test-ocr.js` — **PR #115**: test Mistral OCR 4 (petición real `/v1/ocr` + `document_annotation_format` json_schema strict; skip con warning si secret placeholder). Verificado staging 4/4 y prod 4/4 (Mistral 2,2-2,3 s). Copiado quirúrgicamente a prod (cron 04:30 ya lo ejecuta con Mistral).
+- **Lección operativa**: sesiones de Claude Code como root generan refs git root-owned que rompen el `git reset` del CI — ejecutar chown selectivo tras operaciones git, o migrar las sesiones a usuario deploy (candidato a ROADMAP).
+
+### 2026-07-04 (tarde) — Modo TRIPLE validado E2E con los 3 motores · keys operativas
+- **Keys**: Julio aportó keys reales (Mistral + OpenAI staging nueva con scope `model.request`); colocadas en `secrets/` y fichero temporal destruido con `shred -u`. La key OpenAI rota de staging queda resuelta.
+- **Hallazgo permisos**: los secrets del proyecto usan `644` (dir `700 deploy`) porque el `appuser` uid 1001 del contenedor ≠ `deploy` — un `600` rompe la lectura con "Permission denied" silencioso (motor cae a error "no configurada"). Documentado como patrón.
+- **Hallazgo hot-reload**: editar `features.json` con herramientas que reemplazan el archivo (nuevo inode) rompe el bind-mount del contenedor — sigue viendo el contenido viejo hasta reiniciar. Para cambio en caliente real: escribir in-place (`>` truncado) o `stop` + `up -d`.
+- `app/backend/src/config/features.json`: `ocr_mode: "triple"` activado en staging para periodo de validación.
+- **Validación E2E triple** (llamadas reales a los 3 motores):
+  - Mono-IVA (muestra real): `dual_confirmed=true`, 3 motores coinciden (OpenAI 5,4s · Azure 11,4s · Mistral 5,6s en paralelo), campos exactos.
+  - Multi-IVA (21%+10%+exento): 3 tramos completos — el exento que Azure omite lo aportan OpenAI/Mistral sin duplicación; base agregada = Σ tramos (1.170,00); tipo dominante 21,0; sin IRPF fantasma; fila resumen espuria filtrada; productos asociados por tramo (2+2+1).
+- **Pendiente**: periodo de observación en staging con facturas reales; decidir modo por defecto para prod (coste triple: +~$0,004/factura ≈ +$24/mes a 6k facturas); push + PR a develop (decisión commit `fbd3d86`); aplicación quirúrgica a prod (regla 11); añadir Mistral a `smoke-test-ocr.js` al promocionar.
+
+### 2026-07-04 — Validación E2E staging del fix multi-IVA + 2 fixes adicionales + deploy
+- **Deploy staging**: compose con secret `mistral_api_key` (OK explícito de Julio, regla 1), rebuild + stop + up -d. Backend healthy. Secret con PLACEHOLDER hasta que Julio aporte la key real (el código desactiva Mistral limpiamente vía `isPlaceholder`).
+- **Validación E2E** con el pipeline dual real (`extractInvoiceOCR` vía docker exec) sobre factura de muestra + factura sintética multi-IVA (21%+10%+exento): extracción y coherencia correctas.
+- `app/backend/src/domain/validators/iva.js`: nuevo `dropResumenArtifacts` — Azure emite a veces un TaxDetail extra sin tipo cuya cuota = Σ cuotas (línea "Total IVA" del pie); bloqueaba la reconciliación.
+- `app/backend/src/ocr/azure.js`: `extractIvaPorcentaje` lee `Rate.valueString` ("21%") además de `valueNumber` — antes caía al fallback y producía tipos absurdos (14,6%).
+- `app/backend/src/ocr/index.js`: el tipo dominante se deriva siempre del desglose, también en la rama del guard de cordura.
+- Tests: suite 79/79 ✅.
+- **🔴 HALLAZGO CRÍTICO preexistente**: la `openai_api_key` de staging devuelve **401 missing_scope (model.request)** — staging lleva operando solo con Azure. Solo Julio puede reemplazar la key. (El smoke cron 04:30 solo corre en prod, por eso no saltó.)
+- **Hallazgo**: contenedor backend Alpine sin fuentes (fontconfig) — irrelevante para OCR de fotos reales, relevante para generar fixtures dentro del contenedor.
+- **Pendiente**: key real de Mistral + key OpenAI staging válida → activar `ocr_mode: "triple"` y validar; push de rama + PR a develop (decisión de Julio por commit local `fbd3d86` previo en develop).
+
+### 2026-07-03 — Fix multi-IVA (base imponible) + integración Mistral OCR 4
+- **Contexto**: diagnóstico del fallo "el OCR no lee bien la base del IVA y falla con varios IVAs". Causa raíz verificada contra el schema oficial `2024-11-30-ga` de Azure DI `prebuilt-invoice`: `TaxDetails` NO devuelve `BaseAmount` por tramo (solo `Amount` y `Rate`) → la base por tramo llegaba siempre null y el agregado dependía de `SubTotal` (≠ Σ bases). Además `mergeLineasIva` cruzaba tramos por string literal ("21" ≠ "21,0") duplicando tramos, el tramo exento (0%) se descartaba, y una base mal sumada hacía que la salvaguarda IRPF inventara retenciones fantasma.
+- `app/backend/src/domain/validators/iva.js`: cruce de tramos por porcentaje numérico normalizado + helpers `parseRateEntero`/`fillDerivedBases` (base = cuota ÷ tipo) — fix duplicación de tramos.
+- `app/backend/src/ocr/azure.js`: deriva la base de cada tramo por aritmética y conserva el tramo exento 0% — fix degradación multi→mono.
+- `app/backend/src/ocr/index.js`: reconciliación de agregados (base/cuota = Σ tramos, con guard de cordura vs total) ANTES de la salvaguarda IRPF; nuevo modo `triple` con votación 2-de-3.
+- `app/backend/src/ocr/mistral.js` (NUEVO): motor Mistral OCR 4 (`mistral-ocr-latest`, `POST /v1/ocr`, annotations json_schema) — requiere secret `mistral_api_key`; modo activo sigue `dual` hasta validar en staging.
+- `app/backend/src/server.legacy.js`: confirm sin edición del usuario normaliza el desglose multi-IVA y rellena agregados vacíos (nunca pisa valores confirmados).
+- `app/backend/src/config/features.json`: documentados modos `triple`/`mistral` (sin cambio de modo activo).
+- `app/backend/tests/unit/{iva-multi,azure-lineas-iva,ocr-reconcile}.test.js` (NUEVOS): 25 tests; suite completa 75/75 ✅.
+- **Pendiente (requiere OK de Julio)**: añadir secret `mistral_api_key` + 2 líneas en `docker-compose.yml` (regla 1), deploy a staging (rebuild → stop → up -d) y validación con facturas reales multi-IVA. Rama: `feature/ocr-multi-iva-fix-y-mistral-2026-07-03`.
+- **Hallazgo documentado**: el adapter v3 congelado `adapters/ocr/openai.adapter.js` llama a `extractInvoice` con firma incompatible con `ocr/openai.js` — la capa v3 de OCR requiere revisión antes de cualquier futuro swap.
+
 ### 2026-06-01 — Visor de PDF del panel admin funcional en móvil (PDF.js en `<canvas>` sustituye al `<iframe>`)
 - **Disparador**: Julio reportó que el botón "🖼 Ver" de la columna imagen del panel admin abría la factura en su PC pero quedaba en blanco en el móvil.
 - **Causa raíz**: el visor renderizaba los PDF dentro de un `<iframe>` (`admin-facturas.js`, `verImagenAdmin` y `openLightbox`). Los navegadores móviles (Safari iOS, Chrome Android) NO disponen de visor de PDF embebido en `<iframe>`/`<embed>`/`<object>` — y menos sobre `blob:` — por lo que no renderizaban nada. En escritorio sí funciona por el visor PDF nativo del navegador. Todas las facturas actuales son PDF (1/1 en BD), de ahí el fallo sistemático en móvil.

@@ -178,6 +178,46 @@ async function testAzure(apiKey, endpoint, imageBuffer) {
   return true;
 }
 
+// ─── Test Mistral OCR 4: /v1/ocr con document_annotation json_schema ──────────
+// Petición real con la muestra y el MISMO mecanismo de annotation que usa
+// producción (ocr/mistral.js) — detecta regresiones de contrato (schema
+// rechazado, modelo retirado, key sin permisos) igual que el test de OpenAI.
+async function testMistral(apiKey, imageBuffer) {
+  const dataUrl = `data:image/jpeg;base64,${imageBuffer.toString('base64')}`;
+  const body = {
+    model: 'mistral-ocr-latest',
+    document: { type: 'image_url', image_url: dataUrl },
+    document_annotation_format: {
+      type: 'json_schema',
+      json_schema: {
+        name: 'smoke_ocr_mistral',
+        strict: true,
+        schema: {
+          type: 'object',
+          properties: { es_factura: { type: 'boolean' } },
+          required: ['es_factura'],
+          additionalProperties: false
+        }
+      }
+    },
+    document_annotation_prompt: 'Devuelve es_factura:true si la imagen es una factura.',
+    include_image_base64: false
+  };
+  const res = await fetch('https://api.mistral.ai/v1/ocr', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(60000),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '');
+    throw new Error(`Mistral HTTP ${res.status}: ${txt.substring(0, 300)}`);
+  }
+  const data = await res.json();
+  if (data.document_annotation == null) throw new Error('Mistral sin document_annotation en respuesta');
+  return true;
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 (async () => {
   if (!fs.existsSync(SAMPLE_PATH)) {
@@ -222,6 +262,26 @@ async function testAzure(apiKey, endpoint, imageBuffer) {
   } catch (e) {
     log('error', `OpenAI 2ª pasada receptor: FAIL — ${e.message}`);
     errors.push(`OPENAI_RECEPTOR_PASS: ${e.message}`);
+  }
+
+  // Mistral OCR 4 (modo triple, 2026-07-05). Si el secret no existe o es
+  // placeholder → skip con warning (entorno en modo dual), NO fallo. Si la
+  // key está configurada, el motor debe responder — igual de crítico que
+  // los otros dos: "una sola IA activa NO es aceptable".
+  const mistralKey = readSecret('mistral_api_key');
+  const mistralConfigured = mistralKey && mistralKey.length >= 8
+    && !mistralKey.includes('PLACEHOLDER') && !mistralKey.includes('INSERTAR');
+  if (!mistralConfigured) {
+    log('warn', 'Mistral OCR: secret mistral_api_key ausente o placeholder — skip (entorno sin modo triple)');
+  } else {
+    try {
+      const t0 = Date.now();
+      await testMistral(mistralKey, img);
+      log('info', `Mistral OCR 4: OK (${Date.now() - t0}ms)`);
+    } catch (e) {
+      log('error', `Mistral OCR 4: FAIL — ${e.message}`);
+      errors.push(`MISTRAL: ${e.message}`);
+    }
   }
 
   if (errors.length > 0) {

@@ -1,7 +1,7 @@
 {
   "ocr_enabled": true,
-  "_OCR_MODE": "Modo OCR: 'dual' = OpenAI + Azure en paralelo (máxima confianza, RECOMENDADO) | 'openai' = solo GPT-4.1 | 'azure' = solo Azure DI",
-  "ocr_mode": "dual",
+  "_OCR_MODE": "Modo OCR: 'dual' = OpenAI + Azure en paralelo (RECOMENDADO) | 'triple' = OpenAI + Azure + Mistral OCR 4 (votación 2-de-3, requiere secret mistral_api_key) | 'openai' = solo GPT-4.1 | 'azure' = solo Azure DI | 'mistral' = solo Mistral OCR 4",
+  "ocr_mode": "triple",
   "ocr_primary_engine": "openai",
   "image_max_resolution": 1536,
   "image_jpeg_quality": 85

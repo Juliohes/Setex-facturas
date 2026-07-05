@@ -58,6 +58,7 @@ services:
       - openai_api_key
       - azure_di_key
       - azure_di_endpoint
+      - mistral_api_key
       - smtp_user
       - smtp_pass
       - redis_password
@@ -203,6 +204,8 @@ secrets:
     file: ${SETEX_SECRETS_DIR}/azure_di_key.txt
   azure_di_endpoint:
     file: ${SETEX_SECRETS_DIR}/azure_di_endpoint.txt
+  mistral_api_key:
+    file: ${SETEX_SECRETS_DIR}/mistral_api_key.txt
   smtp_user:
     file: ${SETEX_SECRETS_DIR}/smtp_user.txt
   smtp_pass:
