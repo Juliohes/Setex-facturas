@@ -578,6 +578,9 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-07-06 — nginx: absolute_redirect off (redirecciones relativas)
+- `app/frontend/nginx.conf`: `absolute_redirect off;` a nivel de server — los `return 302 /ruta` emitían `Location: http://<host>/ruta` (esquema http detrás de Traefik); inocuo con HSTS preload pero impuro. Ahora `Location: /ruta` relativo. Sintaxis validada con `nginx -t` en la imagen antes de merge. Trabajo realizado dentro de la ventana de seguridad 00-06 (smoke HTTP del CI es consciente de la ventana: 403 esperado ≠ fallo).
+
 ### 2026-07-05 (noche) — PR #119: filtro admin por empresa + login dedicado de administrador · desplegado en STAGING y PROD
 - **Fix 1 — filtro "Usuario" por nombre de empresa**: `/api/admin/facturas/usuarios` devuelve `company_name`/`company_nif` + `client_companies.nombre`/`codigo_cliente` (LEFT JOIN por CIF); el select del panel muestra `empresa registrada > empresa declarada > email` (decisión Julio: "solo empresa"). `value=user_id` intacto → filtro y Excel sin cambios. Paridad v3: `users-list.controller` devuelve `{usuarios}` (el `{items}` era el patrón del bug LL-002) y `uploads.repo` espeja la SQL.
 - **Fix 2 — login admin directo**: causa raíz del bug reportado: nginx `auth_request` bloquea `/admin-facturas.html` sin cookie `setex_admin` → rebotaba al login de usuarios; el formulario embebido del panel era código muerto inalcanzable. Nueva `/admin-login.html` + `admin-login.js` (auto-entrada con sesión viva; confirmación de rol EN SERVIDOR vía `refresh-session` que emite la cookie; no-admin → error y logout silencioso). nginx `@admin_login_redirect` → `302 /admin-login.html`. `auth_request` intacto. Limpieza de código muerto + cache-busters `v=20260705-001`.
