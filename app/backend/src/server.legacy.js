@@ -23,7 +23,7 @@ const { extractInvoiceOCR, extractCIFOnlyOCR } = require('./ocr/index');
 // Los requires desde ./ocr/validateCIF e ./ocr/validateIVA siguen funcionando por
 // shims retrocompatibles, pero ahora importamos directamente desde domain/.
 const { validateSpanishTaxId, checkDigitCIF } = require('./domain/validators/nif');
-const { validateIVACoherencia, normalizeConfirmedLineasIva } = require('./domain/validators/iva');
+const { validateIVACoherencia, normalizeConfirmedLineasIva, fillDerivedBases } = require('./domain/validators/iva');
 const { connection: redisClient } = require('./queue/index');
 const { validateVIES } = require('./services/viesValidator');
 
@@ -2151,6 +2151,24 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
         }
       } else {
         logger.warn(`[Confirm] lineas_iva rechazadas por normalizeConfirmedLineasIva: ${norm.errors.join('; ')}`);
+      }
+    } else if (Array.isArray(finalLineasIva) && finalLineasIva.length >= 2) {
+      // Fix 2026-07-03 — flujo automático (el usuario NO editó los tramos):
+      // normalizar el desglose OCR derivando bases ausentes para persistir un
+      // JSONB coherente. Solo rellena agregados si vienen vacíos; NUNCA pisa
+      // lo confirmado por el usuario (la reconciliación dura de agregados ya
+      // ocurre en el orquestador ocr/index.js antes del preview).
+      const norm = normalizeConfirmedLineasIva(fillDerivedBases(finalLineasIva));
+      if (norm.lineas && norm.errors.length === 0) {
+        finalLineasIva = norm.lineas;
+        const hasBase  = cleanStr(confirmed_base_imponible || campos.base_imponible || ocrFull.base_imponible);
+        const hasCuota = cleanStr(confirmed_cuota_iva      || campos.cuota_iva      || ocrFull.cuota_iva);
+        const hasPct   = cleanStr(confirmed_iva_porcentaje || campos.iva_porcentaje || ocrFull.iva_porcentaje);
+        if (!hasBase)  aggregatedFromLines.base       = norm.base;
+        if (!hasCuota) aggregatedFromLines.cuota      = norm.cuota;
+        if (!hasPct)   aggregatedFromLines.porcentaje = norm.porcentaje;
+      } else if (norm.errors.length > 0) {
+        logger.warn(`[Confirm] Desglose OCR multi-IVA no normalizable (se guarda tal cual): ${norm.errors.join('; ')}`);
       }
     }
 
