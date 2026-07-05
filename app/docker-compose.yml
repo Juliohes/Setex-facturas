@@ -111,7 +111,7 @@ services:
     restart: unless-stopped
     networks:
       - internal
-      - n8n_default
+      - traefik_default
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/health || exit 1"]
       interval: 30s
@@ -120,7 +120,7 @@ services:
       start_period: 10s
     labels:
       - "traefik.enable=true"
-      - "traefik.docker.network=n8n_default"
+      - "traefik.docker.network=traefik_default"
       # HTTP → HTTPS redirect
       - "traefik.http.routers.${SETEX_ROUTER}-http.rule=Host(`${SETEX_DOMAIN}`)"
       - "traefik.http.routers.${SETEX_ROUTER}-http.entrypoints=web"
@@ -168,7 +168,7 @@ services:
           memory: ${MEM_LIMIT_FRONTEND}
 
 networks:
-  n8n_default:
+  traefik_default:
     external: true
   internal:
     driver: bridge
