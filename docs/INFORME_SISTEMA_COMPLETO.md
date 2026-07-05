@@ -578,6 +578,12 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-07-05 (tarde) — PR #117: línea de producción sincronizada a develop · incidente puerto 2222
+- **PR #117 mergeado** (squash `b89505b`): merge de la línea prod completa (`feature/admin-edicion-y-nombre-nif`, base 21-abr) a develop — feature admin/captura de junio, visor PDF.js móvil, cif-validator, consolidación documental de mayo, suite e2e Playwright, entrada 2026-06-15 del INFORME (estado vivo) y `server.legacy.js` = monolito prod 4520 + parche confirm (**byte a byte = server.js de prod**). 14 conflictos resueltos con criterio verificado (frontend=prod superconjunto; OCR=develop #114; package.json=v3+override uuid). Suite 79/79. **El descalce REGLA 11 queda reducido a solo la vía main.**
+- **Incidente deploy CI post-#117**: el compose de la línea prod traía `ports: "2222:22"` (sshd Remote Control **exclusivo de prod**) → colisión con el 2222 ya enlazado por `setex-prod-backend` → backend staging no arrancó (frontend sí: ya sirve la feature). Restaurado en minutos.
+- `app/docker-compose.yml`: retirado el mapeo 2222 del compose compartido con nota explicativa — el sshd RC vive SOLO en el compose del disco de prod. ⚠️ Regla derivada: cuando prod se sincronice desde git, re-añadir su mapeo 2222 (o mover a `docker-compose.override.yml` de prod).
+- Verificado: staging 4/4 healthy, frontend sirviendo cif-validator.js y pdf.min.js (feature de prod visible en staging).
+
 ### 2026-07-05 — Merge PR #114 · incidente red n8n_default (PR #115) · Mistral en smoke nocturno
 - **PR #114 mergeado a develop** (squash `e035026`): fix multi-IVA + Mistral OCR 4 modo triple.
 - **Incidente deploy CI (3 fallos, staging caído ~10 min, restaurado)**: ① reflog de rama root-owned (deuda ownership: sesiones Claude como root — mitigado con chown selectivo `-user root -o -group root`, staging y prod a 0); ② timeout SSH transitorio del runner (fail2ban descartado: solo IPs residenciales); ③ **mina LL-002-style**: develop referenciaba la red externa `n8n_default` inexistente — el rename a `traefik_default` vivía solo en la rama nunca mergeada `feature/staging-traefik-network-rename-2026-05-06` y en disco. `docker compose up` del frontend desde develop tumbó staging.

@@ -36,8 +36,9 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
-    ports:
-      - "2222:22"
+    # NOTA: el mapeo "2222:22" (sshd Remote Control) es EXCLUSIVO de prod y
+    # vive solo en el compose del disco de prod — aquí colisionaría con el
+    # 2222 que ya ocupa setex-prod-backend (incidente deploy 2026-07-05).
     networks:
       - internal
     volumes:
