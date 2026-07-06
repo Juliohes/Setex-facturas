@@ -168,8 +168,8 @@ test('gemini schema: 15 campos del contrato interno y modelos por defecto', () =
   ];
   for (const k of esperados) assert.ok(INVOICE_JSON_SCHEMA.properties[k], `falta ${k}`);
   assert.deepEqual(INVOICE_JSON_SCHEMA.required, esperados);
-  assert.equal(DEFAULT_MODELS.flash, 'gemini-3-flash-preview');
-  assert.equal(DEFAULT_MODELS.pro, 'gemini-3.1-pro-preview');
+  assert.equal(DEFAULT_MODELS.flash, 'gemini-3.5-flash'); // ESTABLE (decisión Julio 2026-07-06)
+  assert.equal(DEFAULT_MODELS.pro, 'gemini-3.1-pro-preview'); // único Pro existente
 });
 
 test('integrateExtraEngineResult: mismo comportamiento que el integrador de Mistral', () => {
