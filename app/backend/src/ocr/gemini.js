@@ -3,15 +3,17 @@
 // españolas vía generateContent (v1beta) con salida estructurada JSON Schema.
 //
 // UN solo módulo parametrizado por modelId → dos motores en el orquestador:
-//   gemini_flash → cfg.ocr_gemini_flash_model (default "gemini-3-flash-preview")
-//   gemini_pro   → cfg.ocr_gemini_pro_model   (default "gemini-3.1-pro-preview")
+//   gemini_flash → cfg.ocr_gemini_flash_model (default "gemini-3.5-flash", ESTABLE)
+//   gemini_pro   → cfg.ocr_gemini_pro_model   (default "gemini-3.1-pro-preview", PREVIEW)
 //
-// ⚠️ Los modelos Gemini 3.x están en PREVIEW (Google los rota con poco
-// preaviso) — por eso los IDs viven en features.json (cambio en caliente,
-// sin rebuild). Verificado contra docs oficiales 2026-07-06:
-//   https://ai.google.dev/gemini-api/docs/gemini-3 · /docs/pricing
-// Precios: 3-flash-preview $0.50/$3.00 · 3.1-pro-preview $2.00/$12.00 por 1M.
-// Nota: "Gemini 3 Pro" no existe como ID — el Pro de la familia es 3.1.
+// Verificado contra docs oficiales 2026-07-06 (decisión Julio: Flash estable):
+//   https://ai.google.dev/gemini-api/docs/models · /docs/pricing · /docs/api-key
+// - gemini-3.5-flash: STABLE · $1.50/$9.00 por 1M (~$0.006/factura)
+// - gemini-3.1-pro-preview: PREVIEW (único Pro; "Gemini 3 Pro" no existe como
+//   ID) · $2.00/$12.00 por 1M (~$0.01/factura) — Google puede rotar el ID con
+//   poco preaviso; por eso los IDs viven en features.json (hot-swap sin rebuild).
+// API key: Google AI Studio (https://aistudio.google.com/apikey), header
+// x-goog-api-key — las keys nuevas van ligadas a un proyecto GCP (billing).
 'use strict';
 
 const fs    = require('fs');
@@ -20,7 +22,7 @@ const sharp = require('sharp');
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 
 const DEFAULT_MODELS = {
-  flash: 'gemini-3-flash-preview',
+  flash: 'gemini-3.5-flash',
   pro:   'gemini-3.1-pro-preview',
 };
 

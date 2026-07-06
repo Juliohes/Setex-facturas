@@ -7,7 +7,7 @@
 //   "openai"       — GPT-4.1 Vision (primario, activo siempre)
 //   "azure"        — Azure DI prebuilt-invoice (primario, sin alucinaciones, $0.0015/factura)
 //   "mistral"      — Mistral OCR 4 (extra; annotations JSON, ~$0.004/factura)
-//   "gemini_flash" — Google Gemini 3 Flash (extra; PREVIEW, ~$0.002/factura)
+//   "gemini_flash" — Google Gemini 3.5 Flash (extra; ESTABLE, ~$0.006/factura)
 //   "gemini_pro"   — Google Gemini 3.1 Pro (extra; PREVIEW, ~$0.01/factura)
 //
 // MODO (features.json → ocr_mode):
@@ -18,8 +18,8 @@
 //   "openai" | "azure" | "mistral" | "gemini_flash" | "gemini_pro" — motor único
 //
 // Los IDs de modelo Gemini son configurables en caliente (features.json →
-// ocr_gemini_flash_model / ocr_gemini_pro_model) porque Gemini 3.x está en
-// preview y Google rota los IDs con poco preaviso.
+// ocr_gemini_flash_model / ocr_gemini_pro_model): el Pro solo existe en
+// preview y Google rota esos IDs con poco preaviso (el Flash 3.5 es estable).
 'use strict';
 
 const fs      = require('fs');

@@ -578,6 +578,10 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-07-06 (2) — Gemini Flash default cambiado a gemini-3.5-flash (ESTABLE)
+- Re-verificación a petición de Julio contra docs oficiales de Google: la API key SÍ es de AI Studio (aistudio.google.com/apikey, header x-goog-api-key) y los dos modelos integrados SÍ eran preview. CORRECCIÓN: la familia 3.x no está toda en preview — existen estables `gemini-3.5-flash` y `gemini-3.1-flash-lite`.
+- Decisión Julio: default Flash = **gemini-3.5-flash (Stable, $1.50/$9 ≈ $0,006/factura)** en vez de gemini-3-flash-preview. El Pro se queda en `gemini-3.1-pro-preview` (único Pro existente). Cambio en `ocr/gemini.js` DEFAULT_MODELS + `features.json` + tests (83/83 ✅).
+
 ### 2026-07-06 — Motores OCR Gemini 3 Flash y Gemini 3.1 Pro + modo "multi" configurable
 - `app/backend/src/ocr/gemini.js` (NUEVO): motor Google Gemini vía `generateContent` v1beta con salida estructurada JSON Schema. UN módulo parametrizado → dos motores: `gemini_flash` y `gemini_pro`. **IDs de modelo en caliente** en features.json (`ocr_gemini_flash_model`/`ocr_gemini_pro_model`, defaults `gemini-3-flash-preview` y `gemini-3.1-pro-preview`) porque la familia Gemini 3.x está en PREVIEW y Google rota IDs. Nota verificada contra docs oficiales: "Gemini 3 Pro" no existe como ID — el Pro de la familia es 3.1 ($2/$12 por M tokens; Flash $0.50/$3).
 - `app/backend/src/ocr/index.js`: orquestador generalizado — registro `EXTRA_ENGINES` (mistral, gemini_flash, gemini_pro) + nuevo modo **"multi"** (dual + lista `ocr_multi_engines`); `integrateMistralResult` → `integrateExtraEngineResult` genérico (alias retrocompat conservado); promoción del primer extra válido al hueco de un primario caído; `extra_results[]` en la traza. Modos previos `dual`/`triple` intactos — **el modo activo sigue "triple"**: nada cambia hasta activar "multi".
