@@ -2020,11 +2020,19 @@ async function openOcrModal(facturaId) {
         `[${i+1}] ${escHtml(String(l.porcentaje || '?'))}% | base ${fmtOcrImporte(l.base)} | cuota ${fmtOcrImporte(l.cuota)}`
       ).join('<br>');
     }
-    // Comparación normalizada: ignora 'productos' (array de artículos que el OCR incluye
-    // pero la BD no guarda en lineas_iva) para evitar falsos positivos de no-coincidencia.
+    // Normaliza separador decimal: OCR usa "89,56", la BD devuelve "89.56" (VARCHAR con punto)
+    function normCmp(v) {
+      if (v == null) return null;
+      return String(v).trim().replace(/^(-?\d+)[,.](\d+)$/, '$1.$2');
+    }
+    // Comparación normalizada de lineas_iva: ignora 'productos' y normaliza decimales
     function normLineasCmp(lineas) {
       if (!Array.isArray(lineas)) return null;
-      return lineas.map(l => ({ porcentaje: l.porcentaje, base: l.base, cuota: l.cuota }));
+      return lineas.map(l => ({
+        porcentaje: normCmp(l.porcentaje),
+        base:       normCmp(l.base),
+        cuota:      normCmp(l.cuota),
+      }));
     }
 
     // La key en el raw OCR es 'total' (no 'total_factura')
@@ -2035,7 +2043,7 @@ async function openOcrModal(facturaId) {
       const vRaw  = rawNormalized[c.key];
       const vConf = confirmed[c.key];
       const igual = vRaw != null && vConf != null
-        && String(vRaw).trim() === String(vConf).trim();
+        && normCmp(vRaw) === normCmp(vConf);
       const badge = (vRaw == null || vConf == null)
         ? '<span style="color:#a0aec0;font-size:14px;">—</span>'
         : igual
