@@ -3266,6 +3266,13 @@ Añade esta línea (backup cada día a las 3:00 AM):
 - `admin-facturas.html`: `<div id="ocr-modal">` + cache-buster `?v=20260707-001`.
 - PR #124 abierto contra `develop`; pendiente rebuild staging (stop + up -d) con OK de Julio.
 
+### 2026-07-07 — CI fix: paridad allowlist + npm audit 0 vulns + mejoras OCR modal
+- `tests/contracts/api-surface-parity.test.js`: allowlist `GET /api/admin/facturas/:id/ocr-detail` (pendiente portar a v3 antes del swap runtime).
+- `app/backend/package.json`: `npm audit fix` → 0 vulnerabilidades moderate+; actualizados axios, form-data, multer, nodemailer@9.0.3.
+- `scripts/smoke-test-ocr.js`: `testReceptorPass` migrado a Gemini Flash (fallback a OpenAI); verificado 5/5 OK (11:27).
+- `admin-facturas.js`: modal OCR ampliado con NIF/nombre receptor, cuota IRPF, tramos IVA multi-línea, banda motor OCR.
+- Suite tests backend: 83/83 passing tras los cambios.
+
 ---
 
 *SETEX Captura Facturas · setex-facturas.es*
