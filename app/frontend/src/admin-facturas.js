@@ -1063,15 +1063,24 @@ function initEmpresaModal() {
     if (e.target === document.getElementById('facemp-modal')) document.getElementById('facemp-modal').style.display = 'none';
   });
 
-  // Lightbox: cerrar al hacer click sobre el fondo
-  document.getElementById('lightbox').addEventListener('click', () => {
+  // Lightbox: botón × explícito
+  document.getElementById('lb-close').addEventListener('click', () => {
     document.getElementById('lightbox').style.display = 'none';
   });
 
-  // Cerrar con Escape
+  // Lightbox: cerrar al hacer click sobre el fondo (no sobre botones de nav)
+  document.getElementById('lightbox').addEventListener('click', (e) => {
+    if (e.target === document.getElementById('lightbox') || e.target === document.getElementById('lightbox-img')) {
+      document.getElementById('lightbox').style.display = 'none';
+    }
+  });
+
+  // Escape: cierra solo el modal más profundo visible (lightbox → facemp-modal),
+  // para que el usuario pueda volver a la galería sin perder el contexto.
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-      document.getElementById('lightbox').style.display = 'none';
+      const lb = document.getElementById('lightbox');
+      if (lb.style.display !== 'none') { lb.style.display = 'none'; return; }
       document.getElementById('facemp-modal').style.display = 'none';
     }
   });
@@ -1320,7 +1329,9 @@ function launchApp(authData) {
   const select = document.getElementById('f-usuario');
   (authData.usuarios || []).forEach(u => {
     const opt = document.createElement('option');
-    opt.value = u.id; opt.textContent = u.email; select.appendChild(opt);
+    opt.value = u.id;
+    opt.textContent = u.company_nombre_registrado || u.company_name || u.email;
+    select.appendChild(opt);
   });
 
   initTabs();
