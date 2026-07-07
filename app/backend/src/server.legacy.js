@@ -3470,7 +3470,6 @@ app.get('/api/admin/facturas', authenticateToken, requireAdmin, async (req, res)
 // el contrato { usuarios: [{ id, email, ... }] } se mantiene.
 app.get('/api/admin/facturas/usuarios', authenticateToken, requireAdmin, async (_req, res) => {
   try {
-    // SANDBOX: ocultar usuarios de pruebas del dropdown de filtro
     const result = await pool.query(`
       SELECT us.id, us.email, us.company_name, us.company_nif,
              cc.nombre AS company_nombre_registrado, cc.codigo_cliente
@@ -3479,7 +3478,10 @@ app.get('/api/admin/facturas/usuarios', authenticateToken, requireAdmin, async (
         ON UPPER(REPLACE(us.company_nif, ' ', '')) = UPPER(REPLACE(cc.cif, ' ', ''))
       WHERE us.is_test IS NOT TRUE
       ORDER BY COALESCE(cc.nombre, us.company_name, us.email)`);
-    res.json({ usuarios: result.rows });
+    const cfg = JSON.parse(fsSync.readFileSync(FEATURES_PATH, 'utf8'));
+    const techEmails = (cfg.tech_admin_emails || []).map(e => e.toLowerCase());
+    const usuarios = result.rows.filter(u => !techEmails.includes((u.email || '').toLowerCase()));
+    res.json({ usuarios });
   } catch (err) {
     logger.error('Admin usuarios error:', err);
     res.status(500).json({ error: 'Error al obtener usuarios' });
