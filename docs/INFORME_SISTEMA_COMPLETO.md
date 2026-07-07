@@ -3302,6 +3302,13 @@ Añade esta línea (backup cada día a las 3:00 AM):
 - BD prod y staging: migraciones aplicadas directamente vía psql (idempotentes).
 - PR #128 abierto contra `develop`.
 
+### 2026-07-07 — Fix comparación OCR vs BD: separador decimal (normCmp)
+
+- `admin-facturas.js`: `normCmp()` normaliza `"89,56"` → `"89.56"` antes de comparar — la BD almacena VARCHAR con punto, el OCR devuelve valores en español con coma; sin este fix `Total` mostraba ✗ aunque los valores fueran idénticos visualmente.
+- `admin-facturas.js`: `normLineasCmp()` también usa `normCmp()` en porcentaje/base/cuota de lineas_iva para el mismo problema.
+- `admin-facturas.html`: cache-buster `?v=20260707-005`.
+- Rebuild frontend prod y staging.
+
 ---
 
 *SETEX Captura Facturas · setex-facturas.es*
