@@ -1976,15 +1976,26 @@ async function openOcrModal(facturaId) {
     const meta      = d.meta      || {};
 
     const CAMPOS = [
-      { label: 'NIF proveedor',   key: 'proveedor_nif' },
-      { label: 'Total',           key: 'total_factura',   fmt: fmtOcrImporte },
-      { label: 'Base imponible',  key: 'base_imponible',  fmt: fmtOcrImporte },
-      { label: 'IVA %',           key: 'iva_porcentaje',  fmt: v => v != null ? escHtml(String(v)) + ' %' : '—' },
-      { label: 'Cuota IVA',       key: 'cuota_iva',       fmt: fmtOcrImporte },
-      { label: 'IRPF %',          key: 'irpf_porcentaje', fmt: v => v != null ? escHtml(String(v)) + ' %' : '—' },
-      { label: 'Número factura',  key: 'numero_factura' },
-      { label: 'Fecha emisión',   key: 'fecha_emision' },
+      { label: 'NIF proveedor',    key: 'proveedor_nif' },
+      { label: 'Nombre proveedor', key: 'proveedor_nombre' },
+      { label: 'NIF receptor',     key: 'receptor_nif' },
+      { label: 'Nombre receptor',  key: 'receptor_nombre' },
+      { label: 'Número factura',   key: 'numero_factura' },
+      { label: 'Fecha emisión',    key: 'fecha_emision' },
+      { label: 'Total',            key: 'total_factura',   fmt: fmtOcrImporte },
+      { label: 'Base imponible',   key: 'base_imponible',  fmt: fmtOcrImporte },
+      { label: 'IVA %',            key: 'iva_porcentaje',  fmt: v => v != null ? escHtml(String(v)) + ' %' : '—' },
+      { label: 'Cuota IVA',        key: 'cuota_iva',       fmt: fmtOcrImporte },
+      { label: 'IRPF %',           key: 'irpf_porcentaje', fmt: v => v != null ? escHtml(String(v)) + ' %' : '—' },
+      { label: 'Cuota IRPF',       key: 'cuota_irpf',      fmt: fmtOcrImporte },
     ];
+
+    function fmtLineasIva(lineas) {
+      if (!Array.isArray(lineas) || lineas.length === 0) return '—';
+      return lineas.map((l, i) =>
+        `[${i+1}] ${escHtml(String(l.porcentaje || '?'))}% | base ${fmtOcrImporte(l.base)} | cuota ${fmtOcrImporte(l.cuota)}`
+      ).join('<br>');
+    }
 
     const rows = CAMPOS.map(c => {
       const fmt = c.fmt || (v => v != null && v !== '' ? escHtml(String(v)) : '—');
@@ -2006,9 +2017,27 @@ async function openOcrModal(facturaId) {
       </tr>`;
     }).join('');
 
+    // Fila especial para lineas_iva (multi-IVA: comparar desglose completo)
+    const rawLineas  = raw.lineas_iva;
+    const confLineas = confirmed.lineas_iva;
+    const lineasIgual = JSON.stringify(rawLineas) === JSON.stringify(confLineas);
+    const lineasBadge = (rawLineas == null && confLineas == null)
+      ? '<span style="color:#a0aec0;font-size:14px;">—</span>'
+      : lineasIgual
+        ? '<span style="color:#276749;font-weight:700;font-size:14px;">&#10003;&#10003;</span>'
+        : '<span style="color:#9b2335;font-weight:700;font-size:14px;">&#10007;</span>';
+    const lineasRowBg = (!lineasIgual && (rawLineas || confLineas)) ? 'background:#fff5f5;' : '';
+    const rowLineas = `<tr style="${lineasRowBg}">
+      <td style="padding:7px 10px;font-weight:600;color:#2d3748;white-space:nowrap;">Tramos IVA</td>
+      <td style="padding:7px 10px;font-family:monospace;font-size:12px;line-height:1.6;">${fmtLineasIva(rawLineas)}</td>
+      <td style="padding:7px 10px;font-family:monospace;font-size:12px;line-height:1.6;">${fmtLineasIva(confLineas)}</td>
+      <td style="padding:7px 10px;text-align:center;">${lineasBadge}</td>
+    </tr>`;
+
     const dualConf   = meta.dual_confirmed    ? '&#10003; Sí' : '&#10007; No';
     const confidence = escHtml(meta.confidence_level || '—');
     const ivaOk      = meta.iva_validation_ok ? '&#10003; Sí' : '&#10007; No';
+    const motorLabel = escHtml(meta.ocr_engine || '—');
 
     body.innerHTML = `
       <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:14px;">
@@ -2017,12 +2046,13 @@ async function openOcrModal(facturaId) {
             <th style="padding:8px 10px;text-align:left;color:#4a5568;font-weight:600;">Campo</th>
             <th style="padding:8px 10px;text-align:left;color:#4a5568;font-weight:600;">IA (OCR raw)</th>
             <th style="padding:8px 10px;text-align:left;color:#4a5568;font-weight:600;">Confirmado humano</th>
-            <th style="padding:8px 10px;text-align:center;color:#4a5568;font-weight:600;">Coinciden?</th>
+            <th style="padding:8px 10px;text-align:center;color:#4a5568;font-weight:600;">¿Coinciden?</th>
           </tr>
         </thead>
-        <tbody>${rows}</tbody>
+        <tbody>${rows}${rowLineas}</tbody>
       </table>
-      <div style="display:flex;gap:20px;flex-wrap:wrap;font-size:13px;padding:10px 12px;background:#f7fafc;border:1px solid #e2e8f0;border-radius:6px;">
+      <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px;padding:10px 12px;background:#f7fafc;border:1px solid #e2e8f0;border-radius:6px;">
+        <span><strong>Motor OCR:</strong> <span style="font-family:monospace;">${motorLabel}</span></span>
         <span><strong>Dual confirmado:</strong> <span style="font-family:monospace;">${dualConf}</span></span>
         <span><strong>Confianza:</strong> <span style="font-family:monospace;">${confidence}</span></span>
         <span><strong>IVA válido:</strong> <span style="font-family:monospace;">${ivaOk}</span></span>

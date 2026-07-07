@@ -36,6 +36,7 @@ const SERVER_JS = path.join(__dirname, '..', '..', 'src', 'server.legacy.js');
 // documenta el porqué junto a ella.
 const ALLOWLIST_NOT_PORTED = new Set([
   // ejemplo: 'GET /api/admin/legacy-stuff', // Razón: deprecado, eliminar Q3.
+  'GET /api/admin/facturas/:id/ocr-detail', // Feat 2026-07-07: endpoint tech_admin solo en monolito. Portar a v3 antes del swap runtime.
 ]);
 
 // ── Extractor del monolito ─────────────────────────────────────────────────
