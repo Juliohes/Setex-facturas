@@ -578,74 +578,38 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
-### 2026-07-06 (2) — Gemini Flash default cambiado a gemini-3.5-flash (ESTABLE)
-- Re-verificación a petición de Julio contra docs oficiales de Google: la API key SÍ es de AI Studio (aistudio.google.com/apikey, header x-goog-api-key) y los dos modelos integrados SÍ eran preview. CORRECCIÓN: la familia 3.x no está toda en preview — existen estables `gemini-3.5-flash` y `gemini-3.1-flash-lite`.
-- Decisión Julio: default Flash = **gemini-3.5-flash (Stable, $1.50/$9 ≈ $0,006/factura)** en vez de gemini-3-flash-preview. El Pro se queda en `gemini-3.1-pro-preview` (único Pro existente). Cambio en `ocr/gemini.js` DEFAULT_MODELS + `features.json` + tests (83/83 ✅).
+### 2026-07-06 — PROD: nginx absolute_redirect off (PR #121)
+- `app/frontend/nginx.conf`: `absolute_redirect off;` — los 302 emiten `Location: /ruta` relativo (antes `http://<host>/ruta`, inocuo con HSTS pero impuro). Sintaxis pre-validada con `nginx -t` en imagen; validado en staging (CI verde) y desplegado a prod DENTRO de la ventana 00-06 (cero usuarios, momento óptimo). Verificado en público: `302 · location: /admin-login.html`. Cierra la mejora menor anotada el 2026-07-05.
 
-### 2026-07-06 — Motores OCR Gemini 3 Flash y Gemini 3.1 Pro + modo "multi" configurable
-- `app/backend/src/ocr/gemini.js` (NUEVO): motor Google Gemini vía `generateContent` v1beta con salida estructurada JSON Schema. UN módulo parametrizado → dos motores: `gemini_flash` y `gemini_pro`. **IDs de modelo en caliente** en features.json (`ocr_gemini_flash_model`/`ocr_gemini_pro_model`, defaults `gemini-3-flash-preview` y `gemini-3.1-pro-preview`) porque la familia Gemini 3.x está en PREVIEW y Google rota IDs. Nota verificada contra docs oficiales: "Gemini 3 Pro" no existe como ID — el Pro de la familia es 3.1 ($2/$12 por M tokens; Flash $0.50/$3).
-- `app/backend/src/ocr/index.js`: orquestador generalizado — registro `EXTRA_ENGINES` (mistral, gemini_flash, gemini_pro) + nuevo modo **"multi"** (dual + lista `ocr_multi_engines`); `integrateMistralResult` → `integrateExtraEngineResult` genérico (alias retrocompat conservado); promoción del primer extra válido al hueco de un primario caído; `extra_results[]` en la traza. Modos previos `dual`/`triple` intactos — **el modo activo sigue "triple"**: nada cambia hasta activar "multi".
-- Votación conservadora: los extras rellenan huecos y solo corrigen un importe con respaldo de un motor PRIMARIO (openai/azure); los extras no se respaldan entre sí.
-- `app/docker-compose.yml`: secret `gemini_api_key` (una sola key Google AI Studio para ambos modelos). **Placeholder creado en secrets/ de staging Y prod ANTES del deploy** (lección incidente 2226-07-04: el compose referencia ficheros que deben existir). El código desactiva los motores limpiamente vía `isPlaceholder`.
-- Tests: +4 (suite 83/83 ✅).
-- **Pendiente**: key real de Google AI Studio (solo Julio) → E2E staging en modo "multi" con los 5 motores → decidir modo por defecto y promoción a prod.
+### 2026-07-05 (noche) — PROD: filtro admin por empresa + login dedicado de administrador (PR #119)
+- **Filtro "Usuario" del panel** muestra nombres de empresa (registrada > declarada > email fallback): parche SQL en `server.js` `/api/admin/facturas/usuarios` (LEFT JOIN `client_companies` por CIF; SQL pre-validada con EXPLAIN contra el esquema real; `users.is_test` ya existía en prod). Contrato `{usuarios}` y `value=user_id` intactos.
+- **Login admin directo**: nueva `/admin-login.html` + `admin-login.js`; nginx `@admin_login_redirect` → `302 /admin-login.html` (antes rebotaba al login de usuarios `/?next=admin`). `auth_request` intacto — la seguridad no baja. Código muerto del formulario embebido eliminado; cache-busters `v=20260705-001`.
+- **Deploy**: copia byte a byte de 5 ficheros frontend desde develop (`a093440`+#119, drift cero verificado) + rebuild backend **y frontend** (primer rebuild de la imagen nginx) → stop → up -d. Corte ~30 s a ~23:55 Madrid (borde de ventana). 4/4 healthy.
+- **Verificado en público**: HTTPS 200 · `/admin-facturas.html` sin cookie → 302 `/admin-login.html` · login page y JS 200 · endpoint 401 sin token · puerto 2222 RC intacto.
+- Validación previa completa en staging (6/6, incl. flujo de login con cookie `setex_admin` y credenciales no-admin → 403). Detalle en INFORME de staging (entrada 2026-07-05 noche, PR #120).
+- **Mejora menor anotada**: nginx emite el 302 con `Location: http://…` (absolute_redirect por defecto) — inocuo con HSTS preload; candidato a `absolute_redirect off;`.
 
-### 2026-07-06 — nginx: absolute_redirect off (redirecciones relativas)
-- `app/frontend/nginx.conf`: `absolute_redirect off;` a nivel de server — los `return 302 /ruta` emitían `Location: http://<host>/ruta` (esquema http detrás de Traefik); inocuo con HSTS preload pero impuro. Ahora `Location: /ruta` relativo. Sintaxis validada con `nginx -t` en la imagen antes de merge. Trabajo realizado dentro de la ventana de seguridad 00-06 (smoke HTTP del CI es consciente de la ventana: 403 esperado ≠ fallo).
+### 2026-07-05 — PROD: Mistral OCR 4 en el smoke nocturno · PRs #114/#115/#116 mergeados a develop
+- **PR #114 mergeado** (squash `e035026`) — el fix multi-IVA + triple ya está en develop; git y runtime de prod convergen en contenido (el descalce REGLA 11 sigue solo por la vía main).
+- `scripts/smoke-test-ocr.js` — actualizado quirúrgicamente desde develop (PR #115): test real de Mistral OCR 4 (`/v1/ocr` + annotation json_schema strict, skip si secret placeholder). **Ejecutado en prod: 4/4 motores OK** (OpenAI 3,0s · Azure 0,4s · 2ª pasada 1,0s · Mistral 2,3s). El cron de las 04:30 vigila desde hoy los 3 motores.
+- **Incidente CI staging documentado** (no afectó a prod): develop referenciaba la red externa `n8n_default` inexistente (rename a `traefik_default` nunca mergeado — prod ya la usaba en disco). Corregido en develop vía **PR #115**. Deploy CI staging verde end-to-end (×2).
+- **Deuda ownership**: chown selectivo (`-user root -o -group root`) aplicado en prod (app/docs) y staging (.git incluido) → 0 ficheros root. Lección: sesiones Claude como root deben limpiar ownership tras operaciones git.
 
-### 2026-07-05 (noche) — PR #119: filtro admin por empresa + login dedicado de administrador · desplegado en STAGING y PROD
-- **Fix 1 — filtro "Usuario" por nombre de empresa**: `/api/admin/facturas/usuarios` devuelve `company_name`/`company_nif` + `client_companies.nombre`/`codigo_cliente` (LEFT JOIN por CIF); el select del panel muestra `empresa registrada > empresa declarada > email` (decisión Julio: "solo empresa"). `value=user_id` intacto → filtro y Excel sin cambios. Paridad v3: `users-list.controller` devuelve `{usuarios}` (el `{items}` era el patrón del bug LL-002) y `uploads.repo` espeja la SQL.
-- **Fix 2 — login admin directo**: causa raíz del bug reportado: nginx `auth_request` bloquea `/admin-facturas.html` sin cookie `setex_admin` → rebotaba al login de usuarios; el formulario embebido del panel era código muerto inalcanzable. Nueva `/admin-login.html` + `admin-login.js` (auto-entrada con sesión viva; confirmación de rol EN SERVIDOR vía `refresh-session` que emite la cookie; no-admin → error y logout silencioso). nginx `@admin_login_redirect` → `302 /admin-login.html`. `auth_request` intacto. Limpieza de código muerto + cache-busters `v=20260705-001`.
-- **Migración staging (autorizada por Julio)**: `ALTER TABLE users/client_companies ADD COLUMN IF NOT EXISTS is_test` — drift preexistente: el monolito la aplica solo en arranque (prod la tenía); el v3 de staging no ejecuta migraciones.
-- **Verificación staging 6/6**: 302→login nuevo · página 200 · login admin→cookie `setex_admin` · `check-admin-page` 200 · no-admin 403 · filtro con nombres de empresa (Taller Staging A, etc.).
-- **Desplegado en PROD** (quirúrgico, orden explícita de Julio): 5 ficheros frontend byte a byte + parche SQL en su `server.js` (SQL pre-validada con EXPLAIN contra el esquema real) + rebuild backend y frontend (primer rebuild de imagen nginx). Verificado: HTTPS 200, 302→`/admin-login.html`, login page 200, endpoint 401 sin token, puerto 2222 RC intacto.
-- **Mejora menor anotada**: el 302 de nginx emite `Location: http://…` (absolute_redirect por defecto) — inocuo con HSTS preload 10 años; candidato a `absolute_redirect off;` en un próximo ciclo.
-
-### 2026-07-05 (tarde) — PR #117: línea de producción sincronizada a develop · incidente puerto 2222
-- **PR #117 mergeado** (squash `b89505b`): merge de la línea prod completa (`feature/admin-edicion-y-nombre-nif`, base 21-abr) a develop — feature admin/captura de junio, visor PDF.js móvil, cif-validator, consolidación documental de mayo, suite e2e Playwright, entrada 2026-06-15 del INFORME (estado vivo) y `server.legacy.js` = monolito prod 4520 + parche confirm (**byte a byte = server.js de prod**). 14 conflictos resueltos con criterio verificado (frontend=prod superconjunto; OCR=develop #114; package.json=v3+override uuid). Suite 79/79. **El descalce REGLA 11 queda reducido a solo la vía main.**
-- **Incidente deploy CI post-#117**: el compose de la línea prod traía `ports: "2222:22"` (sshd Remote Control **exclusivo de prod**) → colisión con el 2222 ya enlazado por `setex-prod-backend` → backend staging no arrancó (frontend sí: ya sirve la feature). Restaurado en minutos.
-- `app/docker-compose.yml`: retirado el mapeo 2222 del compose compartido con nota explicativa — el sshd RC vive SOLO en el compose del disco de prod. ⚠️ Regla derivada: cuando prod se sincronice desde git, re-añadir su mapeo 2222 (o mover a `docker-compose.override.yml` de prod).
-- Verificado: staging 4/4 healthy, frontend sirviendo cif-validator.js y pdf.min.js (feature de prod visible en staging).
-
-### 2026-07-05 — Merge PR #114 · incidente red n8n_default (PR #115) · Mistral en smoke nocturno
-- **PR #114 mergeado a develop** (squash `e035026`): fix multi-IVA + Mistral OCR 4 modo triple.
-- **Incidente deploy CI (3 fallos, staging caído ~10 min, restaurado)**: ① reflog de rama root-owned (deuda ownership: sesiones Claude como root — mitigado con chown selectivo `-user root -o -group root`, staging y prod a 0); ② timeout SSH transitorio del runner (fail2ban descartado: solo IPs residenciales); ③ **mina LL-002-style**: develop referenciaba la red externa `n8n_default` inexistente — el rename a `traefik_default` vivía solo en la rama nunca mergeada `feature/staging-traefik-network-rename-2026-05-06` y en disco. `docker compose up` del frontend desde develop tumbó staging.
-- `app/docker-compose.yml` — **PR #115** (squash `7ca9219`): rename `n8n_default`→`traefik_default` conservando el secret mistral. Supersede la rama del rename (borrable). Deploy CI posterior **VERDE** end-to-end (sync+rebuild+swap+health+smoke HTTP).
-- `scripts/smoke-test-ocr.js` — **PR #115**: test Mistral OCR 4 (petición real `/v1/ocr` + `document_annotation_format` json_schema strict; skip con warning si secret placeholder). Verificado staging 4/4 y prod 4/4 (Mistral 2,2-2,3 s). Copiado quirúrgicamente a prod (cron 04:30 ya lo ejecuta con Mistral).
-- **Lección operativa**: sesiones de Claude Code como root generan refs git root-owned que rompen el `git reset` del CI — ejecutar chown selectivo tras operaciones git, o migrar las sesiones a usuario deploy (candidato a ROADMAP).
-
-### 2026-07-04 (tarde) — Modo TRIPLE validado E2E con los 3 motores · keys operativas
-- **Keys**: Julio aportó keys reales (Mistral + OpenAI staging nueva con scope `model.request`); colocadas en `secrets/` y fichero temporal destruido con `shred -u`. La key OpenAI rota de staging queda resuelta.
-- **Hallazgo permisos**: los secrets del proyecto usan `644` (dir `700 deploy`) porque el `appuser` uid 1001 del contenedor ≠ `deploy` — un `600` rompe la lectura con "Permission denied" silencioso (motor cae a error "no configurada"). Documentado como patrón.
-- **Hallazgo hot-reload**: editar `features.json` con herramientas que reemplazan el archivo (nuevo inode) rompe el bind-mount del contenedor — sigue viendo el contenido viejo hasta reiniciar. Para cambio en caliente real: escribir in-place (`>` truncado) o `stop` + `up -d`.
-- `app/backend/src/config/features.json`: `ocr_mode: "triple"` activado en staging para periodo de validación.
-- **Validación E2E triple** (llamadas reales a los 3 motores):
-  - Mono-IVA (muestra real): `dual_confirmed=true`, 3 motores coinciden (OpenAI 5,4s · Azure 11,4s · Mistral 5,6s en paralelo), campos exactos.
-  - Multi-IVA (21%+10%+exento): 3 tramos completos — el exento que Azure omite lo aportan OpenAI/Mistral sin duplicación; base agregada = Σ tramos (1.170,00); tipo dominante 21,0; sin IRPF fantasma; fila resumen espuria filtrada; productos asociados por tramo (2+2+1).
-- **Pendiente**: periodo de observación en staging con facturas reales; decidir modo por defecto para prod (coste triple: +~$0,004/factura ≈ +$24/mes a 6k facturas); push + PR a develop (decisión commit `fbd3d86`); aplicación quirúrgica a prod (regla 11); añadir Mistral a `smoke-test-ocr.js` al promocionar.
-
-### 2026-07-04 — Validación E2E staging del fix multi-IVA + 2 fixes adicionales + deploy
-- **Deploy staging**: compose con secret `mistral_api_key` (OK explícito de Julio, regla 1), rebuild + stop + up -d. Backend healthy. Secret con PLACEHOLDER hasta que Julio aporte la key real (el código desactiva Mistral limpiamente vía `isPlaceholder`).
-- **Validación E2E** con el pipeline dual real (`extractInvoiceOCR` vía docker exec) sobre factura de muestra + factura sintética multi-IVA (21%+10%+exento): extracción y coherencia correctas.
-- `app/backend/src/domain/validators/iva.js`: nuevo `dropResumenArtifacts` — Azure emite a veces un TaxDetail extra sin tipo cuya cuota = Σ cuotas (línea "Total IVA" del pie); bloqueaba la reconciliación.
-- `app/backend/src/ocr/azure.js`: `extractIvaPorcentaje` lee `Rate.valueString` ("21%") además de `valueNumber` — antes caía al fallback y producía tipos absurdos (14,6%).
-- `app/backend/src/ocr/index.js`: el tipo dominante se deriva siempre del desglose, también en la rama del guard de cordura.
-- Tests: suite 79/79 ✅.
-- **🔴 HALLAZGO CRÍTICO preexistente**: la `openai_api_key` de staging devuelve **401 missing_scope (model.request)** — staging lleva operando solo con Azure. Solo Julio puede reemplazar la key. (El smoke cron 04:30 solo corre en prod, por eso no saltó.)
-- **Hallazgo**: contenedor backend Alpine sin fuentes (fontconfig) — irrelevante para OCR de fotos reales, relevante para generar fixtures dentro del contenedor.
-- **Pendiente**: key real de Mistral + key OpenAI staging válida → activar `ocr_mode: "triple"` y validar; push de rama + PR a develop (decisión de Julio por commit local `fbd3d86` previo en develop).
-
-### 2026-07-03 — Fix multi-IVA (base imponible) + integración Mistral OCR 4
-- **Contexto**: diagnóstico del fallo "el OCR no lee bien la base del IVA y falla con varios IVAs". Causa raíz verificada contra el schema oficial `2024-11-30-ga` de Azure DI `prebuilt-invoice`: `TaxDetails` NO devuelve `BaseAmount` por tramo (solo `Amount` y `Rate`) → la base por tramo llegaba siempre null y el agregado dependía de `SubTotal` (≠ Σ bases). Además `mergeLineasIva` cruzaba tramos por string literal ("21" ≠ "21,0") duplicando tramos, el tramo exento (0%) se descartaba, y una base mal sumada hacía que la salvaguarda IRPF inventara retenciones fantasma.
-- `app/backend/src/domain/validators/iva.js`: cruce de tramos por porcentaje numérico normalizado + helpers `parseRateEntero`/`fillDerivedBases` (base = cuota ÷ tipo) — fix duplicación de tramos.
-- `app/backend/src/ocr/azure.js`: deriva la base de cada tramo por aritmética y conserva el tramo exento 0% — fix degradación multi→mono.
-- `app/backend/src/ocr/index.js`: reconciliación de agregados (base/cuota = Σ tramos, con guard de cordura vs total) ANTES de la salvaguarda IRPF; nuevo modo `triple` con votación 2-de-3.
-- `app/backend/src/ocr/mistral.js` (NUEVO): motor Mistral OCR 4 (`mistral-ocr-latest`, `POST /v1/ocr`, annotations json_schema) — requiere secret `mistral_api_key`; modo activo sigue `dual` hasta validar en staging.
-- `app/backend/src/server.legacy.js`: confirm sin edición del usuario normaliza el desglose multi-IVA y rellena agregados vacíos (nunca pisa valores confirmados).
-- `app/backend/src/config/features.json`: documentados modos `triple`/`mistral` (sin cambio de modo activo).
-- `app/backend/tests/unit/{iva-multi,azure-lineas-iva,ocr-reconcile}.test.js` (NUEVOS): 25 tests; suite completa 75/75 ✅.
-- **Pendiente (requiere OK de Julio)**: añadir secret `mistral_api_key` + 2 líneas en `docker-compose.yml` (regla 1), deploy a staging (rebuild → stop → up -d) y validación con facturas reales multi-IVA. Rama: `feature/ocr-multi-iva-fix-y-mistral-2026-07-03`.
-- **Hallazgo documentado**: el adapter v3 congelado `adapters/ocr/openai.adapter.js` llama a `extractInvoice` con firma incompatible con `ocr/openai.js` — la capa v3 de OCR requiere revisión antes de cualquier futuro swap.
+### 2026-07-04 — PROD: fix multi-IVA (base imponible) + Mistral OCR 4 en modo TRIPLE (aplicación quirúrgica, PR #114)
+- **Contexto**: el OCR fallaba en la base del IVA y con varios tipos de IVA. Causa raíz: Azure DI `prebuilt-invoice` (schema 2024-11-30-ga) no devuelve BaseAmount por tramo; cruce de tramos por string duplicaba tramos; tramo exento descartado; IRPF fantasma por base mal sumada. Fix desarrollado y validado E2E en staging (rama `feature/ocr-multi-iva-fix-y-mistral-2026-07-03`, **PR #114** a develop).
+- **Aplicación quirúrgica a prod** (regla 11: NO desde main — v3 roto). Verificado cero drift pre-copia (prod = commit base `fbd3d86` byte a byte en los 5 módulos OCR):
+  - `app/backend/src/ocr/index.js` — reconciliación agregados=Σtramos + modo triple + votación 2-de-3 (copiado de staging, = PR #114).
+  - `app/backend/src/ocr/azure.js` — bases derivadas por aritmética, tramo exento conservado, Rate como string.
+  - `app/backend/src/ocr/mistral.js` (NUEVO) — motor Mistral OCR 4 (`mistral-ocr-latest`, /v1/ocr, annotations json_schema).
+  - `app/backend/src/domain/validators/iva.js` — cruce numérico de tramos, `fillDerivedBases`, `dropResumenArtifacts`.
+  - `app/backend/src/server.js` — parche confirm automático (equivalente al de `server.legacy.js` del PR; el monolito de prod difiere del de develop solo en la feature admin previa).
+  - `app/backend/tests/unit/{iva-multi,azure-lineas-iva,ocr-reconcile}.test.js` — 29/29 ✅ ejecutados en el árbol de prod pre-deploy.
+  - `app/docker-compose.yml` — secret `mistral_api_key` (OK explícito de Julio) · `secrets/mistral_api_key.txt` (644, dir 700).
+  - `app/backend/src/config/features.json` — `ocr_mode: "triple"` (escrito in-place para preservar inode del bind-mount).
+- **Deploy**: rebuild → stop → up -d (corte ~15 s, fuera de ventana 00-06 por orden explícita de Julio). Backend healthy, HTTPS 200, 4/4 contenedores.
+- **Smoke E2E post-deploy** (motores reales): `dual_confirmed=true`, base 750,00 · cuota 157,50 · 21,0% · total 907,50 · NIF B06400980 — OpenAI 4,6 s · Azure 5,1 s · Mistral 4,8 s en paralelo.
+- **Coste triple**: +~$0,004/factura (~+$24/mes a 6 000 facturas). Revertible en caliente a `"dual"` en features.json.
+- **Pendiente**: mergear PR #114 a develop (sincroniza git con lo aplicado); añadir Mistral a `scripts/smoke-test-ocr.js` (cron 04:30); nota: el descalce main↔runtime de la REGLA 11 sigue vigente e incluye ahora también estos ficheros.
 
 ### 2026-06-01 — Visor de PDF del panel admin funcional en móvil (PDF.js en `<canvas>` sustituye al `<iframe>`)
 - **Disparador**: Julio reportó que el botón "🖼 Ver" de la columna imagen del panel admin abría la factura en su PC pero quedaba en blanco en el móvil.
@@ -3270,6 +3234,27 @@ Añade esta línea (backup cada día a las 3:00 AM):
 - Build+swap solo backend (NO `deploy-prod.yml`), healthy, sitio 200. Rollback `setex-prod-backend:prev-20260618`. **Pendiente: cuentas user sin `company_nif` (Autoken, Carlos Bernáldez, soporte@autoken) — la garantía no aplica hasta registrar su CIF (Julio decidió dejarlas).**
 
 **Nota estado git:** el working tree de prod queda en rama `feature/admin-edicion-y-nombre-nif` (= imagen viva). El estado anterior sigue en `recovery/prod-live-20260615`. Ambas en origin.
+
+
+### 2026-07-06 — Integración Google Gemini 3 (Flash + Pro) como motores OCR extra
+- `prod/app/docker-compose.yml`: añadido secret `gemini_api_key` en sección backend secrets y sección secrets global (OK de Julio, REGLA 1 cumplida)
+- `prod/secrets/gemini_api_key.txt`: clave real colocada (644, deploy:deploy); archivo fuente `/opt/kk.txt` destruido con `shred -u`
+- `prod/app/backend/src/ocr/gemini.js`: nuevo módulo Gemini 3 Flash/Pro (parche quirúrgico desde staging; gemini-3.5-flash ESTABLE, gemini-3.1-pro-preview PREVIEW)
+- `prod/app/backend/src/ocr/index.js`: orquestador multi-motor actualizado con soporte Gemini Flash y Pro (copiado byte-a-byte desde staging)
+- `prod/app/backend/src/config/features.json`: añadidos `ocr_gemini_flash_model`, `ocr_gemini_pro_model`, `ocr_multi_engines`, comentarios `_OCR_MODE`/`_OCR_MULTI`; `ocr_mode` se mantiene en `triple` (Gemini disponible pero no activado hasta que cuenta tenga créditos)
+- Backend prod rebuildeado y healthy (Up, healthcheck OK); secreto Gemini verificado en `/run/secrets/gemini_api_key`
+- **PENDIENTE**: créditos Google AI Studio agotados (429 RESOURCE_EXHAUSTED) — integrar Gemini a flujo multi requiere recargar prepago en aistudio.google.com
+- `staging/app/backend/src/config/features.json`: `ocr_mode` cambiado a `multi` para E2E (pendiente confirmación cuando se recarguen créditos Gemini)
+
+
+### 2026-07-07 — Modo gemini_azure: Gemini 3.5 Flash como motor primario (reemplaza OpenAI)
+- Bench externo (20 facturas × 5 motores, 2026-07-07): gemini-3.5-flash lidera con 88,6% global, 90,3% CIF, 100% totales. Formalizado en ADR-0007.
+- `prod/app/backend/src/ocr/index.js`: `compareOCRResults` refactorizado para motores primarios arbitrarios (labelA/labelB); nuevo modo `gemini_azure` = Gemini Flash (primaryA) + Azure DI (primaryB). Retrocompat completa para modos dual/triple/multi.
+- `prod/app/backend/src/config/features.json`: `ocr_mode` cambiado a `gemini_azure`; `ocr_primary_engine` = `gemini_flash`.
+- E2E staging verificado: `engine=dual_gemini_flash_azure`, `dual_confirmed=true`, `confidence=1.000`, 5,99s (Flash 5,9s + Azure 4,7s en paralelo).
+- Backend prod rebuildeado y healthy; modo gemini_azure activo en producción desde 2026-07-07.
+- Model ID confirmado: `gemini-3-flash` (alias del bench) = `gemini-3.5-flash` (ID real API); `gemini-3-flash` devuelve 404.
+- OpenAI sigue disponible como motor único (`ocr_mode: "openai"`) o puede reactivarse cambiando features.json sin rebuild.
 
 ---
 

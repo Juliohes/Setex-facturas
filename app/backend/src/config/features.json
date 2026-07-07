@@ -1,12 +1,13 @@
 {
   "ocr_enabled": true,
-  "_OCR_MODE": "Modo OCR: 'dual' = OpenAI + Azure | 'triple' = dual + Mistral | 'multi' = dual + ocr_multi_engines | motor único: 'openai'/'azure'/'mistral'/'gemini_flash'/'gemini_pro'. Gemini requiere secret gemini_api_key",
-  "ocr_mode": "triple",
-  "_OCR_MULTI": "Extras del modo 'multi' (orden = prioridad de integración). IDs Gemini hot-swap: flash=gemini-3.5-flash (ESTABLE, decisión Julio 2026-07-06); pro=gemini-3.1-pro-preview (único Pro existente, PREVIEW)",
+  "tech_admin_emails": ["juliohesuni@gmail.com"],
+  "_OCR_MODE": "Modo OCR: 'gemini_azure' = Gemini 3.5 Flash + Azure (RECOMENDADO) | 'dual' = OpenAI + Azure (legacy) | 'triple' = dual + Mistral | 'multi' = dual + ocr_multi_engines | motor único: 'openai'/'azure'/'mistral'/'gemini_flash'/'gemini_pro'",
+  "ocr_mode": "gemini_azure",
+  "_OCR_MULTI": "Extras del modo 'multi' (orden = prioridad de integración). IDs Gemini hot-swap: flash=gemini-3.5-flash (ESTABLE, bench winner 2026-07-07); pro=gemini-3.1-pro-preview (único Pro existente, PREVIEW)",
   "ocr_multi_engines": ["mistral", "gemini_flash", "gemini_pro"],
   "ocr_gemini_flash_model": "gemini-3.5-flash",
   "ocr_gemini_pro_model": "gemini-3.1-pro-preview",
-  "ocr_primary_engine": "openai",
+  "ocr_primary_engine": "gemini_flash",
   "image_max_resolution": 1536,
   "image_jpeg_quality": 85
 }

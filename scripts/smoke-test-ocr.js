@@ -218,6 +218,50 @@ async function testMistral(apiKey, imageBuffer) {
   return true;
 }
 
+// ─── Test Gemini 3.5 Flash: generateContent con responseJsonSchema ────────────
+// Motor primario desde 2026-07-07 (bench winner, reemplaza OpenAI en gemini_azure).
+// Detecta: key inválida, créditos agotados (429), cambio de model ID por Google.
+// Si el secret no existe o es placeholder → skip con warning (entorno legacy dual).
+async function testGeminiFlash(apiKey, imageBuffer) {
+  const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+  const model = 'gemini-3.5-flash';
+  const body = {
+    contents: [{
+      role: 'user',
+      parts: [
+        { inline_data: { mime_type: 'image/jpeg', data: imageBuffer.toString('base64') } },
+        { text: 'Devuelve es_factura:true si la imagen contiene una factura.' }
+      ]
+    }],
+    generationConfig: {
+      temperature: 0,
+      maxOutputTokens: 64,
+      responseMimeType: 'application/json',
+      responseJsonSchema: {
+        type: 'object',
+        properties: { es_factura: { type: 'boolean' } },
+        required: ['es_factura']
+      }
+    }
+  };
+  const res = await fetch(`${GEMINI_BASE_URL}/${model}:generateContent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(60000),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '');
+    throw new Error(`Gemini Flash HTTP ${res.status}: ${txt.substring(0, 300)}`);
+  }
+  const data  = await res.json();
+  const parts = data?.candidates?.[0]?.content?.parts;
+  if (!parts || !parts.find(p => typeof p.text === 'string')) {
+    throw new Error('Gemini Flash sin campo text en respuesta candidates[0].content.parts');
+  }
+  return true;
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 (async () => {
   if (!fs.existsSync(SAMPLE_PATH)) {
@@ -281,6 +325,24 @@ async function testMistral(apiKey, imageBuffer) {
     } catch (e) {
       log('error', `Mistral OCR 4: FAIL — ${e.message}`);
       errors.push(`MISTRAL: ${e.message}`);
+    }
+  }
+
+  // Gemini Flash (motor primario desde 2026-07-07). Si el secret no existe o es
+  // placeholder → skip con warning (entorno legacy sin modo gemini_azure).
+  const geminiKey = readSecret('gemini_api_key');
+  const geminiConfigured = geminiKey && geminiKey.length >= 8
+    && !geminiKey.includes('PLACEHOLDER') && !geminiKey.includes('INSERTAR');
+  if (!geminiConfigured) {
+    log('warn', 'Gemini Flash: secret gemini_api_key ausente o placeholder — skip (entorno sin modo gemini_azure)');
+  } else {
+    try {
+      const t0 = Date.now();
+      await testGeminiFlash(geminiKey, img);
+      log('info', `Gemini Flash: OK (${Date.now() - t0}ms)`);
+    } catch (e) {
+      log('error', `Gemini Flash: FAIL — ${e.message}`);
+      errors.push(`GEMINI_FLASH: ${e.message}`);
     }
   }
 

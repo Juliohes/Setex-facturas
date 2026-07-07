@@ -20,14 +20,45 @@ async function authFetch(url, opts = {}) {
   return Auth.apiFetch(url, opts);
 }
 
-// El login del panel vive en /admin-login.html (2026-07-05). Las antiguas
-// doLogin/setupLoginForm/showLogin/hideLogin eran código muerto: nginx bloquea
-// este HTML sin cookie admin, así que el formulario embebido jamás se veía.
+async function doLogin(email, password) {
+  const res = await fetch(`${API_URL}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Credenciales incorrectas');
+  Auth.handleLoginResponse(data);
+  // Tarea 5: capturar is_tech_admin de la respuesta de login
+  window._isTechAdmin = data.is_tech_admin === true;
+  return Auth.getToken();
+}
 async function checkAdminAccess(_token) {
   const res = await authFetch(`${API_URL}/admin/facturas/usuarios`);
   if (res.status === 403) throw new Error('Tu cuenta no tiene permisos de administrador.');
   if (!res.ok) throw new Error('Error de conexión con el servidor.');
   return await res.json();
+}
+function showLogin() { document.getElementById('login-screen').style.display = 'flex'; }
+function hideLogin() { document.getElementById('login-screen').style.display = 'none'; }
+function setupLoginForm(onSuccess) {
+  document.getElementById('login-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('login-btn');
+    const email = document.getElementById('login-email').value.trim();
+    const password = document.getElementById('login-password').value;
+    document.getElementById('login-error').style.display = 'none';
+    btn.disabled = true; btn.textContent = 'Comprobando...';
+    try {
+      const token = await doLogin(email, password);
+      const authData = await checkAdminAccess(token);
+      hideLogin(); onSuccess(authData);
+    } catch (err) {
+      const el = document.getElementById('login-error');
+      el.textContent = err.message; el.style.display = 'block';
+      btn.disabled = false; btn.textContent = 'Entrar';
+    }
+  });
 }
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
@@ -61,7 +92,6 @@ const EDITABLE_FIELDS = {
   cuota_iva:               'Cuota IVA (€)',
   irpf_porcentaje:         'IRPF %',
   cuota_irpf:              'Cuota IRPF (€)',
-  invoice_type:            'Tipo (compra / venta)',
 };
 
 // Traduce un campo display virtual al campo raw de BD según qué lado coincidió.
@@ -78,124 +108,15 @@ function getActualField(displayField, rowData) {
   return map[displayField] || displayField;
 }
 
-// ── Normalización de importes (espejo de backend lib/normalize-amount.js) ──────
-// Los importes se guardan como string y pueden venir en cualquier formato
-// ("1.234,56", "1,234.56", "1234.56", "1234,56", "1234"). La tabla los muestra
-// siempre como "1.234,56 €" pero el editor los cargaba crudos → discrepancia
-// visible. Normalizamos a formato español canónico tanto al editar como al
-// guardar para que celda, editor y BD coincidan siempre.
-const IMPORTE_FIELDS = new Set(['base_imponible', 'cuota_iva', 'cuota_irpf', 'total_factura']);
-
-function parseImporteToFloat(v) {
-  if (v == null || v === '') return null;
-  const s = String(v).replace(/[€\s]/g, '');
-  if (!s) return null;
-  const hasComma = s.includes(','), hasDot = s.includes('.');
-  let n;
-  if (hasComma && hasDot) {
-    n = s.lastIndexOf(',') > s.lastIndexOf('.')
-      ? parseFloat(s.replace(/\./g, '').replace(',', '.'))
-      : parseFloat(s.replace(/,/g, ''));
-  } else if (hasComma) {
-    const after = s.split(',').pop() || '';
-    n = after.length === 3 ? parseFloat(s.replace(/,/g, '')) : parseFloat(s.replace(',', '.'));
-  } else {
-    n = parseFloat(s);
-  }
-  return isNaN(n) ? null : n;
-}
-
-function toSpanishAmountStr(n) {
-  if (n == null || isNaN(n)) return '';
-  const [int, dec] = Number(n).toFixed(2).split('.');
-  return int.replace(/\B(?=(\d{3})+(?!\d))/g, '.') + ',' + dec;
-}
-
-// Valor que se carga en el input del modal: importes en español "1.234,56"
-// (sin €), el resto tal cual. Garantiza que el editor muestre lo mismo que la celda.
-function toEditableValue(field, rawValue) {
-  if (IMPORTE_FIELDS.has(field)) {
-    const n = parseImporteToFloat(rawValue);
-    if (n != null) return toSpanishAmountStr(n);
-  }
-  return rawValue == null ? '' : String(rawValue);
-}
-
-// ── Validación de coherencia aritmética (avisa, NO sobrescribe) ────────────────
-// Compara el cálculo esperado con lo leído/guardado. Si no cuadra (más de 1
-// céntimo de diferencia), las celdas Total y Cuota IVA muestran un aviso. El
-// usuario decide y edita a mano; nunca se modifica un valor automáticamente.
-function parsePct(v) {
-  if (v == null || v === '') return null;
-  const n = parseFloat(String(v).replace(/[%\s]/g, '').replace(',', '.'));
-  return isNaN(n) ? null : n;
-}
-
-function checkCoherencia(row) {
-  const base      = parseImporteToFloat(row.base_imponible);
-  const cuotaIva  = parseImporteToFloat(row.cuota_iva);
-  const cuotaIrpf = parseImporteToFloat(row.cuota_irpf) || 0;
-  const total     = parseImporteToFloat(row.total_factura);
-  const ivaPct    = parsePct(row.iva_porcentaje);
-  const isMulti   = Array.isArray(row.lineas_iva) && row.lineas_iva.length >= 2;
-  const TOL = 0.02; // tolerancia de redondeo (céntimo)
-
-  let totalOk = true, totalEsperado = null;
-  if (base != null && cuotaIva != null && total != null) {
-    totalEsperado = base + cuotaIva - cuotaIrpf;
-    totalOk = Math.abs(totalEsperado - total) <= TOL;
-  }
-  // Cuota IVA esperada solo tiene sentido en mono-IVA (en multi-IVA es suma de tramos).
-  let cuotaIvaOk = true, cuotaIvaEsperada = null;
-  if (!isMulti && base != null && ivaPct != null && cuotaIva != null) {
-    cuotaIvaEsperada = base * ivaPct / 100;
-    cuotaIvaOk = Math.abs(cuotaIvaEsperada - cuotaIva) <= Math.max(TOL, base * 0.001);
-  }
-  return { totalOk, totalEsperado, cuotaIvaOk, cuotaIvaEsperada };
-}
-
-// Formatter del Total: valor + aviso ⚠️ si no cuadra con Base+IVA−IRPF.
-function formatTotalCoherente(cell) {
-  const val = formatEuroStr(cell);
-  const chk = checkCoherencia(cell.getRow().getData());
-  if (!chk.totalOk && chk.totalEsperado != null) {
-    const esp = toSpanishAmountStr(chk.totalEsperado);
-    return `<span style="color:#c05621;">${val}</span> <span title="No cuadra · esperado ${esp} € (Base + Cuota IVA − Cuota IRPF). Revisa y corrige a mano." style="cursor:help;">⚠️</span>`;
-  }
-  return val;
-}
-
-// Formatter de la Cuota IVA: valor + aviso ⚠️ si no cuadra con Base × IVA%.
-function formatCuotaIvaCoherente(cell) {
-  const val = formatEuroStr(cell);
-  const chk = checkCoherencia(cell.getRow().getData());
-  if (!chk.cuotaIvaOk && chk.cuotaIvaEsperada != null) {
-    const esp = toSpanishAmountStr(chk.cuotaIvaEsperada);
-    return `<span style="color:#c05621;">${val}</span> <span title="No cuadra · esperado ${esp} € (Base × IVA%). Revisa y corrige a mano." style="cursor:help;">⚠️</span>`;
-  }
-  return val;
-}
-
 function openEditModal(rowData, field) {
   editingRow = rowData;
   editingField = field;
   document.getElementById('edit-modal-title').textContent = `Editar — Factura #${rowData.id}`;
   document.getElementById('edit-field-label').textContent = EDITABLE_FIELDS[field] || field;
-  const inputEl = document.getElementById('edit-field-input');
-  const selectEl = document.getElementById('edit-field-select');
-  if (field === 'invoice_type') {
-    // Campo enumerado → selector (evita valores inválidos por texto libre).
-    inputEl.style.display = 'none';
-    selectEl.style.display = '';
-    selectEl.value = (rowData[field] === 'venta') ? 'venta' : 'compra';
-  } else {
-    selectEl.style.display = 'none';
-    inputEl.style.display = '';
-    inputEl.value = toEditableValue(field, rowData[field]);
-  }
+  document.getElementById('edit-field-input').value = rowData[field] || '';
   document.getElementById('edit-error').style.display = 'none';
   document.getElementById('edit-modal').style.display = 'flex';
-  setTimeout(() => (field === 'invoice_type' ? selectEl : inputEl).focus(), 50);
+  setTimeout(() => document.getElementById('edit-field-input').focus(), 50);
 }
 
 function closeEditModal() {
@@ -205,25 +126,10 @@ function closeEditModal() {
 
 async function saveEdit() {
   if (!editingRow || !editingField) return;
-  let newValue = (editingField === 'invoice_type')
-    ? document.getElementById('edit-field-select').value
-    : document.getElementById('edit-field-input').value.trim();
+  const newValue = document.getElementById('edit-field-input').value.trim();
   const errEl = document.getElementById('edit-error');
   errEl.style.display = 'none';
   const saveBtn = document.getElementById('edit-save');
-
-  // Importes: validar y normalizar a formato español canónico "1.234,56" antes
-  // de guardar, para que celda, editor y BD queden siempre coherentes.
-  if (IMPORTE_FIELDS.has(editingField) && newValue !== '') {
-    const n = parseImporteToFloat(newValue);
-    if (n == null) {
-      errEl.textContent = 'Importe no válido. Usa formato 1.234,56';
-      errEl.style.display = 'block';
-      return;
-    }
-    newValue = toSpanishAmountStr(n);
-  }
-
   saveBtn.disabled = true; saveBtn.textContent = 'Guardando...';
 
   // Traducir campo display virtual → campo raw de BD
@@ -346,12 +252,6 @@ function formatPct(cell) {
   if (v == null || v === '' || v === '0,0' || v === '0') return '<span style="color:#a0aec0">—</span>';
   return escHtml(String(v)) + '%';
 }
-// Cuota IRPF: igual que IRPF %, cuando es 0 (o vacío) se muestra "—" en vez de "0,00 €".
-function formatCuotaImporteDash(cell) {
-  const n = parseImporteToFloat(cell.getValue());
-  if (n == null || n === 0) return '<span style="color:#a0aec0">—</span>';
-  return formatEuroStr(cell);
-}
 function formatTipo(cell) {
   const v = cell.getValue();
   if (!v) return '<span style="color:#a0aec0">—</span>';
@@ -370,106 +270,6 @@ function formatImagen(cell) {
     return `<span class="img-link" style="cursor:pointer;" title="Ver imagen de la factura">🖼 Ver</span>`;
   }
   return '<span style="color:#a0aec0">—</span>';
-}
-
-// ── Visor PDF multiplataforma (PDF.js, render en <canvas>) ───────────────────
-// Los navegadores móviles (Safari iOS, Chrome Android) NO renderizan PDF dentro
-// de <iframe>/<embed>/<object>: quedaba en blanco en el móvil aunque funcionara
-// en escritorio. PDF.js dibuja cada página en un <canvas> por software, así que
-// el visor funciona igual en escritorio y móvil. La librería se sirve self-hosted
-// (pdf.min.js + pdf.worker.min.js) → encaja en la CSP `script-src 'self'` sin
-// tocarla. Reemplaza al antiguo iframe (cambio 2026-06-01).
-if (window.pdfjsLib) {
-  pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdf.worker.min.js';
-}
-
-// Renderiza un PDF (blobUrl) dentro de `container`: barra fija con botón
-// "Descargar PDF" (red de seguridad multiplataforma) + todas las páginas
-// apiladas en <canvas> con scroll. Si PDF.js no estuviera disponible o fallara,
-// degrada con elegancia dejando la descarga operativa. `blobUrl` debe seguir
-// vivo mientras el visor esté abierto.
-async function renderPdfInto(container, blobUrl, downloadName) {
-  container.innerHTML = '';
-
-  const bar = document.createElement('div');
-  bar.style.cssText = 'position:sticky;top:0;z-index:1;display:flex;justify-content:flex-end;padding:8px;background:rgba(0,0,0,0.55);';
-  const dl = document.createElement('a');
-  dl.href = blobUrl;
-  dl.download = downloadName || 'factura.pdf';
-  dl.textContent = '⬇ Descargar PDF';
-  dl.style.cssText = 'background:#fff;color:#1a202c;text-decoration:none;padding:6px 12px;border-radius:6px;font-size:13px;font-weight:600;';
-  dl.addEventListener('click', (e) => e.stopPropagation());
-  bar.appendChild(dl);
-  container.appendChild(bar);
-
-  const pages = document.createElement('div');
-  pages.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:12px;padding:12px;';
-  container.appendChild(pages);
-
-  const note = (txt) => {
-    const p = document.createElement('p');
-    p.style.cssText = 'color:#fff;font-size:14px;text-align:center;padding:8px;';
-    p.textContent = txt;
-    pages.appendChild(p);
-  };
-
-  if (!window.pdfjsLib) { note('Pulsa «Descargar PDF» para abrir la factura.'); return; }
-
-  try {
-    const pdf = await pdfjsLib.getDocument({ url: blobUrl }).promise;
-    const scale = Math.min(window.devicePixelRatio || 1, 2) * 1.5;
-    for (let n = 1; n <= pdf.numPages; n++) {
-      const page = await pdf.getPage(n);
-      const viewport = page.getViewport({ scale });
-      const canvas = document.createElement('canvas');
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      canvas.style.cssText = 'width:min(92vw,900px);height:auto;border-radius:6px;box-shadow:0 4px 24px rgba(0,0,0,0.5);background:#fff;';
-      canvas.addEventListener('click', (e) => e.stopPropagation());
-      pages.appendChild(canvas);
-      await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
-    }
-  } catch (err) {
-    note('No se pudo renderizar el PDF. Usa «Descargar PDF» para abrirlo.');
-  }
-}
-
-// Helpers del lightbox: convive una imagen (<img>) y un contenedor PDF (canvas
-// vía PDF.js, lazy-creado) para que tanto JPG/PNG como PDFs se previsualicen a
-// pantalla completa en cualquier dispositivo.
-function openLightbox(url, isPdf) {
-  const lb  = document.getElementById('lightbox');
-  const img = document.getElementById('lightbox-img');
-  let pdfBox = document.getElementById('lightbox-pdf');
-  if (!pdfBox) {
-    pdfBox = document.createElement('div');
-    pdfBox.id = 'lightbox-pdf';
-    pdfBox.style.cssText = 'width:min(95vw,920px);max-height:95vh;overflow:auto;border-radius:6px;background:#222;cursor:auto;';
-    pdfBox.addEventListener('click', (e) => e.stopPropagation());
-    lb.appendChild(pdfBox);
-  }
-  if (isPdf) {
-    img.style.display = 'none';
-    img.src = '';
-    pdfBox.style.display = 'block';
-    renderPdfInto(pdfBox, url, 'factura.pdf');
-  } else {
-    pdfBox.style.display = 'none';
-    pdfBox.innerHTML = '';
-    img.src = url;
-    img.style.display = 'block';
-  }
-  lb.style.display = 'flex';
-}
-
-function closeLightbox() {
-  const lb = document.getElementById('lightbox');
-  if (!lb) return;
-  lb.style.display = 'none';
-  const img = document.getElementById('lightbox-img');
-  if (img) img.src = '';
-  const pdfBox = document.getElementById('lightbox-pdf');
-  if (pdfBox) { pdfBox.style.display = 'none'; pdfBox.innerHTML = ''; }
 }
 
 async function verImagenAdmin(id) {
@@ -510,10 +310,10 @@ async function verImagenAdmin(id) {
     const isPdf = (blob.type || '').toLowerCase().includes('pdf');
     content.innerHTML = '';
     if (isPdf) {
-      // PDF.js en <canvas> — funciona en móvil y escritorio (antes: iframe, en
-      // blanco en móvil). El contenedor pasa a scroll vertical para multipágina.
-      content.style.cssText = 'position:relative;width:min(95vw,920px);max-height:92vh;overflow:auto;border-radius:8px;background:#222;box-shadow:0 4px 32px rgba(0,0,0,0.6);';
-      await renderPdfInto(content, imgUrl, `factura-${id}.pdf`);
+      const frame = document.createElement('iframe');
+      frame.src = imgUrl;
+      frame.style.cssText = 'width:90vw;height:90vh;border:0;border-radius:8px;background:#fff;box-shadow:0 4px 32px rgba(0,0,0,0.6);';
+      content.appendChild(frame);
     } else {
       const img = document.createElement('img');
       img.src = imgUrl;
@@ -544,8 +344,7 @@ function initTable() {
         formatter: makeEditableFormatter('display_empresa'), cellClick: makeEditableCellClick('display_empresa') },
       { title: 'CIF Empresa',      field: 'display_empresa_nif',  width: 130, sorter: 'string',
         formatter: makeEditableFormatter('display_empresa_nif'), cellClick: makeEditableCellClick('display_empresa_nif') },
-      { title: 'TIPO',             field: 'invoice_type',    width: 110, sorter: 'string', hozAlign: 'center',
-        formatter: makeEditableFormatter('invoice_type', formatTipo), cellClick: makeEditableCellClick('invoice_type') },
+      { title: 'TIPO',             field: 'invoice_type',    width: 100, sorter: 'string', formatter: formatTipo, hozAlign: 'center' },
       { title: 'Cliente / Proveedor', field: 'display_contraparte', minWidth: 160, sorter: 'string',
         formatter: makeEditableFormatter('display_contraparte'), cellClick: makeEditableCellClick('display_contraparte') },
       { title: 'CIF Cl/Prov',      field: 'display_contraparte_nif', width: 130, sorter: 'string',
@@ -558,14 +357,14 @@ function initTable() {
       { title: 'IVA %',            field: 'iva_porcentaje',  width: 110, sorter: 'string', hozAlign: 'center', headerSort: false,
         formatter: formatIvaPctUnified, cellClick: ivaPctUnifiedCellClick },
       { title: 'Cuota IVA',        field: 'cuota_iva',       width: 110, sorter: 'string', hozAlign: 'right',
-        formatter: makeEditableFormatter('cuota_iva', formatCuotaIvaCoherente), cellClick: makeEditableCellClick('cuota_iva') },
+        formatter: makeEditableFormatter('cuota_iva', formatEuroStr), cellClick: makeEditableCellClick('cuota_iva') },
       { title: 'IRPF %',           field: 'irpf_porcentaje', width: 80,  sorter: 'string', hozAlign: 'center',
         formatter: makeEditableFormatter('irpf_porcentaje', formatPct), cellClick: makeEditableCellClick('irpf_porcentaje') },
       { title: 'Cuota IRPF',       field: 'cuota_irpf',      width: 110, sorter: 'string', hozAlign: 'right',
-        formatter: makeEditableFormatter('cuota_irpf', formatCuotaImporteDash), cellClick: makeEditableCellClick('cuota_irpf') },
+        formatter: makeEditableFormatter('cuota_irpf', formatEuroStr), cellClick: makeEditableCellClick('cuota_irpf') },
       { title: 'Total',            field: 'total_factura',   width: 120, sorter: 'number', hozAlign: 'right',
         cellStyle: () => ({ fontWeight: '700', color: '#1a365d' }),
-        formatter: makeEditableFormatter('total_factura', formatTotalCoherente), cellClick: makeEditableCellClick('total_factura') },
+        formatter: makeEditableFormatter('total_factura', formatEuro), cellClick: makeEditableCellClick('total_factura') },
       { title: 'Estado',           field: 'procesado_en',    width: 120, formatter: formatEstado, sorter: 'datetime' },
       { title: 'Imagen',           field: 'file_path',       width: 90,  formatter: formatImagen, hozAlign: 'center', headerSort: false,
         cellClick: (_e, cell) => {
@@ -884,6 +683,74 @@ function initEmpresasTable() {
   });
 }
 
+// ── Helpers de galería de empresa (Tareas 1, 4) ──────────────────────────────
+
+// Parsea fecha en formato DD/MM/YYYY evitando "Invalid Date" (Tarea 1).
+// new Date("01/04/2026") devuelve Invalid Date en JS — hay que reordenar a YYYY-MM-DD.
+function parseFechaEs(fechaStr) {
+  if (!fechaStr) return null;
+  const m = String(fechaStr).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return new Date(`${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`);
+  const d = new Date(fechaStr);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+// Abre el lightbox con botones de navegación prev/next (Tarea 4).
+function openLightbox(url) {
+  const lb = document.getElementById('lightbox');
+  document.getElementById('lightbox-img').src = url;
+
+  // Crear botones de navegación la primera vez (lazy, dentro del lightbox div)
+  let btnPrev = document.getElementById('lb-nav-prev');
+  let btnNext = document.getElementById('lb-nav-next');
+  if (!btnPrev) {
+    const NAV_STYLE = 'position:absolute;top:50%;transform:translateY(-50%);background:rgba(0,0,0,0.55);border:none;border-radius:50%;width:48px;height:48px;color:#fff;font-size:32px;cursor:pointer;z-index:1000001;display:flex;align-items:center;justify-content:center;line-height:1;transition:background 0.15s;';
+    btnPrev = document.createElement('button');
+    btnPrev.id = 'lb-nav-prev';
+    btnPrev.setAttribute('aria-label', 'Factura anterior');
+    btnPrev.style.cssText = NAV_STYLE + 'left:16px;';
+    btnPrev.textContent = '‹';
+    btnPrev.addEventListener('click', (e) => { e.stopPropagation(); navigateLightbox(window._empFacturaIdx - 1); });
+    lb.appendChild(btnPrev);
+    btnNext = document.createElement('button');
+    btnNext.id = 'lb-nav-next';
+    btnNext.setAttribute('aria-label', 'Factura siguiente');
+    btnNext.style.cssText = NAV_STYLE + 'right:16px;';
+    btnNext.textContent = '›';
+    btnNext.addEventListener('click', (e) => { e.stopPropagation(); navigateLightbox(window._empFacturaIdx + 1); });
+    lb.appendChild(btnNext);
+  }
+  const facturas = window._empFacturasActuales;
+  const hasNav = facturas && facturas.length > 1;
+  btnPrev.style.display = hasNav && window._empFacturaIdx > 0 ? 'flex' : 'none';
+  btnNext.style.display = hasNav && window._empFacturaIdx < facturas.length - 1 ? 'flex' : 'none';
+
+  lb.style.display = 'flex';
+}
+
+// Navega al índice newIdx de la galería activa, cargando la imagen si no estaba aún.
+async function navigateLightbox(newIdx) {
+  const facturas = window._empFacturasActuales;
+  if (!facturas || newIdx < 0 || newIdx >= facturas.length) return;
+  window._empFacturaIdx = newIdx;
+  const entry = facturas[newIdx];
+  if (entry.url !== null) {
+    openLightbox(entry.url);
+    return;
+  }
+  // Carga bajo demanda si el lazy-load aún no ha disparado para esta tarjeta
+  try {
+    const ir = await authFetch(`${API_URL}/admin/facturas/${entry.id}/imagen`);
+    if (!ir.ok) throw new Error('sin imagen');
+    const blob = await ir.blob();
+    const url  = URL.createObjectURL(blob);
+    entry.url  = url;
+    openLightbox(url);
+  } catch {
+    /* no-op: imagen no disponible en esta factura */
+  }
+}
+
 // Ver facturas de una empresa → modal con galería de imágenes
 window._empVerFacturas = async function(id, cif, nombre) {
   const modal = document.getElementById('facemp-modal');
@@ -891,6 +758,10 @@ window._empVerFacturas = async function(id, cif, nombre) {
   const loading = document.getElementById('facemp-loading');
   const empty   = document.getElementById('facemp-empty');
   const countEl = document.getElementById('facemp-count');
+
+  // Reiniciar estado de navegación entre facturas (Tarea 4)
+  window._empFacturasActuales = [];
+  window._empFacturaIdx = 0;
 
   document.getElementById('facemp-title').textContent = `Facturas de "${nombre}"`;
   countEl.textContent = '';
@@ -911,17 +782,29 @@ window._empVerFacturas = async function(id, cif, nombre) {
 
     countEl.textContent = `${facturas.length} factura${facturas.length !== 1 ? 's' : ''}`;
 
-    facturas.forEach(f => {
+    // Poblar array de navegación con URLs null (se rellenan al lazy-load)
+    facturas.forEach(f => { window._empFacturasActuales.push({ id: f.id, url: null }); });
+
+    facturas.forEach((f, idx) => {
       const card = document.createElement('div');
       card.className = 'facemp-card';
 
-      const fecha = f.fecha_emision
-        ? new Date(f.fecha_emision + 'T00:00:00').toLocaleDateString('es-ES')
-        : (f.uploaded_at ? new Date(f.uploaded_at).toLocaleDateString('es-ES') : '—');
-      const contraparte = escHtml(f.display_contraparte || f.proveedor_nombre || '—');
-      const total = f.total_factura
-        ? parseFloat(String(f.total_factura).replace(/\./g, '').replace(',', '.')).toLocaleString('es-ES', { minimumFractionDigits: 2 }) + ' €'
+      // Tarea 1: parsear fecha ES (DD/MM/YYYY) sin producir "Invalid Date"
+      const fechaObj = parseFechaEs(f.fecha_emision)
+        || (f.uploaded_at ? new Date(f.uploaded_at) : null);
+      const fecha = fechaObj ? fechaObj.toLocaleDateString('es-ES') : '—';
+
+      // Tarea 2: nombre del proveedor confirmado por humano (proveedor_nombre), no OCR raw
+      const cardNombre = escHtml(f.proveedor_nombre || f.display_nombre || '—');
+
+      // Tarea 3: importe con mínimos y máximos de 2 decimales
+      const totalNum = parseFloat(f.total_factura);
+      const total = f.total_factura != null && !isNaN(totalNum)
+        ? totalNum.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €'
         : '—';
+
+      // Tarea 6: botón OCR solo visible para tech admins
+      const showOcr = window._isTechAdmin === true;
 
       card.innerHTML = `
         <div class="facemp-img-wrap" data-id="${f.id}">
@@ -930,12 +813,22 @@ window._empVerFacturas = async function(id, cif, nombre) {
         </div>
         <div class="facemp-info">
           <span class="facemp-fecha">📅 ${fecha}</span>
-          <span class="facemp-proveedor" title="${contraparte}">${contraparte}</span>
+          <span class="facemp-proveedor" title="${cardNombre}">${cardNombre}</span>
           <span class="facemp-total">${total}</span>
+          ${showOcr ? '<button class="facemp-ocr-btn" title="Ver comparador OCR vs Humano" style="margin-top:4px;font-size:11px;padding:2px 8px;background:#4a5568;color:#fff;border:none;border-radius:4px;cursor:pointer;">&#9881; OCR</button>' : ''}
         </div>`;
       grid.appendChild(card);
 
-      // Lazy-load con IntersectionObserver
+      // Tarea 6: click handler del botón OCR (sin onclick inline — CSP-safe)
+      if (showOcr) {
+        card.querySelector('.facemp-ocr-btn').addEventListener('click', (e) => {
+          e.stopPropagation();
+          openOcrModal(f.id);
+        });
+      }
+
+      // Lazy-load con IntersectionObserver (Tarea 4: rellena navEntry.url al cargar)
+      const navEntry = window._empFacturasActuales[idx];
       const wrap = card.querySelector('.facemp-img-wrap');
       const img  = card.querySelector('.facemp-img');
       const ph   = card.querySelector('.facemp-placeholder');
@@ -947,20 +840,14 @@ window._empVerFacturas = async function(id, cif, nombre) {
           if (!ir.ok) throw new Error('sin imagen');
           const blob = await ir.blob();
           const url  = URL.createObjectURL(blob);
-          const isPdf = (blob.type || '').toLowerCase().includes('pdf');
-          if (isPdf) {
-            // Los PDFs no se pueden previsualizar dentro de <img>: mostramos icono PDF
-            // clicable en la tarjeta y, al pulsar, abrimos el lightbox con PDF.js.
-            ph.textContent = '📄 PDF';
-            ph.style.cursor = 'pointer';
-            ph.title = 'Abrir PDF';
-            ph.onclick = () => openLightbox(url, true);
-          } else {
-            img.src = url;
-            img.style.display = 'block';
-            ph.style.display  = 'none';
-            img.onclick = () => openLightbox(url, false);
-          }
+          navEntry.url = url;
+          img.src = url;
+          img.style.display = 'block';
+          ph.style.display  = 'none';
+          img.onclick = () => {
+            window._empFacturaIdx = idx;
+            openLightbox(url);
+          };
         } catch {
           ph.textContent = '📄';
           ph.title = 'Imagen no disponible';
@@ -1176,15 +1063,15 @@ function initEmpresaModal() {
     if (e.target === document.getElementById('facemp-modal')) document.getElementById('facemp-modal').style.display = 'none';
   });
 
-  // Lightbox: cerrar al hacer click sobre el fondo (limpia también el iframe PDF)
+  // Lightbox: cerrar al hacer click sobre el fondo
   document.getElementById('lightbox').addEventListener('click', () => {
-    closeLightbox();
+    document.getElementById('lightbox').style.display = 'none';
   });
 
   // Cerrar con Escape
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-      closeLightbox();
+      document.getElementById('lightbox').style.display = 'none';
       document.getElementById('facemp-modal').style.display = 'none';
     }
   });
@@ -1421,15 +1308,19 @@ function launchApp(authData) {
   document.getElementById('app').style.display = 'block';
   document.getElementById('user-email').textContent = (Auth.getUser() || {}).email || '';
 
+  // Tarea 5: persistir is_tech_admin a través de refresh de sesión.
+  // doLogin lo setea ya si el login ocurrió en esta pestaña; aquí lo garantizamos
+  // también para la ruta de auto-login vía Auth.init() (refresh de sesión).
+  if (!('_isTechAdmin' in window)) {
+    const userEmail = (Auth.getUser() || {}).email || '';
+    window._isTechAdmin = authData.is_tech_admin === true
+      || userEmail === 'juliohesuni@gmail.com';
+  }
+
   const select = document.getElementById('f-usuario');
   (authData.usuarios || []).forEach(u => {
     const opt = document.createElement('option');
-    // 2026-07-05: mostrar el NOMBRE DE EMPRESA del usuario (registrado en
-    // client_companies > declarado en users) — email solo como fallback si
-    // el usuario no tiene empresa asignada. El value sigue siendo user_id.
-    opt.value = u.id;
-    opt.textContent = u.company_nombre_registrado || u.company_name || u.email;
-    select.appendChild(opt);
+    opt.value = u.id; opt.textContent = u.email; select.appendChild(opt);
   });
 
   initTabs();
@@ -1438,6 +1329,7 @@ function launchApp(authData) {
   initRenameModal();
   initEmpresaModal();
   initDesgloseModal();
+  initOcrModal();
   loadData();
 
   document.getElementById('btn-filtrar').addEventListener('click', () => { currentFilters = getFilters(); loadData(currentFilters); });
@@ -1483,7 +1375,8 @@ function launchApp(authData) {
     // Borrar cookie httpOnly admin en el servidor (JS no puede borrarla directamente)
     try { await fetch(`${API_URL}/auth/logout`, { method: 'POST', headers: { 'X-Requested-With': 'XMLHttpRequest' } }); } catch {}
     localStorage.removeItem('token');
-    window.location.href = '/admin-login.html';
+    document.getElementById('app').style.display = 'none';
+    showLogin();
   });
   document.getElementById('f-proveedor').addEventListener('keydown', e => {
     if (e.key === 'Enter') { currentFilters = getFilters(); loadData(currentFilters); }
@@ -1627,8 +1520,8 @@ window._linkToCompany = async function(targetId, targetNombre) {
 };
 
 async function init() {
-  // Callback cross-tab: si se cierra sesión en otra pestaña → redirigir al login admin
-  window.__authOnLogout = () => { window.location.href = '/admin-login.html'; };
+  // Callback cross-tab: si se cierra sesión en otra pestaña → redirigir al login
+  window.__authOnLogout = () => { window.location.href = '/?next=admin'; };
 
   const ok = await Auth.init();
   if (ok && Auth.isLoggedIn()) {
@@ -1647,8 +1540,8 @@ async function init() {
       await Auth.logout().catch(() => {});
     }
   }
-  // Sin sesión válida o sin permisos: redirigir al login dedicado de admin.
-  window.location.href = '/admin-login.html';
+  // Sin sesión válida o sin permisos: redirigir al login principal con intención admin.
+  window.location.href = '/?next=admin';
 }
 
 // ── Multi-IVA 2026-04-21 parte 4/7 — Modal desglose admin ────────────────────
@@ -2055,6 +1948,101 @@ function initDesgloseModal() {
   if (cancelBtn) cancelBtn.addEventListener('click', closeDesgloseModal);
   if (saveBtn)   saveBtn.addEventListener('click', saveDesglose);
   if (modal)     modal.addEventListener('click', (e) => { if (e.target === modal) closeDesgloseModal(); });
+}
+
+// ── Vista OCR / Comparador IA vs Humano (solo tech admins) — Tarea 6 ──────────
+
+function fmtOcrImporte(v) {
+  if (v == null || v === '') return '—';
+  const n = parseFloat(String(v).replace(',', '.'));
+  if (isNaN(n)) return escHtml(String(v));
+  return n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+}
+
+async function openOcrModal(facturaId) {
+  const modal = document.getElementById('ocr-modal');
+  const body  = document.getElementById('ocr-modal-body');
+  document.getElementById('ocr-modal-title').textContent = `Vista OCR — Factura #${facturaId}`;
+  body.innerHTML = '<p style="color:#718096;text-align:center;padding:30px 0;">Cargando datos OCR...</p>';
+  modal.style.display = 'flex';
+
+  try {
+    const res = await authFetch(`${API_URL}/admin/facturas/${facturaId}/ocr-detail`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const d = await res.json();
+
+    const confirmed = d.confirmed || {};
+    const raw       = d.ocr_raw   || {};
+    const meta      = d.meta      || {};
+
+    const CAMPOS = [
+      { label: 'NIF proveedor',   key: 'proveedor_nif' },
+      { label: 'Total',           key: 'total_factura',   fmt: fmtOcrImporte },
+      { label: 'Base imponible',  key: 'base_imponible',  fmt: fmtOcrImporte },
+      { label: 'IVA %',           key: 'iva_porcentaje',  fmt: v => v != null ? escHtml(String(v)) + ' %' : '—' },
+      { label: 'Cuota IVA',       key: 'cuota_iva',       fmt: fmtOcrImporte },
+      { label: 'IRPF %',          key: 'irpf_porcentaje', fmt: v => v != null ? escHtml(String(v)) + ' %' : '—' },
+      { label: 'Número factura',  key: 'numero_factura' },
+      { label: 'Fecha emisión',   key: 'fecha_emision' },
+    ];
+
+    const rows = CAMPOS.map(c => {
+      const fmt = c.fmt || (v => v != null && v !== '' ? escHtml(String(v)) : '—');
+      const vRaw  = raw[c.key];
+      const vConf = confirmed[c.key];
+      const igual = vRaw != null && vConf != null
+        && String(vRaw).trim() === String(vConf).trim();
+      const badge = (vRaw == null || vConf == null)
+        ? '<span style="color:#a0aec0;font-size:14px;">—</span>'
+        : igual
+          ? '<span style="color:#276749;font-weight:700;font-size:14px;">&#10003;&#10003;</span>'
+          : '<span style="color:#9b2335;font-weight:700;font-size:14px;">&#10007;</span>';
+      const rowBg = (vRaw != null && vConf != null && !igual) ? 'background:#fff5f5;' : '';
+      return `<tr style="${rowBg}">
+        <td style="padding:7px 10px;font-weight:600;color:#2d3748;white-space:nowrap;">${escHtml(c.label)}</td>
+        <td style="padding:7px 10px;font-family:monospace;font-size:13px;">${fmt(vRaw)}</td>
+        <td style="padding:7px 10px;font-family:monospace;font-size:13px;">${fmt(vConf)}</td>
+        <td style="padding:7px 10px;text-align:center;">${badge}</td>
+      </tr>`;
+    }).join('');
+
+    const dualConf   = meta.dual_confirmed    ? '&#10003; Sí' : '&#10007; No';
+    const confidence = escHtml(meta.confidence_level || '—');
+    const ivaOk      = meta.iva_validation_ok ? '&#10003; Sí' : '&#10007; No';
+
+    body.innerHTML = `
+      <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:14px;">
+        <thead>
+          <tr style="background:#f7fafc;border-bottom:2px solid #e2e8f0;">
+            <th style="padding:8px 10px;text-align:left;color:#4a5568;font-weight:600;">Campo</th>
+            <th style="padding:8px 10px;text-align:left;color:#4a5568;font-weight:600;">IA (OCR raw)</th>
+            <th style="padding:8px 10px;text-align:left;color:#4a5568;font-weight:600;">Confirmado humano</th>
+            <th style="padding:8px 10px;text-align:center;color:#4a5568;font-weight:600;">Coinciden?</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div style="display:flex;gap:20px;flex-wrap:wrap;font-size:13px;padding:10px 12px;background:#f7fafc;border:1px solid #e2e8f0;border-radius:6px;">
+        <span><strong>Dual confirmado:</strong> <span style="font-family:monospace;">${dualConf}</span></span>
+        <span><strong>Confianza:</strong> <span style="font-family:monospace;">${confidence}</span></span>
+        <span><strong>IVA válido:</strong> <span style="font-family:monospace;">${ivaOk}</span></span>
+      </div>`;
+  } catch (err) {
+    body.innerHTML = `<p style="color:#9b2335;padding:20px 0;text-align:center;">Error al cargar datos OCR: ${escHtml(err.message)}</p>`;
+  }
+}
+
+function closeOcrModal() {
+  const m = document.getElementById('ocr-modal');
+  if (m) m.style.display = 'none';
+}
+
+function initOcrModal() {
+  const modal    = document.getElementById('ocr-modal');
+  const closeBtn = document.getElementById('ocr-modal-close');
+  if (!modal || !closeBtn) return; // el modal solo existe en el HTML para esta sesión
+  closeBtn.addEventListener('click', closeOcrModal);
+  modal.addEventListener('click', (e) => { if (e.target === modal) closeOcrModal(); });
 }
 
 document.addEventListener('DOMContentLoaded', init);

@@ -10,9 +10,25 @@
 </head>
 <body>
 
-  <!-- El login del panel vive en /admin-login.html (2026-07-05). El formulario
-       que había aquí era código muerto: nginx bloquea este HTML sin cookie
-       admin, así que jamás llegaba a mostrarse. -->
+  <div id="login-screen" style="display:none;">
+    <div class="login-card">
+      <div class="login-logo"><span class="se">SE</span><span class="tex">TEX</span></div>
+      <h1 class="login-title">Panel de Administración</h1>
+      <p class="login-subtitle">Acceso exclusivo para administradores</p>
+      <form id="login-form" autocomplete="on">
+        <div class="login-field">
+          <label for="login-email">Correo electrónico</label>
+          <input type="email" id="login-email" name="email" placeholder="tu@email.com" required autocomplete="email">
+        </div>
+        <div class="login-field">
+          <label for="login-password">Contraseña</label>
+          <input type="password" id="login-password" name="password" placeholder="••••••••" required autocomplete="current-password">
+        </div>
+        <p id="login-error" class="login-error" style="display:none;"></p>
+        <button type="submit" id="login-btn" class="login-btn">Entrar</button>
+      </form>
+    </div>
+  </div>
 
   <div id="app" style="display:none;">
 
@@ -208,10 +224,6 @@
       <div class="modal-body">
         <label id="edit-field-label" class="edit-label"></label>
         <input type="text" id="edit-field-input" class="edit-input">
-        <select id="edit-field-select" class="edit-input" style="display:none;">
-          <option value="compra">Compra (factura recibida)</option>
-          <option value="venta">Venta (factura emitida)</option>
-        </select>
         <p id="edit-error" class="edit-error" style="display:none;"></p>
       </div>
       <div class="modal-footer">
@@ -241,9 +253,21 @@
     </div>
   </div>
 
+  <!-- Modal: Vista OCR / Comparador IA vs Humano (solo tech admins) — Tarea 6 -->
+  <div id="ocr-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-card" style="width:min(860px,96vw);max-height:90vh;overflow-y:auto;">
+      <div class="modal-header">
+        <h3 id="ocr-modal-title">Vista OCR — Comparador IA vs Humano</h3>
+        <button id="ocr-modal-close" class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body" id="ocr-modal-body" style="padding:16px 20px;">
+        <p style="color:#718096;text-align:center;">Cargando...</p>
+      </div>
+    </div>
+  </div>
+
   <script src="tabulator.min.js"></script>
-  <script src="pdf.min.js?v=3.11.174"></script>
-  <script src="auth.js?v=20260705-001"></script>
-  <script src="admin-facturas.js?v=20260705-001"></script>
+  <script src="auth.js?v=20260414-003"></script>
+  <script src="admin-facturas.js?v=20260707-001"></script>
 </body>
 </html>

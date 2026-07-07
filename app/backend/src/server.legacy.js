@@ -781,8 +781,8 @@ app.post('/api/admin/refresh-session', authenticateToken, requireAdmin, (req, re
     maxAge: 8 * 60 * 60 * 1000,
     path: '/',
   });
-  logger.info(`[AdminSession] Cookie admin renovada para userId=${req.user.userId}`);
-  res.json({ success: true });
+  logger.info(`[AdminSession] Cookie admin renovada para userId=${req.user.userId} email=${req.user.email}`);
+  res.json({ success: true, is_tech_admin: isTechAdmin(req.user.email) });
 });
 
 // POST /api/auth/refresh — rota el Refresh Token y emite nuevo Access Token.
@@ -1151,7 +1151,10 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     auditLog('LOGIN_SUCCESS', { email, remember_me: rememberMe }, user.id, req.ip);
 
     // Responder con AT. El RT viaja en cookie, no en el body.
-    res.json({ accessToken, expiresIn: 900, user: { id: user.id, email: user.email } });
+    // is_tech_admin solo se incluye para admins (campo irrelevante para usuarios normales).
+    const loginResponse = { accessToken, expiresIn: 900, user: { id: user.id, email: user.email } };
+    if (user.is_admin === true) loginResponse.is_tech_admin = isTechAdmin(user.email);
+    res.json(loginResponse);
   } catch (err) {
     logger.error('Login error:', err);
     res.status(500).json({ error: 'Error al iniciar sesión' });
@@ -2528,6 +2531,74 @@ app.get('/api/admin/facturas/:id/imagen', authenticateToken, requireAdmin, async
   }
 });
 
+// GET /api/admin/facturas/:id/ocr-detail — datos OCR raw vs confirmados (solo tech_admin).
+// Permite comparar lo que leyó la IA con lo que el humano confirmó, usando
+// uploads.ocr_result JSONB que guarda la lectura original antes de la revisión.
+app.get('/api/admin/facturas/:id/ocr-detail', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const cfg         = getConfig();
+    const techAdmins  = (cfg.tech_admin_emails || []).map(e => e.toLowerCase());
+    const reqEmail    = (req.user.email || '').toLowerCase();
+    if (!techAdmins.includes(reqEmail)) {
+      return res.status(403).json({ error: 'Requiere rol tech_admin' });
+    }
+
+    const id  = parseInt(req.params.id, 10);
+    if (!id || isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
+
+    const result = await pool.query(`
+      SELECT
+        id, proveedor_nif, proveedor_nombre, receptor_nif, receptor_nombre,
+        numero_factura, fecha_emision, total_factura, base_imponible,
+        iva_porcentaje, cuota_iva, irpf_porcentaje, cuota_irpf, lineas_iva,
+        invoice_type, uploaded_at, procesado_en,
+        ocr_result,
+        confidence_level,
+        iva_validation_ok, iva_warnings
+      FROM uploads WHERE id = $1
+    `, [id]);
+
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Factura no encontrada' });
+
+    const row = result.rows[0];
+    const ocr = row.ocr_result || {};
+
+    res.json({
+      confirmed: {
+        proveedor_nif:    row.proveedor_nif,
+        proveedor_nombre: row.proveedor_nombre,
+        receptor_nif:     row.receptor_nif,
+        receptor_nombre:  row.receptor_nombre,
+        numero_factura:   row.numero_factura,
+        fecha_emision:    row.fecha_emision,
+        total_factura:    row.total_factura,
+        base_imponible:   row.base_imponible,
+        iva_porcentaje:   row.iva_porcentaje,
+        cuota_iva:        row.cuota_iva,
+        irpf_porcentaje:  row.irpf_porcentaje,
+        cuota_irpf:       row.cuota_irpf,
+        lineas_iva:       row.lineas_iva,
+      },
+      ocr_raw:  ocr.merged  || null,
+      motors: {
+        openai:       ocr.openai       || null,
+        azure:        ocr.azure        || null,
+        gemini_flash: ocr.gemini_flash || null,
+      },
+      meta: {
+        dual_confirmed:   ocr.dual_confirmed   ?? null,
+        confidence_level: row.confidence_level || ocr.confidence_level || null,
+        iva_validation_ok: row.iva_validation_ok ?? null,
+        iva_warnings:      row.iva_warnings      || [],
+        ocr_engine:        ocr.ocr_engine        || null,
+      },
+    });
+  } catch (err) {
+    logger.error('[ocr-detail] Error:', err.message);
+    res.status(500).json({ error: 'Error al obtener detalle OCR' });
+  }
+});
+
 // GET /api/mis-facturas/export.xlsx — exportar todas las facturas del usuario como Excel
 app.get('/api/mis-facturas/export.xlsx', authenticateToken, requireActiveCompany, async (req, res) => {
   try {
@@ -2863,6 +2934,15 @@ function requireTech(req, res, next) {
     return res.status(403).json({ error: 'Acceso restringido a soporte técnico' });
   }
   next();
+}
+
+// Devuelve true si el email está en tech_admin_emails de features.json. Fail-closed.
+function isTechAdmin(email) {
+  try {
+    const cfg = JSON.parse(fsSync.readFileSync(FEATURES_PATH, 'utf8'));
+    const list = cfg.tech_admin_emails || [];
+    return list.map(e => e.toLowerCase()).includes((email || '').toLowerCase());
+  } catch { return false; }
 }
 
 // ── APPROVAL FLOW HELPERS ────────────────────────────────────────────────────────────────────
