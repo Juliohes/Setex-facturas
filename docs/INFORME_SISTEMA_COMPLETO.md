@@ -3256,6 +3256,16 @@ Añade esta línea (backup cada día a las 3:00 AM):
 - Model ID confirmado: `gemini-3-flash` (alias del bench) = `gemini-3.5-flash` (ID real API); `gemini-3-flash` devuelve 404.
 - OpenAI sigue disponible como motor único (`ocr_mode: "openai"`) o puede reactivarse cambiando features.json sin rebuild.
 
+### 2026-07-07 — Gemini Flash motor CIF completo + panel tech admin OCR comparador
+- `ocr/gemini.js`: añadidas `extractCIFOnly` (zona superior 65%) y `extractReceptorCIFOnly` (zona inferior 60%) con recorte sharp y schema CIF_ONLY_SCHEMA; motor preferido para todas las extracciones CIF.
+- `ocr/index.js`: `_secondPassReceptorIfNeeded` y `extractCIFOnlyOCR` migrados a Gemini Flash con fallback a OpenAI; label en `receptor_nif_source` refleja el motor usado.
+- `scripts/smoke-test-ocr.js`: `testGeminiFlash()` añadido; skip automático si secret ausente (entorno legacy); verificado 5/5 motores OK (2026-07-07 10:45).
+- `config/features.json` (staging): `tech_admin_emails: ["juliohesuni@gmail.com"]` para diferenciación sin migración de BD.
+- `server.legacy.js`: `isTechAdmin()` helper; `is_tech_admin` en respuesta de login y refresh-session; nuevo endpoint `GET /api/admin/facturas/:id/ocr-detail` (403 si no es tech_admin) devuelve `confirmed`/`ocr_raw`/`motors`/`meta`.
+- `admin-facturas.js`: `parseFechaEs()` fix Invalid Date DD/MM/YYYY; nombre/importe desde campos confirmados; navegación prev/next en lightbox; botón ⚙ OCR + modal comparador IA vs Humano (solo tech admins); captura `is_tech_admin` en login y launchApp.
+- `admin-facturas.html`: `<div id="ocr-modal">` + cache-buster `?v=20260707-001`.
+- PR #124 abierto contra `develop`; pendiente rebuild staging (stop + up -d) con OK de Julio.
+
 ---
 
 *SETEX Captura Facturas · setex-facturas.es*
