@@ -3273,6 +3273,26 @@ Añade esta línea (backup cada día a las 3:00 AM):
 - `admin-facturas.js`: modal OCR ampliado con NIF/nombre receptor, cuota IRPF, tramos IVA multi-línea, banda motor OCR.
 - Suite tests backend: 83/83 passing tras los cambios.
 
+### 2026-07-07 — Fix filtro admin + corrección HTTP 500 en ocr-detail + PRs #125 #126
+
+**PR #125 (filtro admin):**
+- `server.legacy.js`: SQL de `/api/admin/facturas/usuarios` con `AND EXISTS (SELECT 1 FROM uploads WHERE uploads.user_id = us.id)` para mostrar solo usuarios con facturas subidas.
+- `server.legacy.js`: excluidos de la lista todos los emails de `tech_admin_emails` (`soporte@autoken.es`, `juliohesuni@gmail.com`) — Autoken no aparece en el filtro de clientes.
+- `admin-facturas.html`: eliminado filtro "Proveedor / CIF" (`#f-proveedor`); filtro "Usuario" renombrado a "Usuario (CIF) Específico".
+- `admin-facturas.js`: lightbox Escape cierra primero el lightbox y luego la galería (corregía regresión donde ambos se cerraban a la vez); añadido botón `#lb-close` (×) en lightbox; `opt.textContent` usa `company_nombre_registrado || company_name || email`.
+- `prod/app/backend/src/server.js`: mismo parche del filtro de usuarios aplicado quirúrgicamente (rebuild + restart prod).
+- `prod/app/frontend/`: frontend rebuildeado y actualizado con cache-buster `?v=20260707-003`.
+
+**PR #126 (filtro + exclusión soporte@autoken.es):**
+- `server.legacy.js`: `soporte@autoken.es` añadido a exclusión explícita en el filtro de usuarios.
+- `admin-facturas.html`: cache-buster `?v=20260707-003`.
+- `admin-facturas.js`: pequeñas correcciones de consistencia en limpieza de filtros.
+- `config/features.json` (staging): `tech_admin_emails` incluye `soporte@autoken.es`.
+
+**Hotfix HTTP 500 en `GET /api/admin/facturas/:id/ocr-detail`:**
+- `prod/app/backend/src/server.js`: SQL del endpoint usaba nombres de columna incorrectos (`nif_proveedor`, `nombre_proveedor`, `porcentaje_iva`, `porcentaje_irpf`, `ocr_engine`) que no existen en la tabla `uploads`. Corregidos a `proveedor_nif`, `proveedor_nombre`, `iva_porcentaje`, `irpf_porcentaje`; eliminada referencia a `ocr_engine` (columna inexistente — se lee del JSONB `ocr_result`). Rebuild + restart prod.
+- `server.legacy.js` en staging tenía los nombres correctos desde el origen; no requería cambio.
+
 ---
 
 *SETEX Captura Facturas · setex-facturas.es*
