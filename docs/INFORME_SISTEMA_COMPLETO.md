@@ -3293,6 +3293,15 @@ Añade esta línea (backup cada día a las 3:00 AM):
 - `prod/app/backend/src/server.js`: SQL del endpoint usaba nombres de columna incorrectos (`nif_proveedor`, `nombre_proveedor`, `porcentaje_iva`, `porcentaje_irpf`, `ocr_engine`) que no existen en la tabla `uploads`. Corregidos a `proveedor_nif`, `proveedor_nombre`, `iva_porcentaje`, `irpf_porcentaje`; eliminada referencia a `ocr_engine` (columna inexistente — se lee del JSONB `ocr_result`). Rebuild + restart prod.
 - `server.legacy.js` en staging tenía los nombres correctos desde el origen; no requería cambio.
 
+### 2026-07-07 — Aprendizaje IA proveedores + atribución por campo + fix Tramos IVA
+
+- `ocr/index.js`: `buildCampoSources()` — después del merge dual, calcula qué motor (openai/azure/gemini/consensus/calculated) aportó cada campo; resultado en `campo_sources` devuelto junto con `campos`.
+- `server.legacy.js` (staging) + `server.js` (prod): migraciones `known_cifs.proveedor_nombre` (aprendizaje nombre canónico) y `uploads.ocr_engine` (columna propia desde JSONB); backfill `ocr_engine` desde registros existentes; upsert de `known_cifs` ahora guarda `finalProveedorNombre`; lookup NIF→nombre usa `COALESCE(kc.proveedor_nombre, cc.proveedor_nombre)` — ya no depende de `company_catalog` vacío; `previewData` y `ocrResultJson` incluyen `campo_sources` y `ocr_engine`; endpoint `ocr-detail` devuelve `campo_sources` y usa `row.ocr_engine` de la columna.
+- `admin-facturas.js`: `normLineasCmp()` normaliza lineas_iva excluyendo `productos` para eliminar falso positivo de no-coincidencia; badges de color por motor en columna "IA (OCR raw)" del modal OCR; normalización `total_factura/total` en el raw.
+- `admin-facturas.html`: cache-buster `?v=20260707-004`.
+- BD prod y staging: migraciones aplicadas directamente vía psql (idempotentes).
+- PR #128 abierto contra `develop`.
+
 ---
 
 *SETEX Captura Facturas · setex-facturas.es*
