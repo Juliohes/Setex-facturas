@@ -3477,6 +3477,7 @@ app.get('/api/admin/facturas/usuarios', authenticateToken, requireAdmin, async (
       LEFT JOIN client_companies cc
         ON UPPER(REPLACE(us.company_nif, ' ', '')) = UPPER(REPLACE(cc.cif, ' ', ''))
       WHERE us.is_test IS NOT TRUE
+        AND EXISTS (SELECT 1 FROM uploads WHERE uploads.user_id = us.id)
       ORDER BY COALESCE(cc.nombre, us.company_name, us.email)`);
     const cfg = JSON.parse(fsSync.readFileSync(FEATURES_PATH, 'utf8'));
     const techEmails = (cfg.tech_admin_emails || []).map(e => e.toLowerCase());
