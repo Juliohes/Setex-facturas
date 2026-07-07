@@ -4,17 +4,18 @@
 // Cuando discrepan → reconciliación con dígito de control + lectura enfocada CIF como árbitro.
 //
 // MOTORES:
-//   "openai"       — GPT-4.1 Vision (primario, activo siempre)
+//   "openai"       — GPT-4.1 Vision (primario legacy)
 //   "azure"        — Azure DI prebuilt-invoice (primario, sin alucinaciones, $0.0015/factura)
 //   "mistral"      — Mistral OCR 4 (extra; annotations JSON, ~$0.004/factura)
-//   "gemini_flash" — Google Gemini 3.5 Flash (extra; ESTABLE, ~$0.006/factura)
+//   "gemini_flash" — Google Gemini 3.5 Flash (primario RECOMENDADO o extra; ESTABLE, ~$0.006/fac.)
 //   "gemini_pro"   — Google Gemini 3.1 Pro (extra; PREVIEW, ~$0.01/factura)
 //
 // MODO (features.json → ocr_mode):
-//   "dual"    — OpenAI + Azure en paralelo (DEFECTO)
-//   "triple"  — dual + Mistral (votación 2-de-3 en importes)
-//   "multi"   — dual + extras de features.json ocr_multi_engines
-//               (default ["mistral","gemini_flash","gemini_pro"])
+//   "gemini_azure" — Gemini 3.5 Flash + Azure en paralelo (RECOMENDADO — bench 2026-07-07)
+//   "dual"         — OpenAI + Azure en paralelo (legacy)
+//   "triple"       — dual + Mistral (votación 2-de-3 en importes)
+//   "multi"        — dual + extras de features.json ocr_multi_engines
+//                    (default ["mistral","gemini_flash","gemini_pro"])
 //   "openai" | "azure" | "mistral" | "gemini_flash" | "gemini_pro" — motor único
 //
 // Los IDs de modelo Gemini son configurables en caliente (features.json →
@@ -237,10 +238,14 @@ function reconcileMultiIvaAggregates(campos, logger) {
 
 // ─── Comparador y fusionador de resultados multi-motor ────────────────────────
 
-function compareOCRResults(openaiRes, azureRes, extraResults, logger) {
+// labelA / labelB identifican los dos motores primarios en logs y en el campo
+// ocr_engine del resultado. Por defecto 'openai'/'azure' (modo dual/triple/multi).
+// En modo gemini_azure: labelA='gemini_flash', labelB='azure'.
+function compareOCRResults(openaiRes, azureRes, extraResults, logger, labelA = 'openai', labelB = 'azure') {
   // extraResults: array [{ name, res }] de motores extra vivos (mistral,
   // gemini_flash, gemini_pro…), en orden de configuración.
   const extras = (extraResults || []).filter(x => x && x.res);
+  const dualLabel = `dual_${labelA}_${labelB}`;
 
   // Si un motor primario falló y hay extras válidos, el PRIMER extra válido
   // ocupa su hueco: el flujo dual sigue funcionando con dos fuentes reales
@@ -253,25 +258,25 @@ function compareOCRResults(openaiRes, azureRes, extraResults, logger) {
     return promoted.res;
   };
   if (!openaiRes || openaiRes.es_factura_valida === false) {
-    const p = promoteExtra('OpenAI');
+    const p = promoteExtra(labelA);
     if (p) openaiRes = p;
   }
   if (!azureRes || azureRes.es_factura_valida === false) {
-    const p = promoteExtra('Azure');
+    const p = promoteExtra(labelB);
     if (p) azureRes = p;
   }
 
   if (!openaiRes && !azureRes) return null;
 
   if (!openaiRes || openaiRes.es_factura_valida === false) {
-    logger.info('[DualOCR] Solo Azure produjo resultado válido');
-    const single = { ...azureRes, dual_confirmed: false, missing_engine: 'openai', ocr_engine: 'dual_openai_azure' };
+    logger.info(`[DualOCR] Solo ${labelB} produjo resultado válido`);
+    const single = { ...azureRes, dual_confirmed: false, missing_engine: labelA, ocr_engine: dualLabel };
     if (single.campos) reconcileMultiIvaAggregates(single.campos, logger);
     return single;
   }
   if (!azureRes || azureRes.es_factura_valida === false) {
-    logger.info('[DualOCR] Solo OpenAI produjo resultado válido');
-    const single = { ...openaiRes, dual_confirmed: false, missing_engine: 'azure', ocr_engine: 'dual_openai_azure' };
+    logger.info(`[DualOCR] Solo ${labelA} produjo resultado válido`);
+    const single = { ...openaiRes, dual_confirmed: false, missing_engine: labelB, ocr_engine: dualLabel };
     if (single.campos) reconcileMultiIvaAggregates(single.campos, logger);
     return single;
   }
@@ -297,8 +302,8 @@ function compareOCRResults(openaiRes, azureRes, extraResults, logger) {
   // dual_confirmed solo es true cuando NIF está CONFIRMADO por ambos motores (not single_source ni both_missing)
   const dual_confirmed = nifStatus === 'confirmed' && totalAgree && fechaAgree;
 
-  if (nifStatus === 'conflict')      logger.warn(`[DualOCR] NIF discrepancia: OpenAI="${oNif}" Azure="${aNif}"`);
-  if (nifStatus === 'single_source') logger.info(`[DualOCR] NIF fuente única: OpenAI="${oNif || '—'}" Azure="${aNif || '—'}"`);
+  if (nifStatus === 'conflict')      logger.warn(`[DualOCR] NIF discrepancia: ${labelA}="${oNif}" ${labelB}="${aNif}"`);
+  if (nifStatus === 'single_source') logger.info(`[DualOCR] NIF fuente única: ${labelA}="${oNif || '—'}" ${labelB}="${aNif || '—'}"`);
   if (nifStatus === 'both_missing')  logger.warn('[DualOCR] NIF no extraído por ningún motor');
   if (!totalAgree) logger.warn(`[DualOCR] Total discrepancia: OpenAI="${oF.total}" Azure="${aF.total}"`);
   if (!fechaAgree) logger.warn(`[DualOCR] Fecha discrepancia: OpenAI="${oF.fecha_emision}" Azure="${aF.fecha_emision}"`);
@@ -391,7 +396,7 @@ function compareOCRResults(openaiRes, azureRes, extraResults, logger) {
       ? baseConf * 0.60
       : baseConf * 0.85;
 
-  logger.info(`[DualOCR] confirmed=${dual_confirmed} nif_status=${nifStatus} totalOK=${totalAgree} fechaOK=${fechaAgree} openaiTime=${openaiRes.processing_time_s}s azureTime=${azureRes.processing_time_s}s lineasIva=${merged.lineas_iva?.length || 0}`);
+  logger.info(`[DualOCR] confirmed=${dual_confirmed} nif_status=${nifStatus} totalOK=${totalAgree} fechaOK=${fechaAgree} ${labelA}Time=${openaiRes.processing_time_s}s ${labelB}Time=${azureRes.processing_time_s}s lineasIva=${merged.lineas_iva?.length || 0}`);
 
   return {
     success: true,
@@ -399,7 +404,7 @@ function compareOCRResults(openaiRes, azureRes, extraResults, logger) {
     campos: merged,
     confidence,
     processing_time_s: Math.max(openaiRes.processing_time_s || 0, azureRes.processing_time_s || 0),
-    ocr_engine: 'dual_openai_azure',
+    ocr_engine: dualLabel,
     tokens_used: openaiRes.tokens_used || 0,
     dual_confirmed,
     openai_result: {
@@ -449,10 +454,17 @@ async function extractInvoiceOCR(filePath, mimeType, fileName, logger, context =
   const cfg  = getConfig();
   const mode = cfg.ocr_mode || 'dual';
 
-  // ── Modos multi-motor: DUAL (defecto) / TRIPLE (+Mistral) / MULTI (lista) ──
-  if (mode === 'dual' || mode === 'triple' || mode === 'multi') {
-    // Motores extra según modo. En "multi", la lista viene de features.json
-    // (ocr_multi_engines) filtrada contra el registro EXTRA_ENGINES.
+  // ── Modos duales: GEMINI_AZURE (rec.) / DUAL / TRIPLE / MULTI ────────────────
+  // gemini_azure: Gemini 3.5 Flash (motorA) + Azure DI (motorB) — bench 2026-07-07
+  // dual/triple/multi: OpenAI (motorA) + Azure DI (motorB) — modo legacy
+  if (mode === 'gemini_azure' || mode === 'dual' || mode === 'triple' || mode === 'multi') {
+    const isGeminiAzure = mode === 'gemini_azure';
+    const labelA     = isGeminiAzure ? 'gemini_flash' : 'openai';
+    const labelAName = isGeminiAzure ? 'Gemini Flash' : 'OpenAI';
+    const motorAFn   = isGeminiAzure
+      ? () => tryGemini(filePath, mimeType, context, cfg, 'flash')
+      : () => tryOpenAI(filePath, mimeType, context);
+
     let extraNames = [];
     if (mode === 'triple') extraNames = ['mistral'];
     if (mode === 'multi') {
@@ -464,24 +476,24 @@ async function extractInvoiceOCR(filePath, mimeType, fileName, logger, context =
       if (desconocidos.length) logger.warn(`[OCR] ocr_multi_engines contiene motores desconocidos (ignorados): ${desconocidos.join(', ')}`);
     }
 
-    logger.info(`[OCR] Modo ${mode}: lanzando OpenAI + Azure DI${extraNames.length ? ' + ' + extraNames.join(' + ') : ''} en paralelo para ${fileName} | tipo=${context.invoice_type || 'no_especificado'}`);
+    logger.info(`[OCR] Modo ${mode}: lanzando ${labelAName} + Azure DI${extraNames.length ? ' + ' + extraNames.join(' + ') : ''} en paralelo para ${fileName} | tipo=${context.invoice_type || 'no_especificado'}`);
 
     const jobs = [
-      tryOpenAI(filePath, mimeType, context),
+      motorAFn(),
       tryAzure(filePath, mimeType, context),
       ...extraNames.map(n => EXTRA_ENGINES[n](filePath, mimeType, context, cfg)),
     ];
     const settled = await Promise.allSettled(jobs);
-    const [openaiSettled, azureSettled] = settled;
+    const [motorASettled, azureSettled] = settled;
 
-    let openaiRes = null;
+    let motorARes = null;
     let azureRes  = null;
 
-    if (openaiSettled.status === 'fulfilled') {
-      openaiRes = openaiSettled.value;
-      logger.info(`[OCR] OpenAI OK: tiempo=${openaiRes.processing_time_s}s valida=${openaiRes.es_factura_valida} total=${openaiRes.campos?.total} nif=${openaiRes.campos?.proveedor_nif} lineasIva=${openaiRes.campos?.lineas_iva?.length || 0} tokens=${openaiRes.tokens_used}`);
+    if (motorASettled.status === 'fulfilled') {
+      motorARes = motorASettled.value;
+      logger.info(`[OCR] ${labelAName} OK: tiempo=${motorARes.processing_time_s}s valida=${motorARes.es_factura_valida} total=${motorARes.campos?.total} nif=${motorARes.campos?.proveedor_nif} lineasIva=${motorARes.campos?.lineas_iva?.length || 0} tokens=${motorARes.tokens_used}`);
     } else {
-      logger.warn(`[OCR] OpenAI FALLÓ: ${openaiSettled.reason?.message}`);
+      logger.warn(`[OCR] ${labelAName} FALLÓ: ${motorASettled.reason?.message}`);
     }
 
     if (azureSettled.status === 'fulfilled') {
@@ -503,7 +515,7 @@ async function extractInvoiceOCR(filePath, mimeType, fileName, logger, context =
       }
     });
 
-    const result = compareOCRResults(openaiRes, azureRes, extraResults, logger);
+    const result = compareOCRResults(motorARes, azureRes, extraResults, logger, labelA, 'azure');
     if (result) {
       logger.info(`[OCR] Resultado ${mode}: dual_confirmed=${result.dual_confirmed} confidence=${result.confidence?.toFixed(2)} nif=${result.campos?.proveedor_nif} lineas_iva=${result.campos?.lineas_iva?.length || 0}`);
       await _secondPassReceptorIfNeeded(result, filePath, mimeType, context, logger);
@@ -540,48 +552,65 @@ async function extractInvoiceOCR(filePath, mimeType, fileName, logger, context =
 
 // ─── 2ª pasada OCR enfocada al receptor en facturas EMITIDAS ─────────────────
 // Activa sólo cuando context.invoice_type === 'venta' y receptor_nif quedó null
-// tras la 1ª pasada. Recorta el bloque inferior y pide a GPT-4.1 el CIF del
-// cliente carácter a carácter. Si extrae un CIF/NIF con formato válido,
-// completa el campo. Mutación in-place del result. Coste: ~2s extra y ~$0.005.
+// tras la 1ª pasada. Recorta el bloque inferior y pide al motor CIF el NIF del
+// cliente. Motor preferido: Gemini Flash (bench 2026-07-07, 90.3% CIF accuracy);
+// fallback a OpenAI si Gemini no está disponible. Coste: ~2s extra y ~$0.003.
 async function _secondPassReceptorIfNeeded(result, filePath, mimeType, context, logger) {
   if (!result || !result.campos) return;
   if (context?.invoice_type !== 'venta') return;
   if (result.campos.receptor_nif) return; // ya hay NIF, no hace falta
 
-  const apiKey = getSecret('openai_api_key');
-  if (isPlaceholder(apiKey)) return;
+  const cfg        = getConfig();
+  const geminiKey  = getSecret('gemini_api_key');
+  const useGemini  = !isPlaceholder(geminiKey);
+  const openaiKey  = useGemini ? null : getSecret('openai_api_key');
+  const motorLabel = useGemini ? 'Gemini Flash' : 'OpenAI';
 
-  logger.info('[OCR] 2ª pasada receptor — invoice_type=venta y receptor_nif=null');
+  if (!useGemini && isPlaceholder(openaiKey)) return;
+
+  logger.info(`[OCR] 2ª pasada receptor — invoice_type=venta receptor_nif=null motor=${motorLabel}`);
   const t0 = Date.now();
   let cif;
   try {
-    cif = await openai.extractReceptorCIFOnly(filePath, mimeType, apiKey);
+    cif = useGemini
+      ? await gemini.extractReceptorCIFOnly(filePath, mimeType, geminiKey, cfg)
+      : await openai.extractReceptorCIFOnly(filePath, mimeType, openaiKey);
   } catch (err) {
-    logger.warn(`[OCR] 2ª pasada receptor falló: ${err.message}`);
+    logger.warn(`[OCR] 2ª pasada receptor falló (${motorLabel}): ${err.message}`);
     return;
   }
   const elapsed = ((Date.now() - t0) / 1000).toFixed(2);
 
   if (!cif) {
-    logger.info(`[OCR] 2ª pasada receptor: no encontró CIF (${elapsed}s)`);
+    logger.info(`[OCR] 2ª pasada receptor: no encontró CIF (${elapsed}s, ${motorLabel})`);
     return;
   }
 
   const check = validateSpanishTaxId(cif);
   if (!check.valid) {
-    logger.warn(`[OCR] 2ª pasada receptor descartada — CIF "${cif}" inválido: ${check.reason}`);
+    logger.warn(`[OCR] 2ª pasada receptor descartada — CIF "${cif}" inválido: ${check.reason} (${motorLabel})`);
     return;
   }
 
   result.campos.receptor_nif = cif;
-  result.receptor_nif_source = 'second_pass_openai';
-  logger.info(`[OCR] 2ª pasada receptor OK: receptor_nif="${cif}" (${elapsed}s)`);
+  result.receptor_nif_source = `second_pass_${motorLabel.toLowerCase().replace(' ', '_')}`;
+  logger.info(`[OCR] 2ª pasada receptor OK: receptor_nif="${cif}" (${elapsed}s, ${motorLabel})`);
 }
 
 /**
  * Extracción enfocada solo en CIF/NIF del emisor (árbitro cuando los motores discrepan).
+ * Motor preferido: Gemini Flash; fallback a OpenAI.
  */
 async function extractCIFOnlyOCR(filePath, mimeType) {
+  const cfg       = getConfig();
+  const geminiKey = getSecret('gemini_api_key');
+  if (!isPlaceholder(geminiKey)) {
+    try {
+      return await gemini.extractCIFOnly(filePath, mimeType, geminiKey, cfg);
+    } catch {
+      return null;
+    }
+  }
   const apiKey = getSecret('openai_api_key');
   if (isPlaceholder(apiKey)) return null;
   try {

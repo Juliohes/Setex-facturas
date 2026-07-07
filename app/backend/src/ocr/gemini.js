@@ -202,4 +202,100 @@ async function extractInvoice(filePath, mimeType, apiKey, context = {}, modelId,
   };
 }
 
-module.exports = { extractInvoice, extractResponseText, INVOICE_JSON_SCHEMA, DEFAULT_MODELS };
+// ── Schema mínimo para extracción de CIF enfocada ─────────────────────────────
+
+const CIF_ONLY_SCHEMA = {
+  type: 'object',
+  properties: {
+    cif: {
+      type: ['string', 'null'],
+      description: 'CIF/NIF español exacto (9 caracteres: 1 letra + 7 dígitos + 1 carácter). null si no legible con certeza.',
+    },
+  },
+  required: ['cif'],
+};
+
+const CIF_ONLY_SYSTEM = `Eres un especialista en lectura de identificadores fiscales españoles (CIF/NIF).
+Tu ÚNICA misión: leer el CIF o NIF más prominente de la imagen.
+Formato OBLIGATORIO: 1 letra inicial + 7 dígitos + 1 carácter final = 9 caracteres exactos.
+NO intercambies dígitos. Si tienes la más mínima duda sobre un carácter → devuelve null.
+NUNCA inventes. null siempre es mejor que un CIF incorrecto.`;
+
+/** Recorta y extrae un CIF de la zona indicada mediante Gemini Flash.
+ *  @param {string} filePath
+ *  @param {string} mimeType
+ *  @param {string} apiKey
+ *  @param {object} cfg       - features.json (para el model ID)
+ *  @param {{ top: number, heightFraction: number }} zone - fracción de la imagen
+ *  @param {string} roleHint  - "EMISOR/PROVEEDOR" | "CLIENTE/RECEPTOR"
+ */
+async function _extractCIFZone(filePath, mimeType, apiKey, cfg, zone, roleHint) {
+  try {
+    let buffer;
+    if (mimeType.startsWith('image/')) {
+      const img  = sharp(filePath);
+      const meta = await img.metadata();
+      const h    = meta.height || 2000;
+      const top  = Math.floor(h * zone.top);
+      const crop = Math.min(Math.floor(h * zone.heightFraction), h - top);
+      buffer = await img
+        .extract({ left: 0, top, width: meta.width, height: crop })
+        .resize({ width: 1536, height: 1536, fit: 'inside', withoutEnlargement: true })
+        .sharpen({ sigma: 1.2, m1: 0.5, m2: 3 })
+        .jpeg({ quality: 95 })
+        .toBuffer();
+    } else {
+      buffer = fs.readFileSync(filePath);
+    }
+
+    const model = cfg?.ocr_gemini_flash_model || DEFAULT_MODELS.flash;
+    const body = {
+      system_instruction: { parts: [{ text: CIF_ONLY_SYSTEM }] },
+      contents: [{
+        role: 'user',
+        parts: [
+          { inline_data: { mime_type: 'image/jpeg', data: buffer.toString('base64') } },
+          { text: `Lee el CIF/NIF del ${roleHint} en esta imagen. Devuelve SOLO el campo "cif" con los 9 caracteres exactos o null.` },
+        ],
+      }],
+      generationConfig: {
+        temperature: 0,
+        maxOutputTokens: 64,
+        responseMimeType: 'application/json',
+        responseJsonSchema: CIF_ONLY_SCHEMA,
+      },
+    };
+
+    const res = await fetch(`${GEMINI_BASE_URL}/${model}:generateContent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const text = extractResponseText(data);
+    if (!text) return null;
+    const parsed = JSON.parse(text);
+    const cif = parsed?.cif;
+    if (!cif || typeof cif !== 'string' || cif.length !== 9) return null;
+    return cif.toUpperCase();
+  } catch {
+    return null;
+  }
+}
+
+/** Extrae el CIF del EMISOR (zona cabecera, 65% superior). */
+async function extractCIFOnly(filePath, mimeType, apiKey, cfg = {}) {
+  return _extractCIFZone(filePath, mimeType, apiKey, cfg,
+    { top: 0, heightFraction: 0.65 }, 'EMISOR/PROVEEDOR (cabecera superior)');
+}
+
+/** Extrae el CIF del RECEPTOR/CLIENTE (zona inferior, 60% inferior).
+ *  Para facturas emitidas (invoice_type='venta'). */
+async function extractReceptorCIFOnly(filePath, mimeType, apiKey, cfg = {}) {
+  return _extractCIFZone(filePath, mimeType, apiKey, cfg,
+    { top: 0.40, heightFraction: 0.60 }, 'CLIENTE/RECEPTOR (bloque "Facturar a:" o "Cliente:")');
+}
+
+module.exports = { extractInvoice, extractResponseText, INVOICE_JSON_SCHEMA, DEFAULT_MODELS, extractCIFOnly, extractReceptorCIFOnly };
