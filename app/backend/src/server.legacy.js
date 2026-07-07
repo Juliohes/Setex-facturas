@@ -1795,10 +1795,10 @@ app.post('/api/upload-preview', authenticateToken, requireActiveCompany, uploadL
       }
     }
     // 3º) Lookup por NIF: el OCR puede haber leído bien el NIF pero mal el nombre.
-    //     Si el NIF ya está en el historial del usuario, recuperamos el nombre canónico.
+    //     Prioridad: nombre confirmado en known_cifs → company_catalog admin.
     if (!knownProvider && cleanNif) {
       const nifRes = await pool.query(
-        `SELECT cc.proveedor_nombre
+        `SELECT COALESCE(kc.proveedor_nombre, cc.proveedor_nombre) AS proveedor_nombre
          FROM known_cifs kc
          LEFT JOIN company_catalog cc ON cc.proveedor_nif = kc.proveedor_nif
          WHERE kc.user_id = $1 AND kc.proveedor_nif = $2
@@ -1927,10 +1927,12 @@ app.post('/api/upload-preview', authenticateToken, requireActiveCompany, uploadL
         dual_confirmed: ocrData?.dual_confirmed || false,
         openai: ocrData?.openai_result || null,
         azure: ocrData?.azure_result || null,
+        campo_sources: ocrData?.campo_sources || null,
       },
       ocrData: {
         processing_time_s: ocrData?.processing_time_s,
         ocr_engine: ocrData?.ocr_engine,
+        campo_sources: ocrData?.campo_sources || null,
         dual_confirmed: ocrData?.dual_confirmed || false,
       },
       nifUncertain: nifUncertain || false,
@@ -2223,6 +2225,8 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
       dual_confirmed: preview.ocr_dual_full?.dual_confirmed || false,
       openai: preview.ocr_dual_full?.openai || null,
       azure: preview.ocr_dual_full?.azure || null,
+      campo_sources: preview.ocr_dual_full?.campo_sources || null,
+      ocr_engine: preview.ocrData?.ocr_engine || null,
     });
 
     // Resolver campos IVA con prioridad: usuario > OCR-preview > OCR-full.
@@ -2338,8 +2342,8 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
         lineas_iva,
         iva_validation_ok, iva_warnings,
         ocr_result, confidence_level, file_path,
-        invoice_type, procesado_en, client_company_id
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,NOW(),$25) RETURNING id`,
+        invoice_type, procesado_en, client_company_id, ocr_engine
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,NOW(),$25,$26) RETURNING id`,
       [
         userInfo.userId, fileInfo.filename, fileInfo.mimetype, fileInfo.size,
         finalProveedorNif,
@@ -2356,24 +2360,30 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
         finalIvaValidation.valid,
         finalIvaValidation.warnings.length > 0 ? JSON.stringify(finalIvaValidation.warnings) : null,
         ocrResultJson, preview.confidence_level || 'medium',
-        finalFilePath, invoiceType, previewClientCompanyId
+        finalFilePath, invoiceType, previewClientCompanyId,
+        preview.ocrData?.ocr_engine || null
       ]
     );
     const uploadId = dbResult.rows[0].id;
 
-    // Actualizar known_cifs con el NIF confirmado por el usuario (aprendizaje POR usuario — privado)
-    // SEC-006: eliminado el auto-learn a company_catalog global para evitar contaminación cross-tenant.
-    // El catálogo global solo puede ser editado por admins desde el panel de administración.
-    if (campos.proveedor_nombre) {
-      const nombreNorm = normalizeProveedorNombre(campos.proveedor_nombre);
+    // Aprendizaje por usuario (privado): guarda nombre canónico confirmado y su CIF.
+    // SEC-006: solo en known_cifs por usuario, no en company_catalog global.
+    // La columna proveedor_nombre almacena el nombre real para corregir futuros OCR
+    // que lean bien el NIF pero mal el nombre de la empresa.
+    if (finalProveedorNif && finalProveedorNombre) {
+      const nombreNorm = normalizeProveedorNombre(finalProveedorNombre);
       if (nombreNorm.length >= 4) {
         await pool.query(`
-          INSERT INTO known_cifs (user_id, proveedor_nombre_norm, proveedor_nif, confirmations, last_seen)
-          VALUES ($1, $2, $3, 1, NOW())
+          INSERT INTO known_cifs (user_id, proveedor_nombre_norm, proveedor_nif, proveedor_nombre, confirmations, last_seen)
+          VALUES ($1, $2, $3, $4, 1, NOW())
           ON CONFLICT (user_id, proveedor_nombre_norm) WHERE user_id IS NOT NULL
-          DO UPDATE SET proveedor_nif = EXCLUDED.proveedor_nif, confirmations = known_cifs.confirmations + 1, last_seen = NOW()
-        `, [userInfo.userId, nombreNorm, finalNif]);
-        logger.info(`[CIF] ${campos.proveedor_nombre} → ${finalNif} guardado en known_cifs (usuario ${userInfo.userId})`);
+          DO UPDATE SET
+            proveedor_nif    = EXCLUDED.proveedor_nif,
+            proveedor_nombre = EXCLUDED.proveedor_nombre,
+            confirmations    = known_cifs.confirmations + 1,
+            last_seen        = NOW()
+        `, [userInfo.userId, nombreNorm, finalProveedorNif, finalProveedorNombre]);
+        logger.info(`[CIF] Aprendido: ${finalProveedorNombre} (${finalProveedorNif}) — usuario ${userInfo.userId}`);
       }
     }
 
@@ -2427,9 +2437,9 @@ app.get('/api/proveedor/:nif', authenticateToken, requireActiveCompany, confirmL
     const nif = (req.params.nif || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
     if (!nif || nif.length < 5) return res.json({ found: false });
 
-    // 1º Historial del usuario (máxima prioridad — confirmado por él mismo)
+    // 1º Historial del usuario (máxima prioridad — nombre confirmado por él mismo)
     const userRes = await pool.query(
-      `SELECT cc.proveedor_nombre
+      `SELECT COALESCE(kc.proveedor_nombre, cc.proveedor_nombre) AS proveedor_nombre
        FROM known_cifs kc
        LEFT JOIN company_catalog cc ON cc.proveedor_nif = kc.proveedor_nif
        WHERE kc.user_id = $1 AND kc.proveedor_nif = $2
@@ -2551,10 +2561,7 @@ app.get('/api/admin/facturas/:id/ocr-detail', authenticateToken, requireAdmin, a
         id, proveedor_nif, proveedor_nombre, receptor_nif, receptor_nombre,
         numero_factura, fecha_emision, total_factura, base_imponible,
         iva_porcentaje, cuota_iva, irpf_porcentaje, cuota_irpf, lineas_iva,
-        invoice_type, uploaded_at, procesado_en,
-        ocr_result,
-        confidence_level,
-        iva_validation_ok, iva_warnings
+        ocr_result, confidence_level, iva_validation_ok, iva_warnings, ocr_engine
       FROM uploads WHERE id = $1
     `, [id]);
 
@@ -2585,12 +2592,13 @@ app.get('/api/admin/facturas/:id/ocr-detail', authenticateToken, requireAdmin, a
         azure:        ocr.azure        || null,
         gemini_flash: ocr.gemini_flash || null,
       },
+      campo_sources: ocr.campo_sources || null,
       meta: {
         dual_confirmed:   ocr.dual_confirmed   ?? null,
         confidence_level: row.confidence_level || ocr.confidence_level || null,
         iva_validation_ok: row.iva_validation_ok ?? null,
         iva_warnings:      row.iva_warnings      || [],
-        ocr_engine:        ocr.ocr_engine        || null,
+        ocr_engine:        row.ocr_engine || ocr.ocr_engine || null,
       },
     });
   } catch (err) {
@@ -4469,6 +4477,21 @@ async function start() {
     logger.info('[Migration] known_cifs user_id scoping OK');
   } catch (err) {
     logger.warn('[Migration] known_cifs:', err.message);
+  }
+
+  try {
+    // Aprendizaje IA: almacenar el nombre canónico confirmado por el usuario en known_cifs
+    await pool.query(`ALTER TABLE known_cifs ADD COLUMN IF NOT EXISTS proveedor_nombre TEXT`);
+    // Motor OCR como columna indexable en uploads (estaba solo dentro del JSONB)
+    await pool.query(`ALTER TABLE uploads ADD COLUMN IF NOT EXISTS ocr_engine TEXT`);
+    // Backfill ocr_engine desde el JSONB para registros existentes
+    await pool.query(`
+      UPDATE uploads SET ocr_engine = ocr_result->>'ocr_engine'
+      WHERE ocr_engine IS NULL AND ocr_result IS NOT NULL AND ocr_result->>'ocr_engine' IS NOT NULL
+    `);
+    logger.info('[Migration] known_cifs.proveedor_nombre + uploads.ocr_engine OK');
+  } catch (err) {
+    logger.warn('[Migration] ocr_engine/proveedor_nombre:', err.message);
   }
 
   await initEmailTransporter();

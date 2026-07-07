@@ -139,6 +139,36 @@ function amountsBothAgree(a, b) {
   return amountsAgree(a, b);
 }
 
+// ─── Atribución por campo: qué motor aportó cada dato ───────────────────────
+// Compara el valor final de cada campo contra la salida de cada motor.
+// Resultado: 'consensus' si ≥2 coinciden, nombre del motor si solo uno coincide,
+// 'calculated' si fue calculado aritméticamente, null si el campo está vacío.
+function buildCampoSources(merged, oF, aF, extras) {
+  const TRACKABLE = [
+    'proveedor_nif', 'proveedor_nombre', 'receptor_nif', 'receptor_nombre',
+    'numero_factura', 'fecha_emision', 'total', 'base_imponible',
+    'iva_porcentaje', 'cuota_iva', 'irpf_porcentaje', 'cuota_irpf',
+  ];
+  const engines = [
+    { name: 'openai', campos: oF },
+    { name: 'azure',  campos: aF },
+    ...(extras || []).map(e => ({ name: e.name, campos: e.res?.campos || {} })),
+  ];
+  const sources = {};
+  for (const field of TRACKABLE) {
+    const val = merged[field];
+    if (val == null || val === '') { sources[field] = null; continue; }
+    const matching = engines.filter(e => {
+      const ev = e.campos[field];
+      return ev != null && ev !== '' && String(ev).trim() === String(val).trim();
+    });
+    if (matching.length === 0) sources[field] = 'calculated';
+    else if (matching.length >= 2) sources[field] = 'consensus';
+    else sources[field] = matching[0].name;
+  }
+  return sources;
+}
+
 // ─── Integración de motores EXTRA (Mistral, Gemini Flash/Pro…) ────────────────
 // Se invoca una vez por motor extra vivo, en orden de configuración. Reglas:
 //   1. Relleno: campos null del merge se completan con la lectura del extra.
@@ -398,10 +428,13 @@ function compareOCRResults(openaiRes, azureRes, extraResults, logger, labelA = '
 
   logger.info(`[DualOCR] confirmed=${dual_confirmed} nif_status=${nifStatus} totalOK=${totalAgree} fechaOK=${fechaAgree} ${labelA}Time=${openaiRes.processing_time_s}s ${labelB}Time=${azureRes.processing_time_s}s lineasIva=${merged.lineas_iva?.length || 0}`);
 
+  const campo_sources = buildCampoSources(merged, oF, aF, extras);
+
   return {
     success: true,
     es_factura_valida: merged.es_factura_valida,
     campos: merged,
+    campo_sources,
     confidence,
     processing_time_s: Math.max(openaiRes.processing_time_s || 0, azureRes.processing_time_s || 0),
     ocr_engine: dualLabel,

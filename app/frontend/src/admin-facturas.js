@@ -1976,9 +1976,28 @@ async function openOcrModal(facturaId) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const d = await res.json();
 
-    const confirmed = d.confirmed || {};
-    const raw       = d.ocr_raw   || {};
-    const meta      = d.meta      || {};
+    const confirmed    = d.confirmed     || {};
+    const raw          = d.ocr_raw       || {};
+    const meta         = d.meta          || {};
+    const campoSources = d.campo_sources || null;
+
+    // Badge de color por motor que leyó el campo
+    const MOTOR_COLOR = {
+      consensus:    { bg: '#276749', label: 'consenso' },
+      openai:       { bg: '#2b6cb0', label: 'OpenAI'   },
+      azure:        { bg: '#553c9a', label: 'Azure DI'  },
+      gemini_flash: { bg: '#c05621', label: 'Gemini'    },
+      gemini:       { bg: '#c05621', label: 'Gemini'    },
+      mistral:      { bg: '#9b2335', label: 'Mistral'   },
+      calculated:   { bg: '#718096', label: 'calculado' },
+    };
+    function motorBadge(key) {
+      if (!campoSources) return '';
+      const src = campoSources[key];
+      if (!src) return '';
+      const m = MOTOR_COLOR[src] || { bg: '#718096', label: src };
+      return ` <span style="display:inline-block;font-size:10px;padding:1px 5px;border-radius:3px;background:${m.bg};color:#fff;vertical-align:middle;font-family:sans-serif;">${m.label}</span>`;
+    }
 
     const CAMPOS = [
       { label: 'NIF proveedor',    key: 'proveedor_nif' },
@@ -2001,13 +2020,30 @@ async function openOcrModal(facturaId) {
         `[${i+1}] ${escHtml(String(l.porcentaje || '?'))}% | base ${fmtOcrImporte(l.base)} | cuota ${fmtOcrImporte(l.cuota)}`
       ).join('<br>');
     }
+    // Normaliza separador decimal: OCR usa "89,56", la BD devuelve "89.56" (VARCHAR con punto)
+    function normCmp(v) {
+      if (v == null) return null;
+      return String(v).trim().replace(/^(-?\d+)[,.](\d+)$/, '$1.$2');
+    }
+    // Comparación normalizada de lineas_iva: ignora 'productos' y normaliza decimales
+    function normLineasCmp(lineas) {
+      if (!Array.isArray(lineas)) return null;
+      return lineas.map(l => ({
+        porcentaje: normCmp(l.porcentaje),
+        base:       normCmp(l.base),
+        cuota:      normCmp(l.cuota),
+      }));
+    }
+
+    // La key en el raw OCR es 'total' (no 'total_factura')
+    const rawNormalized = { ...raw, total_factura: raw.total_factura ?? raw.total };
 
     const rows = CAMPOS.map(c => {
       const fmt = c.fmt || (v => v != null && v !== '' ? escHtml(String(v)) : '—');
-      const vRaw  = raw[c.key];
+      const vRaw  = rawNormalized[c.key];
       const vConf = confirmed[c.key];
       const igual = vRaw != null && vConf != null
-        && String(vRaw).trim() === String(vConf).trim();
+        && normCmp(vRaw) === normCmp(vConf);
       const badge = (vRaw == null || vConf == null)
         ? '<span style="color:#a0aec0;font-size:14px;">—</span>'
         : igual
@@ -2016,16 +2052,16 @@ async function openOcrModal(facturaId) {
       const rowBg = (vRaw != null && vConf != null && !igual) ? 'background:#fff5f5;' : '';
       return `<tr style="${rowBg}">
         <td style="padding:7px 10px;font-weight:600;color:#2d3748;white-space:nowrap;">${escHtml(c.label)}</td>
-        <td style="padding:7px 10px;font-family:monospace;font-size:13px;">${fmt(vRaw)}</td>
+        <td style="padding:7px 10px;font-family:monospace;font-size:13px;">${fmt(vRaw)}${motorBadge(c.key)}</td>
         <td style="padding:7px 10px;font-family:monospace;font-size:13px;">${fmt(vConf)}</td>
         <td style="padding:7px 10px;text-align:center;">${badge}</td>
       </tr>`;
     }).join('');
 
-    // Fila especial para lineas_iva (multi-IVA: comparar desglose completo)
+    // Fila especial para lineas_iva — comparación normalizada (excluye 'productos')
     const rawLineas  = raw.lineas_iva;
     const confLineas = confirmed.lineas_iva;
-    const lineasIgual = JSON.stringify(rawLineas) === JSON.stringify(confLineas);
+    const lineasIgual = JSON.stringify(normLineasCmp(rawLineas)) === JSON.stringify(normLineasCmp(confLineas));
     const lineasBadge = (rawLineas == null && confLineas == null)
       ? '<span style="color:#a0aec0;font-size:14px;">—</span>'
       : lineasIgual
