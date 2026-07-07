@@ -1,6 +1,6 @@
 {
   "ocr_enabled": true,
-  "tech_admin_emails": ["juliohesuni@gmail.com"],
+  "tech_admin_emails": ["juliohesuni@gmail.com", "soporte@autoken.es"],
   "_OCR_MODE": "Modo OCR: 'gemini_azure' = Gemini 3.5 Flash + Azure (RECOMENDADO) | 'dual' = OpenAI + Azure (legacy) | 'triple' = dual + Mistral | 'multi' = dual + ocr_multi_engines | motor único: 'openai'/'azure'/'mistral'/'gemini_flash'/'gemini_pro'",
   "ocr_mode": "gemini_azure",
   "_OCR_MULTI": "Extras del modo 'multi' (orden = prioridad de integración). IDs Gemini hot-swap: flash=gemini-3.5-flash (ESTABLE, bench winner 2026-07-07); pro=gemini-3.1-pro-preview (único Pro existente, PREVIEW)",

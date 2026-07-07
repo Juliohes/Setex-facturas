@@ -421,7 +421,6 @@ async function loadData(filters = {}) {
   const params = new URLSearchParams();
   if (filters.desde)      params.set('desde', filters.desde);
   if (filters.hasta)      params.set('hasta', filters.hasta);
-  if (filters.proveedor)  params.set('proveedor', filters.proveedor);
   if (filters.usuario_id) params.set('usuario_id', filters.usuario_id);
   if (filters.estado)     params.set('estado', filters.estado);
   // Filtro por empresa (viene de tab Empresas → Ver facturas)
@@ -460,13 +459,12 @@ function getFilters() {
   return {
     desde:      document.getElementById('f-desde').value,
     hasta:      document.getElementById('f-hasta').value,
-    proveedor:  document.getElementById('f-proveedor').value.trim(),
     usuario_id: document.getElementById('f-usuario').value,
     estado:     document.getElementById('f-estado').value,
   };
 }
 function clearFilters() {
-  ['f-desde','f-hasta','f-proveedor','f-usuario','f-estado'].forEach(id => { document.getElementById(id).value = ''; });
+  ['f-desde','f-hasta','f-usuario','f-estado'].forEach(id => { document.getElementById(id).value = ''; });
   currentFilters = {};
   currentCompanyFilter = null;
   loadData();
@@ -475,7 +473,6 @@ function downloadExcel() {
   const params = new URLSearchParams();
   if (currentFilters.desde)      params.set('desde', currentFilters.desde);
   if (currentFilters.hasta)      params.set('hasta', currentFilters.hasta);
-  if (currentFilters.proveedor)  params.set('proveedor', currentFilters.proveedor);
   if (currentFilters.usuario_id) params.set('usuario_id', currentFilters.usuario_id);
   if (currentFilters.estado)     params.set('estado', currentFilters.estado);
   if (currentCompanyFilter)      params.set('company_nif', currentCompanyFilter.cif);
@@ -1388,9 +1385,6 @@ function launchApp(authData) {
     localStorage.removeItem('token');
     document.getElementById('app').style.display = 'none';
     showLogin();
-  });
-  document.getElementById('f-proveedor').addEventListener('keydown', e => {
-    if (e.key === 'Enter') { currentFilters = getFilters(); loadData(currentFilters); }
   });
 }
 
