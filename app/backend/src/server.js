@@ -23,7 +23,7 @@ const { extractInvoiceOCR, extractCIFOnlyOCR } = require('./ocr/index');
 // Los requires desde ./ocr/validateCIF e ./ocr/validateIVA siguen funcionando por
 // shims retrocompatibles, pero ahora importamos directamente desde domain/.
 const { validateSpanishTaxId, checkDigitCIF } = require('./domain/validators/nif');
-const { validateIVACoherencia, normalizeConfirmedLineasIva } = require('./domain/validators/iva');
+const { validateIVACoherencia, normalizeConfirmedLineasIva, fillDerivedBases } = require('./domain/validators/iva');
 const { connection: redisClient } = require('./queue/index');
 const { validateVIES } = require('./services/viesValidator');
 const { validateInvoiceCifs } = require('./lib/invoice-cif-validator');
@@ -782,7 +782,7 @@ app.post('/api/admin/refresh-session', authenticateToken, requireAdmin, (req, re
     path: '/',
   });
   logger.info(`[AdminSession] Cookie admin renovada para userId=${req.user.userId}`);
-  res.json({ success: true });
+  res.json({ success: true, is_tech_admin: isTechAdmin(req.user.email) });
 });
 
 // POST /api/auth/refresh — rota el Refresh Token y emite nuevo Access Token.
@@ -1151,7 +1151,9 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     auditLog('LOGIN_SUCCESS', { email, remember_me: rememberMe }, user.id, req.ip);
 
     // Responder con AT. El RT viaja en cookie, no en el body.
-    res.json({ accessToken, expiresIn: 900, user: { id: user.id, email: user.email } });
+    const loginResponse = { accessToken, expiresIn: 900, user: { id: user.id, email: user.email } };
+    if (user.is_admin === true) loginResponse.is_tech_admin = isTechAdmin(user.email);
+    res.json(loginResponse);
   } catch (err) {
     logger.error('Login error:', err);
     res.status(500).json({ error: 'Error al iniciar sesión' });
@@ -1792,10 +1794,10 @@ app.post('/api/upload-preview', authenticateToken, requireActiveCompany, uploadL
       }
     }
     // 3º) Lookup por NIF: el OCR puede haber leído bien el NIF pero mal el nombre.
-    //     Si el NIF ya está en el historial del usuario, recuperamos el nombre canónico.
+    //     Prioridad: nombre confirmado en known_cifs → company_catalog admin.
     if (!knownProvider && cleanNif) {
       const nifRes = await pool.query(
-        `SELECT cc.proveedor_nombre
+        `SELECT COALESCE(kc.proveedor_nombre, cc.proveedor_nombre) AS proveedor_nombre
          FROM known_cifs kc
          LEFT JOIN company_catalog cc ON cc.proveedor_nif = kc.proveedor_nif
          WHERE kc.user_id = $1 AND kc.proveedor_nif = $2
@@ -1914,6 +1916,25 @@ app.post('/api/upload-preview', authenticateToken, requireActiveCompany, uploadL
       }
     }
 
+    // ── IDENTIDAD DEL USER = FUENTE DE VERDAD DEL REGISTRO (no del OCR) ──────
+    // Mismo criterio que /api/upload-confirm (ver commit 7bb9bfc): el lado propio
+    // de la factura (receptor en compra, emisor en venta) se conoce con certeza
+    // desde el registro (users.company_* — o la empresa cliente seleccionada por
+    // un admin, ya resuelta en userCompanyNif/userCompanyName más arriba) y NUNCA
+    // debe depender de lo que lea la IA. Antes solo se forzaba al confirmar: el
+    // preview seguía mostrando el guess crudo del OCR y el usuario lo "corregía"
+    // a mano aunque el backend lo iba a sobrescribir igual al guardar. Se adelanta
+    // aquí para que el preview ya muestre el dato correcto desde el principio.
+    if (userCompanyNif && userCompanyName) {
+      if (invoiceType === 'venta') {
+        effectiveProvNif        = userCompanyNif;
+        campos.proveedor_nombre = userCompanyName;
+      } else {
+        campos.receptor_nif    = userCompanyNif;
+        campos.receptor_nombre = userCompanyName;
+      }
+    }
+
     const previewData = {
       filePath,
       fileInfo,
@@ -1924,10 +1945,12 @@ app.post('/api/upload-preview', authenticateToken, requireActiveCompany, uploadL
         dual_confirmed: ocrData?.dual_confirmed || false,
         openai: ocrData?.openai_result || null,
         azure: ocrData?.azure_result || null,
+        campo_sources: ocrData?.campo_sources || null,
       },
       ocrData: {
         processing_time_s: ocrData?.processing_time_s,
         ocr_engine: ocrData?.ocr_engine,
+        campo_sources: ocrData?.campo_sources || null,
         dual_confirmed: ocrData?.dual_confirmed || false,
       },
       nifUncertain: nifUncertain || false,
@@ -2220,6 +2243,8 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
       dual_confirmed: preview.ocr_dual_full?.dual_confirmed || false,
       openai: preview.ocr_dual_full?.openai || null,
       azure: preview.ocr_dual_full?.azure || null,
+      campo_sources: preview.ocr_dual_full?.campo_sources || null,
+      ocr_engine: preview.ocrData?.ocr_engine || null,
     });
 
     // Resolver campos IVA con prioridad: usuario > OCR-preview > OCR-full.
@@ -2240,6 +2265,24 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
         }
       } else {
         logger.warn(`[Confirm] lineas_iva rechazadas por normalizeConfirmedLineasIva: ${norm.errors.join('; ')}`);
+      }
+    } else if (Array.isArray(finalLineasIva) && finalLineasIva.length >= 2) {
+      // Fix 2026-07-03 — flujo automático (el usuario NO editó los tramos):
+      // normalizar el desglose OCR derivando bases ausentes para persistir un
+      // JSONB coherente. Solo rellena agregados si vienen vacíos; NUNCA pisa
+      // lo confirmado por el usuario (la reconciliación dura de agregados ya
+      // ocurre en el orquestador ocr/index.js antes del preview).
+      const norm = normalizeConfirmedLineasIva(fillDerivedBases(finalLineasIva));
+      if (norm.lineas && norm.errors.length === 0) {
+        finalLineasIva = norm.lineas;
+        const hasBase  = cleanStr(confirmed_base_imponible || campos.base_imponible || ocrFull.base_imponible);
+        const hasCuota = cleanStr(confirmed_cuota_iva      || campos.cuota_iva      || ocrFull.cuota_iva);
+        const hasPct   = cleanStr(confirmed_iva_porcentaje || campos.iva_porcentaje || ocrFull.iva_porcentaje);
+        if (!hasBase)  aggregatedFromLines.base       = norm.base;
+        if (!hasCuota) aggregatedFromLines.cuota      = norm.cuota;
+        if (!hasPct)   aggregatedFromLines.porcentaje = norm.porcentaje;
+      } else if (norm.errors.length > 0) {
+        logger.warn(`[Confirm] Desglose OCR multi-IVA no normalizable (se guarda tal cual): ${norm.errors.join('; ')}`);
       }
     }
 
@@ -2317,8 +2360,8 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
         lineas_iva,
         iva_validation_ok, iva_warnings,
         ocr_result, confidence_level, file_path,
-        invoice_type, procesado_en, client_company_id
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,NOW(),$25) RETURNING id`,
+        invoice_type, procesado_en, client_company_id, ocr_engine
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,NOW(),$25,$26) RETURNING id`,
       [
         userInfo.userId, fileInfo.filename, fileInfo.mimetype, fileInfo.size,
         finalProveedorNif,
@@ -2335,24 +2378,30 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
         finalIvaValidation.valid,
         finalIvaValidation.warnings.length > 0 ? JSON.stringify(finalIvaValidation.warnings) : null,
         ocrResultJson, preview.confidence_level || 'medium',
-        finalFilePath, invoiceType, previewClientCompanyId
+        finalFilePath, invoiceType, previewClientCompanyId,
+        preview.ocrData?.ocr_engine || null
       ]
     );
     const uploadId = dbResult.rows[0].id;
 
-    // Actualizar known_cifs con el NIF confirmado por el usuario (aprendizaje POR usuario — privado)
-    // SEC-006: eliminado el auto-learn a company_catalog global para evitar contaminación cross-tenant.
-    // El catálogo global solo puede ser editado por admins desde el panel de administración.
-    if (campos.proveedor_nombre) {
-      const nombreNorm = normalizeProveedorNombre(campos.proveedor_nombre);
+    // Aprendizaje por usuario (privado): guarda nombre canónico confirmado y su CIF.
+    // SEC-006: solo en known_cifs por usuario, no en company_catalog global.
+    // La columna proveedor_nombre almacena el nombre real para corregir futuros OCR
+    // que lean bien el NIF pero mal el nombre de la empresa.
+    if (finalProveedorNif && finalProveedorNombre) {
+      const nombreNorm = normalizeProveedorNombre(finalProveedorNombre);
       if (nombreNorm.length >= 4) {
         await pool.query(`
-          INSERT INTO known_cifs (user_id, proveedor_nombre_norm, proveedor_nif, confirmations, last_seen)
-          VALUES ($1, $2, $3, 1, NOW())
+          INSERT INTO known_cifs (user_id, proveedor_nombre_norm, proveedor_nif, proveedor_nombre, confirmations, last_seen)
+          VALUES ($1, $2, $3, $4, 1, NOW())
           ON CONFLICT (user_id, proveedor_nombre_norm) WHERE user_id IS NOT NULL
-          DO UPDATE SET proveedor_nif = EXCLUDED.proveedor_nif, confirmations = known_cifs.confirmations + 1, last_seen = NOW()
-        `, [userInfo.userId, nombreNorm, finalNif]);
-        logger.info(`[CIF] ${campos.proveedor_nombre} → ${finalNif} guardado en known_cifs (usuario ${userInfo.userId})`);
+          DO UPDATE SET
+            proveedor_nif    = EXCLUDED.proveedor_nif,
+            proveedor_nombre = EXCLUDED.proveedor_nombre,
+            confirmations    = known_cifs.confirmations + 1,
+            last_seen        = NOW()
+        `, [userInfo.userId, nombreNorm, finalProveedorNif, finalProveedorNombre]);
+        logger.info(`[CIF] Aprendido: ${finalProveedorNombre} (${finalProveedorNif}) — usuario ${userInfo.userId}`);
       }
     }
 
@@ -2406,9 +2455,9 @@ app.get('/api/proveedor/:nif', authenticateToken, requireActiveCompany, confirmL
     const nif = (req.params.nif || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
     if (!nif || nif.length < 5) return res.json({ found: false });
 
-    // 1º Historial del usuario (máxima prioridad — confirmado por él mismo)
+    // 1º Historial del usuario (máxima prioridad — nombre confirmado por él mismo)
     const userRes = await pool.query(
-      `SELECT cc.proveedor_nombre
+      `SELECT COALESCE(kc.proveedor_nombre, cc.proveedor_nombre) AS proveedor_nombre
        FROM known_cifs kc
        LEFT JOIN company_catalog cc ON cc.proveedor_nif = kc.proveedor_nif
        WHERE kc.user_id = $1 AND kc.proveedor_nif = $2
@@ -2507,6 +2556,65 @@ app.get('/api/admin/facturas/:id/imagen', authenticateToken, requireAdmin, async
   } catch (err) {
     logger.error('Error sirviendo imagen admin:', err);
     res.status(500).json({ error: 'Error al obtener la imagen' });
+  }
+});
+
+// GET /api/admin/facturas/:id/ocr-detail — datos OCR raw vs confirmados (solo tech_admin).
+// Permite comparar lo que leyó la IA vs lo que confirmó el humano.
+app.get('/api/admin/facturas/:id/ocr-detail', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    if (!isTechAdmin(req.user.email)) {
+      return res.status(403).json({ error: 'Acceso restringido a administradores técnicos.' });
+    }
+    const id = parseInt(req.params.id, 10);
+    if (!id || isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
+
+    const result = await pool.query(`
+      SELECT
+        id, proveedor_nif, proveedor_nombre, receptor_nif, receptor_nombre,
+        numero_factura, fecha_emision, total_factura, base_imponible,
+        iva_porcentaje, cuota_iva, irpf_porcentaje, cuota_irpf, lineas_iva,
+        ocr_result, confidence_level, iva_validation_ok, iva_warnings, ocr_engine
+      FROM uploads WHERE id = $1
+    `, [id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Factura no encontrada' });
+
+    const row = result.rows[0];
+    const ocr = row.ocr_result || {};
+    res.json({
+      confirmed: {
+        proveedor_nif:    row.proveedor_nif,
+        proveedor_nombre: row.proveedor_nombre,
+        receptor_nif:     row.receptor_nif,
+        receptor_nombre:  row.receptor_nombre,
+        numero_factura:   row.numero_factura,
+        fecha_emision:    row.fecha_emision,
+        total_factura:    row.total_factura,
+        base_imponible:   row.base_imponible,
+        iva_porcentaje:   row.iva_porcentaje,
+        cuota_iva:        row.cuota_iva,
+        irpf_porcentaje:  row.irpf_porcentaje,
+        cuota_irpf:       row.cuota_irpf,
+        lineas_iva:       row.lineas_iva,
+      },
+      ocr_raw:  ocr.merged  || null,
+      motors: {
+        openai:       ocr.openai       || null,
+        azure:        ocr.azure        || null,
+        gemini_flash: ocr.gemini_flash || null,
+      },
+      campo_sources: ocr.campo_sources || null,
+      meta: {
+        dual_confirmed:    ocr.dual_confirmed   ?? null,
+        confidence_level:  row.confidence_level || ocr.confidence_level || null,
+        iva_validation_ok: row.iva_validation_ok ?? null,
+        iva_warnings:      row.iva_warnings      || [],
+        ocr_engine:        row.ocr_engine || ocr.ocr_engine || null,
+      },
+    });
+  } catch (err) {
+    logger.error('[ocr-detail] Error:', err.message);
+    res.status(500).json({ error: 'Error al obtener detalle OCR' });
   }
 });
 
@@ -2845,6 +2953,15 @@ function requireTech(req, res, next) {
     return res.status(403).json({ error: 'Acceso restringido a soporte técnico' });
   }
   next();
+}
+
+// ── TECH ADMIN HELPER ─────────────────────────────────────────────────────────────────────────
+function isTechAdmin(email) {
+  try {
+    const cfg = JSON.parse(fsSync.readFileSync(FEATURES_PATH, 'utf8'));
+    const list = cfg.tech_admin_emails || [];
+    return list.map(e => e.toLowerCase()).includes((email || '').toLowerCase());
+  } catch { return false; }
 }
 
 // ── APPROVAL FLOW HELPERS ────────────────────────────────────────────────────────────────────
@@ -3366,11 +3483,25 @@ app.get('/api/admin/facturas', authenticateToken, requireAdmin, async (req, res)
 });
 
 // GET /api/admin/facturas/usuarios — lista de usuarios para filtro (solo admin)
+// 2026-07-05: incluye datos de empresa (users.company_* + client_companies por
+// matching de CIF, mismo patrón que el listado principal) para que el filtro
+// del panel muestre NOMBRES DE EMPRESA en lugar de emails. Cambio aditivo:
+// el contrato { usuarios: [{ id, email, ... }] } se mantiene.
 app.get('/api/admin/facturas/usuarios', authenticateToken, requireAdmin, async (_req, res) => {
   try {
-    // SANDBOX: ocultar usuarios de pruebas del dropdown de filtro
-    const result = await pool.query('SELECT id, email FROM users WHERE is_test IS NOT TRUE ORDER BY email');
-    res.json({ usuarios: result.rows });
+    const result = await pool.query(`
+      SELECT us.id, us.email, us.company_name, us.company_nif,
+             cc.nombre AS company_nombre_registrado, cc.codigo_cliente
+      FROM users us
+      LEFT JOIN client_companies cc
+        ON UPPER(REPLACE(us.company_nif, ' ', '')) = UPPER(REPLACE(cc.cif, ' ', ''))
+      WHERE us.is_test IS NOT TRUE
+        AND EXISTS (SELECT 1 FROM uploads WHERE uploads.user_id = us.id)
+      ORDER BY COALESCE(cc.nombre, us.company_name, us.email)`);
+    const cfg = JSON.parse(fsSync.readFileSync(FEATURES_PATH, 'utf8'));
+    const techEmails = (cfg.tech_admin_emails || []).map(e => e.toLowerCase());
+    const usuarios = result.rows.filter(u => !techEmails.includes((u.email || '').toLowerCase()));
+    res.json({ usuarios });
   } catch (err) {
     logger.error('Admin usuarios error:', err);
     res.status(500).json({ error: 'Error al obtener usuarios' });
