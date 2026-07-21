@@ -47,10 +47,11 @@ check_and_fix "${LOGS_DIR}"          "1001" "Backend logs"
 # no podía borrarlos durante `git reset --hard origin/main`. Misma deuda volvió
 # a bloquear staging deploys el 2026-04-27 noche (PR #87 push, #85, #86, etc.)
 # por `paths.sh` root-owned. Este step previene que vuelva a ocurrir.
+# .git/ también se incluye: Claude Code opera como root y deja .git/logs/* con
+# owner=root, bloqueando el CI que corre como deploy (LL-003, 2026-07-07).
 #
 # Excluye: data/postgres (uid 70), data/redis (uid 999), data/uploads (1001),
-# secrets/, logs/, .git/, node_modules/. Solo toca código fuente + scripts +
-# docs + config + workflows (deploy debe poder reescribirlos vía git reset).
+# secrets/, logs/, node_modules/.
 log "── LL-001: re-claim de ownership a deploy:deploy en árbol git ──"
 ROOT_OWNED=$(find "${BASE_DIR}" \
   -not -path '*/data/postgres/*' \
@@ -58,7 +59,6 @@ ROOT_OWNED=$(find "${BASE_DIR}" \
   -not -path '*/data/uploads/*' \
   -not -path '*/secrets/*' \
   -not -path '*/logs/*' \
-  -not -path '*/.git/*' \
   -not -path '*/node_modules/*' \
   \( -user root -o -group root \) 2>/dev/null | wc -l)
 
@@ -70,7 +70,6 @@ if [ "$ROOT_OWNED" -gt 0 ]; then
     -not -path '*/data/uploads/*' \
     -not -path '*/secrets/*' \
     -not -path '*/logs/*' \
-    -not -path '*/.git/*' \
     -not -path '*/node_modules/*' \
     \( -user root -o -group root \) \
     -exec chown deploy:deploy {} + 2>/dev/null || true
