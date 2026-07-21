@@ -1322,6 +1322,9 @@ function launchApp(authData) {
     window._isTechAdmin = authData.is_tech_admin === true
       || userEmail === 'juliohesuni@gmail.com';
   }
+  // Botón "Pipeline v2" (comparativa shadow) — solo administradores técnicos
+  const btnShadowV2 = document.getElementById('btn-shadow-v2');
+  if (btnShadowV2) btnShadowV2.style.display = window._isTechAdmin ? 'inline-block' : 'none';
 
   const select = document.getElementById('f-usuario');
   (authData.usuarios || []).forEach(u => {
@@ -1338,6 +1341,7 @@ function launchApp(authData) {
   initEmpresaModal();
   initDesgloseModal();
   initOcrModal();
+  initShadowModal();
   loadData();
 
   document.getElementById('btn-filtrar').addEventListener('click', () => { currentFilters = getFilters(); loadData(currentFilters); });
@@ -2114,6 +2118,89 @@ function initOcrModal() {
   if (!modal || !closeBtn) return; // el modal solo existe en el HTML para esta sesión
   closeBtn.addEventListener('click', closeOcrModal);
   modal.addEventListener('click', (e) => { if (e.target === modal) closeOcrModal(); });
+}
+
+// ── Pipeline v2 — comparativa shadow (2026-07-21, solo tech_admin) ────────────
+// Panel de solo lectura: v1 (decisión real) vs v2 (routing determinista nuevo)
+// vs si el humano corrigió algo al confirmar. Pensado para volumen bajo —
+// cada fila es una factura revisable a mano, no hace falta esperar a acumular
+// cientos de casos para sacar conclusiones.
+let shadowTable = null;
+
+function closeShadowModal() {
+  const m = document.getElementById('shadow-modal');
+  if (m) m.style.display = 'none';
+}
+
+function initShadowModal() {
+  const modal    = document.getElementById('shadow-modal');
+  const closeBtn = document.getElementById('shadow-modal-close');
+  const openBtn  = document.getElementById('btn-shadow-v2');
+  if (!modal || !closeBtn || !openBtn) return; // solo existe en el HTML para esta sesión
+  closeBtn.addEventListener('click', closeShadowModal);
+  modal.addEventListener('click', (e) => { if (e.target === modal) closeShadowModal(); });
+  openBtn.addEventListener('click', openShadowModal);
+}
+
+function shadowBadge(ok) {
+  if (ok == null) return '<span style="color:#a0aec0;">—</span>';
+  return ok
+    ? '<span style="color:#276749;font-weight:700;">&#10003;</span>'
+    : '<span style="color:#9b2335;font-weight:700;">&#10007;</span>';
+}
+
+async function openShadowModal() {
+  const modal = document.getElementById('shadow-modal');
+  modal.style.display = 'flex';
+
+  try {
+    const res = await authFetch(`${API_URL}/admin/facturas/shadow-comparativa`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const rows = (data.rows || []).map(r => ({
+      ...r,
+      total_factura: r.total_factura != null ? parseFloat(r.total_factura) : null,
+      incidencias_error: Array.isArray(r.incidencias)
+        ? r.incidencias.filter(i => i.severidad === 'error').length
+        : 0,
+    }));
+
+    if (shadowTable) {
+      shadowTable.replaceData(rows);
+      return;
+    }
+
+    shadowTable = new Tabulator('#shadow-table', {
+      data: rows,
+      index: 'id',
+      height: 'calc(80vh - 160px)',
+      layout: 'fitDataFill',
+      placeholder: 'Sin datos todavía — activa pipeline_v2_shadow_mode en features.json para empezar a recoger comparaciones.',
+      columns: [
+        { title: 'Fecha proceso', field: 'creado_en', width: 150, sorter: 'datetime',
+          formatter: (cell) => { const v = cell.getValue(); return v ? new Date(v).toLocaleString('es-ES') : '—'; } },
+        { title: 'Proveedor',  field: 'proveedor_nombre', minWidth: 160, sorter: 'string',
+          formatter: (cell) => escHtml(cell.getValue() || '—') },
+        { title: 'NIF',        field: 'proveedor_nif', width: 110, sorter: 'string' },
+        { title: 'Total',      field: 'total_factura', width: 100, sorter: 'number', hozAlign: 'right',
+          formatter: (cell) => { const v = cell.getValue(); return v != null ? v.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €' : '—'; } },
+        { title: 'Decisión v1 (real)', field: 'decision_v1', width: 140, sorter: 'string' },
+        { title: 'Decisión v2 (nueva)', field: 'decision_v2', width: 140, sorter: 'string' },
+        { title: '¿Coincide?', field: 'coincide', width: 90, hozAlign: 'center',
+          formatter: (cell) => shadowBadge(cell.getValue()) },
+        { title: '¿Humano corrigió?', field: 'humano_corrigio', width: 110, hozAlign: 'center',
+          formatter: (cell) => shadowBadge(cell.getValue()) },
+        { title: 'Incidencias v2 (error)', field: 'incidencias_error', width: 130, hozAlign: 'center', sorter: 'number' },
+      ],
+      rowFormatter: (row) => {
+        const d = row.getData();
+        if (d.coincide === false) row.getElement().style.background = '#fff5f5';
+      },
+    });
+  } catch (err) {
+    document.getElementById('shadow-table').innerHTML =
+      `<p style="color:#9b2335;padding:20px 0;text-align:center;">Error al cargar la comparativa: ${escHtml(err.message)}</p>`;
+  }
 }
 
 document.addEventListener('DOMContentLoaded', init);

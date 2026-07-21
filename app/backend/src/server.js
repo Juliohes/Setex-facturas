@@ -422,6 +422,26 @@ async function initDB() {
     );
     CREATE INDEX IF NOT EXISTS idx_shadow_validaciones_coincide ON ocr_shadow_validaciones(coincide);
     CREATE INDEX IF NOT EXISTS idx_shadow_validaciones_creado ON ocr_shadow_validaciones(creado_en);
+
+    -- 2026-07-21 (a petición de Julio, volumen bajo ~1 factura/2 días): enlaza
+    -- cada comparación shadow con la factura real que terminó guardándose, y
+    -- con si el humano tuvo que corregir algo. Sin esto, v1/v2 quedaban sin
+    -- forma de contrastarse contra lo que de verdad pasó factura a factura.
+    ALTER TABLE uploads ADD COLUMN IF NOT EXISTS preview_id UUID;
+    CREATE INDEX IF NOT EXISTS idx_uploads_preview_id ON uploads(preview_id);
+    ALTER TABLE ocr_shadow_validaciones ADD COLUMN IF NOT EXISTS humano_corrigio BOOLEAN;
+
+    -- Vista de consulta directa (psql o el nuevo endpoint admin): una fila por
+    -- factura con v1, v2, si coincidieron y si el humano corrigió algo.
+    CREATE OR REPLACE VIEW ocr_shadow_comparativa AS
+      SELECT
+        s.id, s.preview_id, u.id AS upload_id,
+        u.proveedor_nombre, u.proveedor_nif, u.total_factura, u.fecha_emision,
+        s.decision_v1, s.decision_v2, s.coincide, s.humano_corrigio,
+        s.incidencias, s.sugerencias, s.creado_en
+      FROM ocr_shadow_validaciones s
+      LEFT JOIN uploads u ON u.preview_id = s.preview_id
+      ORDER BY s.creado_en DESC;
   `);
 
   // Backfill: uploads anteriores sin upload_status → 'active'
@@ -2409,8 +2429,8 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
         lineas_iva,
         iva_validation_ok, iva_warnings,
         ocr_result, confidence_level, file_path,
-        invoice_type, procesado_en, client_company_id, ocr_engine
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,NOW(),$25,$26) RETURNING id`,
+        invoice_type, procesado_en, client_company_id, ocr_engine, preview_id
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,NOW(),$25,$26,$27) RETURNING id`,
       [
         userInfo.userId, fileInfo.filename, fileInfo.mimetype, fileInfo.size,
         finalProveedorNif,
@@ -2428,7 +2448,8 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
         finalIvaValidation.warnings.length > 0 ? JSON.stringify(finalIvaValidation.warnings) : null,
         ocrResultJson, preview.confidence_level || 'medium',
         finalFilePath, invoiceType, previewClientCompanyId,
-        preview.ocrData?.ocr_engine || null
+        preview.ocrData?.ocr_engine || null,
+        preview_id || null,
       ]
     );
     const uploadId = dbResult.rows[0].id;
@@ -2489,6 +2510,22 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
       confirmed_by_user: !wasAutoConfirmed,
     }, userInfo.userId, req.ip);
     logger.info(`Upload confirmed: ${fileInfo.filename} nif=${finalNif} confidence=${preview.confidence_level} auto=${wasAutoConfirmed}`);
+
+    // ── Pipeline v2 shadow: registrar si el humano corrigió algo (2026-07-21) ──
+    // Señal independiente de confidence_level (a diferencia de wasAutoConfirmed):
+    // ¿tocó el usuario nif/fecha/total respecto a lo que mostró el preview?
+    // Fire-and-forget, nunca debe afectar la respuesta de la subida real.
+    if (preview_id) {
+      const humanoCorrigio = (
+        (confirmed_nif || '') !== (preview.campos?.proveedor_nif || '')
+        || (confirmed_fecha || '') !== (preview.campos?.fecha_emision || '')
+        || (confirmed_total || '') !== (preview.campos?.total || '')
+      );
+      pool.query(
+        'UPDATE ocr_shadow_validaciones SET humano_corrigio = $1 WHERE preview_id = $2',
+        [humanoCorrigio, preview_id]
+      ).catch(err => logger.error('[ShadowV2] Error registrando humano_corrigio', { error: err.message }));
+    }
 
     res.json({ success: true, message: 'Factura guardada correctamente.', invoice_type: invoiceType });
   } catch (err) {
@@ -2664,6 +2701,31 @@ app.get('/api/admin/facturas/:id/ocr-detail', authenticateToken, requireAdmin, a
   } catch (err) {
     logger.error('[ocr-detail] Error:', err.message);
     res.status(500).json({ error: 'Error al obtener detalle OCR' });
+  }
+});
+
+// GET /api/admin/facturas/shadow-comparativa — pipeline v2 (solo tech_admin).
+// Una fila por factura procesada en modo shadow: decisión v1 (real) vs v2
+// (nueva, determinista) vs si el humano tuvo que corregir algo al confirmar.
+// 2026-07-21: pensado para volumen bajo — cada factura es revisable a mano,
+// no hace falta esperar a acumular cientos para sacar conclusiones.
+app.get('/api/admin/facturas/shadow-comparativa', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    if (!isTechAdmin(req.user.email)) {
+      return res.status(403).json({ error: 'Acceso restringido a administradores técnicos.' });
+    }
+    const result = await pool.query(
+      `SELECT id, preview_id, upload_id, proveedor_nombre, proveedor_nif,
+              total_factura, fecha_emision, decision_v1, decision_v2, coincide,
+              humano_corrigio, incidencias, sugerencias, creado_en
+       FROM ocr_shadow_comparativa
+       ORDER BY creado_en DESC
+       LIMIT 500`
+    );
+    res.json({ rows: result.rows });
+  } catch (err) {
+    logger.error('[shadow-comparativa] Error:', err.message);
+    res.status(500).json({ error: 'Error al obtener la comparativa del pipeline v2' });
   }
 });
 

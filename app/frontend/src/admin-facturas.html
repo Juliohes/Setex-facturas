@@ -96,6 +96,7 @@
             <button id="btn-refresh" class="btn-icon" title="Actualizar">↺ Actualizar</button>
             <button id="btn-modo-eliminar-fac" class="btn-secondary" title="Activar modo eliminar para borrar facturas">🗑 Eliminar</button>
             <button id="btn-csv" class="btn-export">⬇ Descargar Excel</button>
+            <button id="btn-shadow-v2" class="btn-secondary" title="Comparativa pipeline v2 (routing determinista) — solo administradores técnicos" style="display:none;">🔬 Pipeline v2</button>
           </div>
         </div>
         <div id="facturas-table"></div>
@@ -263,8 +264,25 @@
     </div>
   </div>
 
+  <div id="shadow-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-card" style="width:min(1100px,96vw);max-height:90vh;overflow-y:auto;">
+      <div class="modal-header">
+        <h3>Pipeline v2 — Comparativa shadow (v1 real vs v2 determinista vs humano)</h3>
+        <button id="shadow-modal-close" class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body" style="padding:16px 20px;">
+        <p style="color:#718096;font-size:13px;margin:0 0 12px;">
+          Cada fila es una factura procesada con <code>pipeline_v2_shadow_mode</code> activo.
+          "Coincide" compara la decisión real (v1) con la del nuevo routing determinista (v2).
+          "Humano corrigió" indica si el usuario tuvo que tocar NIF/fecha/total al confirmar.
+        </p>
+        <div id="shadow-table"></div>
+      </div>
+    </div>
+  </div>
+
   <script src="tabulator.min.js"></script>
   <script src="auth.js?v=20260414-003"></script>
-  <script src="admin-facturas.js?v=20260707-005"></script>
+  <script src="admin-facturas.js?v=20260721-001"></script>
 </body>
 </html>
