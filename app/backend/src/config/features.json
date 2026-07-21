@@ -9,5 +9,8 @@
   "ocr_gemini_pro_model": "gemini-3.1-pro-preview",
   "ocr_primary_engine": "gemini_flash",
   "image_max_resolution": 1536,
-  "image_jpeg_quality": 85
+  "image_jpeg_quality": 85,
+  "_PIPELINE_V2": "Fase 3/4 pipeline v2 (2026-07-21): routing determinista en modo shadow. pipeline_v2_shadow_mode=true registra la comparación v1 vs v2 en ocr_shadow_validaciones SIN afectar la respuesta al usuario. pipeline_v2_validacion_enabled queda reservado para cuando se decida usar v2 en el flujo real (requiere aprobación explícita de Julio tras validar datos del shadow mode).",
+  "pipeline_v2_shadow_mode": false,
+  "pipeline_v2_validacion_enabled": false
 }

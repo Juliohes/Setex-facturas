@@ -24,6 +24,9 @@ const { extractInvoiceOCR, extractCIFOnlyOCR } = require('./ocr/index');
 // shims retrocompatibles, pero ahora importamos directamente desde domain/.
 const { validateSpanishTaxId, checkDigitCIF } = require('./domain/validators/nif');
 const { validateIVACoherencia, normalizeConfirmedLineasIva, fillDerivedBases } = require('./domain/validators/iva');
+// Fase 3 pipeline v2 (2026-07-21): routing determinista en modo shadow — se
+// calcula y se registra junto a la decisión real, sin sustituirla todavía.
+const { decidirRouting } = require('./domain/routing');
 const { connection: redisClient } = require('./queue/index');
 const { validateVIES } = require('./services/viesValidator');
 const { validateInvoiceCifs } = require('./lib/invoice-cif-validator');
@@ -402,6 +405,23 @@ async function initDB() {
     );
     CREATE INDEX IF NOT EXISTS idx_company_audit_log_company ON company_audit_log(company_id);
     CREATE INDEX IF NOT EXISTS idx_company_audit_log_created ON company_audit_log(created_at);
+
+    -- Fase 3/4 pipeline v2 (2026-07-21): comparación en modo shadow entre la
+    -- decisión real (v1, entrelazada en upload-preview) y la decisión del
+    -- nuevo routing determinista (v2, domain/routing.js). Solo trazabilidad
+    -- para validar v2 antes del switch — no participa en el flujo real.
+    CREATE TABLE IF NOT EXISTS ocr_shadow_validaciones (
+      id SERIAL PRIMARY KEY,
+      preview_id UUID NOT NULL,
+      decision_v1 VARCHAR(20) NOT NULL,
+      decision_v2 VARCHAR(20) NOT NULL,
+      coincide BOOLEAN NOT NULL,
+      incidencias JSONB NOT NULL DEFAULT '[]',
+      sugerencias JSONB NOT NULL DEFAULT '{}',
+      creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_shadow_validaciones_coincide ON ocr_shadow_validaciones(coincide);
+    CREATE INDEX IF NOT EXISTS idx_shadow_validaciones_creado ON ocr_shadow_validaciones(creado_en);
   `);
 
   // Backfill: uploads anteriores sin upload_status → 'active'
@@ -1852,8 +1872,37 @@ app.post('/api/upload-preview', authenticateToken, requireActiveCompany, uploadL
       (knownProvider && !requiresReview)  ? 'high'   :
       (missingFields.length > 0)          ? 'low'    : 'medium';
 
-    // ── FASE 6: Guardar preview en Redis (TTL 30 min) ───────────────────
+    // ── FASE 3 pipeline v2: routing determinista en modo SHADOW (2026-07-21) ──
+    // Calcula la decisión del nuevo routing determinista (domain/routing.js)
+    // en paralelo a la lógica real de arriba, SIN afectar la respuesta al
+    // usuario ni el flujo de la petición. Se registra para comparar contra la
+    // decisión real (banda v1) antes de que Julio decida activar el switch.
+    // Fail-safe: cualquier error aquí se traga y se loguea — nunca debe
+    // romper la subida de la factura (regla de oro del modo shadow).
     const previewId = crypto.randomUUID();
+    try {
+      // Lectura en caliente de features.json (regla 4 del CLAUDE.md — el
+      // fichero cambia sin rebuild, nunca se cachea el valor entre peticiones)
+      const shadowCfg = JSON.parse(fsSync.readFileSync(FEATURES_PATH, 'utf8'));
+      if (shadowCfg.pipeline_v2_shadow_mode) {
+        const bandaV1 = requiresReview ? 'revision_humana' : 'auto_aceptada';
+        const v2 = decidirRouting(campos);
+        const coincide = v2.decision === bandaV1;
+        pool.query(
+          `INSERT INTO ocr_shadow_validaciones
+             (preview_id, decision_v1, decision_v2, coincide, incidencias, sugerencias, creado_en)
+           VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, NOW())`,
+          [previewId, bandaV1, v2.decision, coincide, JSON.stringify(v2.incidencias), JSON.stringify(v2.sugerencias)]
+        ).catch(err => logger.error('[ShadowV2] Error guardando comparación', { error: err.message }));
+        if (!coincide) {
+          logger.info(`[ShadowV2] Discrepancia v1=${bandaV1} v2=${v2.decision} preview=${previewId} motivo="${v2.motivo}"`);
+        }
+      }
+    } catch (shadowErr) {
+      logger.error('[ShadowV2] Error calculando routing v2', { error: shadowErr.message });
+    }
+
+    // ── FASE 6: Guardar preview en Redis (TTL 30 min) ───────────────────
     const viesResult = await Promise.race([
       viesPromise,
       new Promise(resolve => setTimeout(() => resolve(null), 4500))
