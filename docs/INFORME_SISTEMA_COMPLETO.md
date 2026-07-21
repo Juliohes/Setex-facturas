@@ -3349,3 +3349,10 @@ Añade esta línea (backup cada día a las 3:00 AM):
 - Nuevo endpoint `GET /api/admin/facturas/shadow-comparativa` (tech_admin, mismo patrón que `/ocr-detail`).
 - Panel admin (`admin-facturas.html`/`.js`): botón "🔬 Pipeline v2" (oculto salvo para tech_admin) abre modal con tabla Tabulator de la comparativa completa, filas discrepantes resaltadas. Cache-buster → `?v=20260721-001`.
 - Sigue sin activarse `pipeline_v2_shadow_mode` en prod — esto solo prepara la trazabilidad para cuando Julio decida encenderlo.
+
+**5. Deploy a prod (backend únicamente) y activación de `pipeline_v2_shadow_mode`** (misma sesión): Julio pidió activar el flag. `features.json` cambia en caliente (Regla 4) pero el contenedor corriendo no tenía el código de las Fases 1-4 — hacía falta rebuild. Se aclaró explícitamente que reconstruir backend+frontend habría desplegado también la cámara/login admin/edición admin (frontend, pendientes de aprobación) — Julio confirmó desplegar **solo backend**, dejando el frontend intacto.
+  - `docker compose build backend` → `stop` → `up -d` (Regla 3, nunca `restart`). Los 4 contenedores de prod healthy antes y después.
+  - Logs de arranque limpios: `Database initialized` sin errores — `ocr_shadow_validaciones`, `uploads.preview_id` y la vista `ocr_shadow_comparativa` creados correctamente (verificado con `\d` en psql).
+  - `pipeline_v2_shadow_mode: true` confirmado leído dentro del contenedor (`docker exec ... cat features.json`).
+  - **Estado actual**: shadow mode activo en prod — cada factura que se procese desde ahora queda registrada en `ocr_shadow_validaciones`/`ocr_shadow_comparativa`, sin afectar la respuesta al usuario. El panel visual ("🔬 Pipeline v2") NO es visible todavía porque el frontend no se ha redesplegado — la comparativa es consultable por ahora solo vía `psql` contra la vista.
+  - **Pendiente**: decidir cuándo desplegar el frontend (y con ello cámara/login admin/edición admin) para ver el panel visual; mientras tanto, consultar la vista directamente.
