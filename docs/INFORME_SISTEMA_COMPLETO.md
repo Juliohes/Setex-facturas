@@ -578,6 +578,39 @@ docker compose stop backend && docker compose up -d backend
 
 ## 18. HISTORIAL DE CAMBIOS
 
+### 2026-07-06 — PROD: nginx absolute_redirect off (PR #121)
+- `app/frontend/nginx.conf`: `absolute_redirect off;` — los 302 emiten `Location: /ruta` relativo (antes `http://<host>/ruta`, inocuo con HSTS pero impuro). Sintaxis pre-validada con `nginx -t` en imagen; validado en staging (CI verde) y desplegado a prod DENTRO de la ventana 00-06 (cero usuarios, momento óptimo). Verificado en público: `302 · location: /admin-login.html`. Cierra la mejora menor anotada el 2026-07-05.
+
+### 2026-07-05 (noche) — PROD: filtro admin por empresa + login dedicado de administrador (PR #119)
+- **Filtro "Usuario" del panel** muestra nombres de empresa (registrada > declarada > email fallback): parche SQL en `server.js` `/api/admin/facturas/usuarios` (LEFT JOIN `client_companies` por CIF; SQL pre-validada con EXPLAIN contra el esquema real; `users.is_test` ya existía en prod). Contrato `{usuarios}` y `value=user_id` intactos.
+- **Login admin directo**: nueva `/admin-login.html` + `admin-login.js`; nginx `@admin_login_redirect` → `302 /admin-login.html` (antes rebotaba al login de usuarios `/?next=admin`). `auth_request` intacto — la seguridad no baja. Código muerto del formulario embebido eliminado; cache-busters `v=20260705-001`.
+- **Deploy**: copia byte a byte de 5 ficheros frontend desde develop (`a093440`+#119, drift cero verificado) + rebuild backend **y frontend** (primer rebuild de la imagen nginx) → stop → up -d. Corte ~30 s a ~23:55 Madrid (borde de ventana). 4/4 healthy.
+- **Verificado en público**: HTTPS 200 · `/admin-facturas.html` sin cookie → 302 `/admin-login.html` · login page y JS 200 · endpoint 401 sin token · puerto 2222 RC intacto.
+- Validación previa completa en staging (6/6, incl. flujo de login con cookie `setex_admin` y credenciales no-admin → 403). Detalle en INFORME de staging (entrada 2026-07-05 noche, PR #120).
+- **Mejora menor anotada**: nginx emite el 302 con `Location: http://…` (absolute_redirect por defecto) — inocuo con HSTS preload; candidato a `absolute_redirect off;`.
+
+### 2026-07-05 — PROD: Mistral OCR 4 en el smoke nocturno · PRs #114/#115/#116 mergeados a develop
+- **PR #114 mergeado** (squash `e035026`) — el fix multi-IVA + triple ya está en develop; git y runtime de prod convergen en contenido (el descalce REGLA 11 sigue solo por la vía main).
+- `scripts/smoke-test-ocr.js` — actualizado quirúrgicamente desde develop (PR #115): test real de Mistral OCR 4 (`/v1/ocr` + annotation json_schema strict, skip si secret placeholder). **Ejecutado en prod: 4/4 motores OK** (OpenAI 3,0s · Azure 0,4s · 2ª pasada 1,0s · Mistral 2,3s). El cron de las 04:30 vigila desde hoy los 3 motores.
+- **Incidente CI staging documentado** (no afectó a prod): develop referenciaba la red externa `n8n_default` inexistente (rename a `traefik_default` nunca mergeado — prod ya la usaba en disco). Corregido en develop vía **PR #115**. Deploy CI staging verde end-to-end (×2).
+- **Deuda ownership**: chown selectivo (`-user root -o -group root`) aplicado en prod (app/docs) y staging (.git incluido) → 0 ficheros root. Lección: sesiones Claude como root deben limpiar ownership tras operaciones git.
+
+### 2026-07-04 — PROD: fix multi-IVA (base imponible) + Mistral OCR 4 en modo TRIPLE (aplicación quirúrgica, PR #114)
+- **Contexto**: el OCR fallaba en la base del IVA y con varios tipos de IVA. Causa raíz: Azure DI `prebuilt-invoice` (schema 2024-11-30-ga) no devuelve BaseAmount por tramo; cruce de tramos por string duplicaba tramos; tramo exento descartado; IRPF fantasma por base mal sumada. Fix desarrollado y validado E2E en staging (rama `feature/ocr-multi-iva-fix-y-mistral-2026-07-03`, **PR #114** a develop).
+- **Aplicación quirúrgica a prod** (regla 11: NO desde main — v3 roto). Verificado cero drift pre-copia (prod = commit base `fbd3d86` byte a byte en los 5 módulos OCR):
+  - `app/backend/src/ocr/index.js` — reconciliación agregados=Σtramos + modo triple + votación 2-de-3 (copiado de staging, = PR #114).
+  - `app/backend/src/ocr/azure.js` — bases derivadas por aritmética, tramo exento conservado, Rate como string.
+  - `app/backend/src/ocr/mistral.js` (NUEVO) — motor Mistral OCR 4 (`mistral-ocr-latest`, /v1/ocr, annotations json_schema).
+  - `app/backend/src/domain/validators/iva.js` — cruce numérico de tramos, `fillDerivedBases`, `dropResumenArtifacts`.
+  - `app/backend/src/server.js` — parche confirm automático (equivalente al de `server.legacy.js` del PR; el monolito de prod difiere del de develop solo en la feature admin previa).
+  - `app/backend/tests/unit/{iva-multi,azure-lineas-iva,ocr-reconcile}.test.js` — 29/29 ✅ ejecutados en el árbol de prod pre-deploy.
+  - `app/docker-compose.yml` — secret `mistral_api_key` (OK explícito de Julio) · `secrets/mistral_api_key.txt` (644, dir 700).
+  - `app/backend/src/config/features.json` — `ocr_mode: "triple"` (escrito in-place para preservar inode del bind-mount).
+- **Deploy**: rebuild → stop → up -d (corte ~15 s, fuera de ventana 00-06 por orden explícita de Julio). Backend healthy, HTTPS 200, 4/4 contenedores.
+- **Smoke E2E post-deploy** (motores reales): `dual_confirmed=true`, base 750,00 · cuota 157,50 · 21,0% · total 907,50 · NIF B06400980 — OpenAI 4,6 s · Azure 5,1 s · Mistral 4,8 s en paralelo.
+- **Coste triple**: +~$0,004/factura (~+$24/mes a 6 000 facturas). Revertible en caliente a `"dual"` en features.json.
+- **Pendiente**: mergear PR #114 a develop (sincroniza git con lo aplicado); añadir Mistral a `scripts/smoke-test-ocr.js` (cron 04:30); nota: el descalce main↔runtime de la REGLA 11 sigue vigente e incluye ahora también estos ficheros.
+
 ### 2026-06-01 — Visor de PDF del panel admin funcional en móvil (PDF.js en `<canvas>` sustituye al `<iframe>`)
 - **Disparador**: Julio reportó que el botón "🖼 Ver" de la columna imagen del panel admin abría la factura en su PC pero quedaba en blanco en el móvil.
 - **Causa raíz**: el visor renderizaba los PDF dentro de un `<iframe>` (`admin-facturas.js`, `verImagenAdmin` y `openLightbox`). Los navegadores móviles (Safari iOS, Chrome Android) NO disponen de visor de PDF embebido en `<iframe>`/`<embed>`/`<object>` — y menos sobre `blob:` — por lo que no renderizaban nada. En escritorio sí funciona por el visor PDF nativo del navegador. Todas las facturas actuales son PDF (1/1 en BD), de ahí el fallo sistemático en móvil.
@@ -3202,7 +3235,87 @@ Añade esta línea (backup cada día a las 3:00 AM):
 
 **Nota estado git:** el working tree de prod queda en rama `feature/admin-edicion-y-nombre-nif` (= imagen viva). El estado anterior sigue en `recovery/prod-live-20260615`. Ambas en origin.
 
+
+### 2026-07-06 — Integración Google Gemini 3 (Flash + Pro) como motores OCR extra
+- `prod/app/docker-compose.yml`: añadido secret `gemini_api_key` en sección backend secrets y sección secrets global (OK de Julio, REGLA 1 cumplida)
+- `prod/secrets/gemini_api_key.txt`: clave real colocada (644, deploy:deploy); archivo fuente `/opt/kk.txt` destruido con `shred -u`
+- `prod/app/backend/src/ocr/gemini.js`: nuevo módulo Gemini 3 Flash/Pro (parche quirúrgico desde staging; gemini-3.5-flash ESTABLE, gemini-3.1-pro-preview PREVIEW)
+- `prod/app/backend/src/ocr/index.js`: orquestador multi-motor actualizado con soporte Gemini Flash y Pro (copiado byte-a-byte desde staging)
+- `prod/app/backend/src/config/features.json`: añadidos `ocr_gemini_flash_model`, `ocr_gemini_pro_model`, `ocr_multi_engines`, comentarios `_OCR_MODE`/`_OCR_MULTI`; `ocr_mode` se mantiene en `triple` (Gemini disponible pero no activado hasta que cuenta tenga créditos)
+- Backend prod rebuildeado y healthy (Up, healthcheck OK); secreto Gemini verificado en `/run/secrets/gemini_api_key`
+- **PENDIENTE**: créditos Google AI Studio agotados (429 RESOURCE_EXHAUSTED) — integrar Gemini a flujo multi requiere recargar prepago en aistudio.google.com
+- `staging/app/backend/src/config/features.json`: `ocr_mode` cambiado a `multi` para E2E (pendiente confirmación cuando se recarguen créditos Gemini)
+
+
+### 2026-07-07 — Modo gemini_azure: Gemini 3.5 Flash como motor primario (reemplaza OpenAI)
+- Bench externo (20 facturas × 5 motores, 2026-07-07): gemini-3.5-flash lidera con 88,6% global, 90,3% CIF, 100% totales. Formalizado en ADR-0007.
+- `prod/app/backend/src/ocr/index.js`: `compareOCRResults` refactorizado para motores primarios arbitrarios (labelA/labelB); nuevo modo `gemini_azure` = Gemini Flash (primaryA) + Azure DI (primaryB). Retrocompat completa para modos dual/triple/multi.
+- `prod/app/backend/src/config/features.json`: `ocr_mode` cambiado a `gemini_azure`; `ocr_primary_engine` = `gemini_flash`.
+- E2E staging verificado: `engine=dual_gemini_flash_azure`, `dual_confirmed=true`, `confidence=1.000`, 5,99s (Flash 5,9s + Azure 4,7s en paralelo).
+- Backend prod rebuildeado y healthy; modo gemini_azure activo en producción desde 2026-07-07.
+- Model ID confirmado: `gemini-3-flash` (alias del bench) = `gemini-3.5-flash` (ID real API); `gemini-3-flash` devuelve 404.
+- OpenAI sigue disponible como motor único (`ocr_mode: "openai"`) o puede reactivarse cambiando features.json sin rebuild.
+
+### 2026-07-07 — Gemini como motor CIF completo + panel tech admin OCR + mejoras galería
+
+- `prod/app/backend/src/ocr/gemini.js`: añadidas `extractCIFOnly` y `extractReceptorCIFOnly` (extracción con sharp crop — emisor top 65%, receptor bottom 60%); module.exports ampliado.
+- `prod/app/backend/src/ocr/index.js`: `_secondPassReceptorIfNeeded` y `extractCIFOnlyOCR` ahora usan Gemini Flash como motor primario con fallback a OpenAI. `receptor_nif_source` diferencia `second_pass_gemini_flash` vs `second_pass_openai`.
+- `prod/app/backend/src/server.js`: añadida función `isTechAdmin(email)` que lee `tech_admin_emails` de features.json (fail-closed). `POST /api/admin/refresh-session` y `POST /api/auth/login` devuelven `is_tech_admin: true` para administradores técnicos. Nuevo endpoint `GET /api/admin/facturas/:id/ocr-detail` (solo tech_admin): devuelve valores confirmados + OCR raw por motor (openai, azure, gemini_flash) + metadatos.
+- `prod/app/backend/src/config/features.json`: añadido `tech_admin_emails: ["juliohesuni@gmail.com"]` para diferenciación sin migración de BD.
+- `prod/app/backend/package.json` + `package-lock.json`: `npm audit fix` + `nodemailer@^9.0.3` → 0 vulnerabilidades (resueltas: axios, form-data, multer, nodemailer).
+- `prod/app/frontend/src/admin-facturas.js`: función `parseFechaEs()` corrge «Invalid Date»; galería Ver Facturas muestra nombre/importe confirmados; lightbox con prev/next (botones #lb-nav-prev / #lb-nav-next); `window._isTechAdmin` capturado en login/refresh; `openOcrModal()` con tabla completa AI vs humano incluyendo tramos IVA y banda meta; botón OCR visible solo para tech_admin. Cache-buster `?v=20260707-001`.
+- `prod/app/frontend/src/admin-facturas.html`: añadido `<div id="ocr-modal">`. Cache-buster `?v=20260707-001`.
+- Staging y prod rebuildeados y healthy. PR #124 abierto en GitHub (estado: CLEAN, mergeable).
+
+### 2026-07-07 — Fix filtro empresa + lightbox back-navigation + exclusión Autoken
+
+- `admin-facturas.js`: filtro «Usuario» muestra nombre de empresa (regresión corregida); Escape cierra solo el modal más profundo; botón × en lightbox; cache-buster `?v=20260707-002`.
+- `admin-facturas.html`: `<button id="lb-close">` en lightbox; cache-buster `?v=20260707-002`.
+- `prod/app/backend/src/server.js`: `GET /api/admin/facturas/usuarios` excluye `tech_admin_emails` (Autoken no aparece en filtro de empresa).
+- `prod/scripts/smoke-test-ocr.js`: actualizado con testGeminiFlash + testReceptorPass Gemini-first.
+- Staging y prod 8/8 healthy. PR #125 contra develop.
+
 ---
 
 *SETEX Captura Facturas · setex-facturas.es*
 *Documento de referencia — actualizar con cada sesión de desarrollo*
+
+### 2026-07-07 — Fix filtro: solo empresas con facturas + eliminar Proveedor/CIF + excluir Autoken completo
+
+- `config/features.json`: añadido `soporte@autoken.es` a `tech_admin_emails` (hot-swap).
+- `server.js` (prod): query usuarios con `AND EXISTS` sobre uploads — solo muestra usuarios con facturas.
+- `admin-facturas.html`: eliminado filtro "Proveedor / CIF"; "Usuario" → "Usuario (CIF) Específico"; cache-buster `?v=20260707-003`.
+- `admin-facturas.js`: eliminadas todas las referencias a f-proveedor.
+- Prod 8/8 healthy. PR #126 contra develop.
+
+### 2026-07-11 — Fix identidad del user también en preview (no solo al confirmar) + higiene git
+
+- **Causa**: `/api/upload-confirm` ya forzaba el lado propio de la factura (receptor en compra, emisor en venta) desde `users.company_nif/company_name` en vez del OCR (commit `7bb9bfc`, 2026-06-18). El preview (`/api/upload-preview`) seguía mostrando el guess crudo de la IA para ese mismo campo — el usuario lo corregía a mano en cada factura aunque el backend lo iba a sobrescribir igual al guardar. Confirmado con datos reales de un cliente en prod: 8/8 facturas con `receptor_nombre` final correcto pese a la corrección manual constante.
+- `server.js`: nuevo bloque tras la autocorrección de contraparte en `/api/upload-preview` — si `userCompanyNif`/`userCompanyName` están disponibles (ya cargados para el contexto OCR), fuerza `effectiveProvNif`/`proveedor_nombre` (venta) o `receptor_nif`/`receptor_nombre` (compra) desde el registro, igual criterio que el confirm. Cero llamadas nuevas a BD.
+- Tests: 78/79 (único fallo preexistente y no relacionado: paridad de rutas v3, REGLA 11).
+- **Higiene git** (commits `0aaa31c`, `30f79a6`, `e992497` en `feature/admin-edicion-y-nombre-nif`, sin PR aún — se abrirá cuando esa feature esté cerrada): se commiteó el estado OCR gemini_azure que ya vivía en disco sin versionar (idéntico a `origin/develop`, PRs #114/#122/#123/#124/#126); `npm audit fix` en tooling raíz (js-yaml, fast-uri); y el fix de este preview, que arrastró sin querer al mismo commit otros cambios ya pendientes en `server.js` (endpoint `/api/admin/facturas/:id/ocr-detail`, aprendizaje de nombre en `known_cifs`, `fillDerivedBases` en confirm, `is_tech_admin` en login/refresh) — validados por los mismos tests antes de desplegar, deploy aceptado explícitamente por Julio con el bundle completo.
+- **Deploy**: rebuild → stop → up -d backend. 4/4 contenedores healthy, HTTPS 200, sin errores en logs de arranque.
+- **Pendiente**: `main` sigue 135 commits por detrás de `develop` (release grande, requiere decisión expresa de Julio); PR de `feature/admin-edicion-y-nombre-nif` contra `develop` sin abrir (16+ commits propios, estado de cierre de esa feature sin verificar).
+
+### 2026-07-11 (continuación) — Descubrimiento: develop/staging corren v3, no el monolito — hueco de lógica de negocio mucho mayor de lo documentado
+
+- Al intentar portar el fix de identidad-en-preview (entrada anterior) a `develop`, se confirmó que `origin/develop` **no** usa `server.js` monolito — usa la v3 modular (Awilix DI, la misma que se swapeó en prod el 28-abr y se revirtió por LL-002, REGLA 11). **Staging corre esa v3** (Dockerfile `CMD node src/server.js` → v3 en develop, sin override).
+- Comparados `controllers/uploads/{preview,confirm}.controller.js` + `services/invoices/{ocr-orchestration,invoice-persist}.service.js` de develop contra el monolito de prod: v3 **no tiene** distinción compra/venta, reconciliación de CIF con dígito de control, `known_cifs`/`company_catalog` con la lógica actual, validación VIES, 2ª pasada de receptor, ni reconciliación multi-IVA por tramos. Su orquestador OCR es un Strategy gen��rico (`consensus`/`fallback`/`weighted`) que **no invoca `ocr/index.js`** — el único módulo OCR que sí coincide byte a byte entre prod y develop, pero que v3 no usa en absoluto.
+- Conclusión: no es que a v3 le falte "un fix" puntual — le falta una generación completa de lógica de negocio construida a base de incidentes reales en el monolito desde abril 2026. REGLA 11 ya avisaba de esto en abstracto ("v3 roto, adapters incompatibles"); esta sesión lo confirma con detalle concreto.
+- **Decisión de Julio (2026-07-11): no portar nada a v3/develop hoy — solo documentar.** El fix de identidad-en-preview queda solo en prod (monolito); staging/develop siguen sin él y sin todo lo demás listado arriba.
+- **Pendiente si se retoma el swap v3 en el futuro**: no tratarlo como una tarea puntual — requiere un mapa completo del hueco (CIF, IVA, VIES, known_cifs, identidad, motores OCR) antes de escribir código, con plan explícito aprobado por Julio.
+
+### 2026-07-13 — Modo documento en cámara + fix atribución de motor IA + fixes registro CIF (SIN DESPLEGAR — pendiente rebuild/deploy explícito)
+
+**Contexto**: investigación a petición de Julio sobre 3 fallos reportados (registro de CIF, etiqueta de motor IA siempre "OpenAI"/"consenso" en panel admin pese a que el motor activo es Gemini+Azure, y viabilidad de detección de bordes de documento en cámara). Los 3 diagnósticos y sus arreglos se implementaron en esta sesión, en este orden: cámara → motor IA → CIF. Cambios solo en el working tree de prod (rama `feature/admin-edicion-y-nombre-nif`, sin commitear); **no se ha hecho rebuild ni deploy** — pendiente de confirmación explícita de Julio.
+
+- **Modo documento en cámara** (`jscanify` + `opencv.js`, vendorizados en `prod/app/frontend/src/{jscanify.js,opencv.js}`, ~9 MB, MIT license, descargados de jsdelivr): carga perezosa solo al abrir la cámara (nunca en la carga inicial de la app). `index.html`: nuevo `<canvas id="camera-scan-overlay">` sobre el `<video>` existente + aviso de dígito de control en el registro. `styles.css`: overlay transparente con mismo `object-fit:cover` que el vídeo para alinear el contorno detectado. `app.js`: bucle de detección en vivo (cada 400ms, sobre frame reducido a 480px de ancho para no penalizar móviles gama baja) dibuja el contorno con `findPaperContour`/`getCornerPoints`; `takePhoto()` usa `extractPaper()` para recorte+enderezado de perspectiva antes de subir la foto, con fallback silencioso a la captura estándar de siempre si algo falla (módulo puramente aditivo, no puede romper la captura). Cache-buster `app.js`/`styles.css`/`cif-validator.js` → `?v=20260713-001`.
+- **Fix atribución de motor IA** (`prod/app/backend/src/ocr/index.js`): `buildCampoSources()` tenía hardcodeados los nombres `'openai'`/`'azure'` para los dos motores primarios, sin importar el modo activo real — causaba que la "vista OCR" del panel admin mostrara siempre `OpenAI`/`consenso` como motor lector de cada campo, incluso con `ocr_mode: "gemini_azure"` activo desde el 2026-07-07. Ahora recibe `labelA`/`labelB` (ya calculados en `compareOCRResults`, antes no se propagaban) y los usa en vez de los strings fijos. Frontend (`admin-facturas.js` `MOTOR_COLOR`) ya soportaba `gemini_flash` — no requirió cambio. **Nota**: las facturas ya procesadas en modo gemini_azure tienen `campo_sources` con `'openai'`/`'azure'` grabado tal cual en `ocr_result` (JSONB) — el fix solo corrige las facturas *nuevas* tras el deploy, no reescribe el histórico.
+- **Fixes registro de CIF**:
+  - `index.html`: quitado `maxlength="9"` del input de CIF en registro — truncaba CIFs pegados/autocompletados con guión/punto (el navegador aplica maxlength sobre el texto pegado antes de que el JS lo limpie), dejando el CIF guardado un carácter corto sin avisar al usuario.
+  - `domain/validators/nif.js` (`checkDigitCIF`, fuente única compartida por `server.js` y `server.legacy.js` vía el shim `ocr/validateCIF.js`): letras con dígito de control siempre-letra corregidas de `'KPQS'` a `'NPQRSW'` (algoritmo AEAT real, verificado contra Ministerio del Interior/Wikipedia). El set anterior tenía `K` de más (ni es letra de entidad CIF válida) y le faltaban `N` (entidad extranjera), `R` (congregación religiosa) y `W` (establecimiento permanente no residente) — generaba falso aviso "CIF no válido AEAT" para esas empresas. Verificado con casos sintéticos (`B12345674`→true único, `W1234567D`→true único).
+  - `server.js`: normalizada la comparación SQL de `client_companies.cif` en las 6 consultas que lo usaban (registro, login, estado de empresa, sugerencias de empresa coincidente, búsqueda difusa Levenshtein) — de `UPPER(REPLACE(cif, ' ', ''))` (solo quitaba espacios) a `UPPER(regexp_replace(cif, '[^A-Za-z0-9]', '', 'g'))` (quita cualquier separador, igual que la normalización ya aplicada en JS al valor de entrada). Antes, un CIF guardado en BD con guión nunca hacía match con el CIF normalizado que llega en el registro/login, generando altas duplicadas "pendientes" para empresas ya activas.
+  - `cif-validator.js` (frontend): añadido `checkDigitCIF` como espejo exacto del backend (mismo fix NPQRSW), expuesto en `SetexCifValidator`. `app.js`: el formulario de registro ahora avisa en vivo (`#register-cif-warning`) si el CIF no supera el dígito de control, en vez de solo avisar después en el perfil ya creado.
+- **Verificación**: `node --check` en los 6 ficheros JS tocados (sin errores de sintaxis); `checkDigitCIF` probado con casos sintéticos en Node directamente, frontend y backend dan resultados idénticos byte a byte. No se ejecutó el suite de tests completo de `tests/` (sin tests previos relacionados con estos módulos) ni pruebas E2E en navegador real — pendiente antes de dar por buena la parte de cámara en particular (requiere dispositivo real, no verificable en este entorno).
+- **Excluido a petición de Julio**: no se tocó la vista de comparación OCR-vs-humano del panel admin (el hecho de que el CIF forzado por identidad no se compara de verdad contra el guess crudo de la IA) — queda documentado en la sesión de análisis previa, sin implementar.
+- **Pendiente antes de producción**: rebuild + stop + up -d backend y frontend (Regla 3), confirmación explícita de Julio para desplegar, y prueba manual en móvil real del modo documento (tamaño de descarga ~9 MB de opencv.js, primera vez que se abre la cámara).
