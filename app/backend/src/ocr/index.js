@@ -30,6 +30,11 @@ const mistral = require('./mistral');
 const gemini  = require('./gemini');
 const { mergeLineasIva, fillDerivedBases, dropResumenArtifacts, normalizeConfirmedLineasIva, parseSpanishAmount } = require('./validateIVA');
 const { validateSpanishTaxId } = require('./validateCIF');
+// Fase 2 pipeline v2 (2026-07-21): validación determinista aditiva (checksums
+// NIF/NIE/CIF + cuadre aritmético con valores despejados). Se calcula y se
+// adjunta al resultado, pero NO cambia ningún campo existente ni el
+// comportamiento actual del fan-out — es la base para el modo shadow.
+const { validarFactura } = require('../domain/routing');
 
 function getSecret(name) {
   try {
@@ -420,6 +425,12 @@ function compareOCRResults(openaiRes, azureRes, extraResults, logger, labelA = '
     }
   }
 
+  // ── Validación determinista (Fase 2 pipeline v2, 2026-07-21) ────────────────
+  // Aditivo: no altera `merged` ni ningún campo que ya se devuelva hoy. Sirve
+  // para el modo shadow de la Fase 3 (comparar contra la decisión real sin
+  // afectarla) y para trazabilidad (incidencias + valores despejados).
+  const validacionDeterminista = validarFactura(merged);
+
   const baseConf = Math.max(openaiRes.confidence || 0, azureRes.confidence || 0);
   // Q5: penalizar confianza según calidad del acuerdo de NIF:
   //   - dual_confirmed (ambos leen el mismo NIF): boost +15%
@@ -472,6 +483,7 @@ function compareOCRResults(openaiRes, azureRes, extraResults, logger, labelA = '
     })(),
     nif_status: nifStatus,
     nif_discrepancy: nifStatus === 'conflict' ? { openai: oNif, azure: aNif } : null,
+    validacion_determinista: validacionDeterminista,
   };
 }
 
@@ -581,6 +593,8 @@ async function extractInvoiceOCR(filePath, mimeType, fileName, logger, context =
     // La coherencia agregados=Σtramos aplica también con un solo motor
     if (wrapped.campos) reconcileMultiIvaAggregates(wrapped.campos, logger);
     await _secondPassReceptorIfNeeded(wrapped, filePath, mimeType, context, logger);
+    // Validación determinista aditiva — misma paridad que el modo dual (Fase 2 pipeline v2)
+    if (wrapped.campos) wrapped.validacion_determinista = validarFactura(wrapped.campos);
     return wrapped;
   } catch (err) {
     logger.error(`[OCR] Motor ${mode} falló: ${err.message}`);
@@ -664,4 +678,13 @@ async function extractCIFOnlyOCR(filePath, mimeType) {
 const integrateMistralResult = (merged, oF, aF, mF, logger) =>
   integrateExtraEngineResult(merged, oF, aF, mF, 'mistral', logger);
 
-module.exports = { extractInvoiceOCR, extractCIFOnlyOCR, reconcileMultiIvaAggregates, integrateExtraEngineResult, integrateMistralResult };
+module.exports = {
+  extractInvoiceOCR,
+  extractCIFOnlyOCR,
+  reconcileMultiIvaAggregates,
+  integrateExtraEngineResult,
+  integrateMistralResult,
+  // Exportada 2026-07-21 (Fase 2 pipeline v2) para poder testear la fusión y
+  // la validación determinista sin llamadas de red a los motores OCR.
+  compareOCRResults,
+};
