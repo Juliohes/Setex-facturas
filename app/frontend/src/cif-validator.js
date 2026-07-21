@@ -1,6 +1,8 @@
 // Validación CIF emisor/receptor vs usuario logueado — vanilla JS.
 // Espejo de app/backend/src/lib/invoice-cif-validator.js. Mantén sincronizados.
-// Expone window.SetexCifValidator = { validateInvoiceCifs, normalizeNif, normalizeNombre }
+// checkDigitCIF es espejo de app/backend/src/domain/validators/nif.js — mismo
+// algoritmo AEAT, mismo fix 2026-07-13 (letras siempre-letra: NPQRSW).
+// Expone window.SetexCifValidator = { validateInvoiceCifs, normalizeNif, normalizeNombre, checkDigitCIF }
 (function (global) {
     'use strict';
 
@@ -9,6 +11,35 @@
             .toUpperCase()
             .replace(/[\s\-.]/g, '')
             .replace(/^ES/, '');
+    }
+
+    /**
+     * Valida el dígito de control de un CIF español (algoritmo AEAT).
+     * Retorna true/false, o null si no aplica (NIF, NIE u otro formato).
+     * Solo señal de confianza, NUNCA usar para bloquear/rechazar de forma dura.
+     */
+    function checkDigitCIF(taxId) {
+        if (!taxId || typeof taxId !== 'string') return null;
+        const clean = taxId.toUpperCase().replace(/[\s\-.]/g, '');
+        if (!/^[A-Z]\d{7}[A-Z0-9]$/.test(clean)) return null;
+
+        const digits = clean.slice(1, 8).split('').map(Number);
+        const control = clean[8];
+
+        let sumOdd = 0;
+        for (const i of [0, 2, 4, 6]) {
+            const d = digits[i] * 2;
+            sumOdd += d >= 10 ? Math.floor(d / 10) + (d % 10) : d;
+        }
+        const sumEven = digits[1] + digits[3] + digits[5];
+        const unit = (sumOdd + sumEven) % 10;
+        const checkNum = (10 - unit) % 10;
+        const checkLetters = 'JABCDEFGHI';
+
+        if ('NPQRSW'.includes(clean[0])) {
+            return control === checkLetters[checkNum];
+        }
+        return control === String(checkNum);
     }
 
     function normalizeNombre(s) {
@@ -87,6 +118,7 @@
     global.SetexCifValidator = {
         validateInvoiceCifs: validateInvoiceCifs,
         normalizeNif: normalizeNif,
-        normalizeNombre: normalizeNombre
+        normalizeNombre: normalizeNombre,
+        checkDigitCIF: checkDigitCIF
     };
 })(typeof window !== 'undefined' ? window : this);

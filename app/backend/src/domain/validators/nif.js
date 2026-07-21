@@ -104,8 +104,13 @@ function checkDigitCIF(taxId) {
   const checkNum = (10 - unit) % 10;
   const checkLetters = 'JABCDEFGHI';
 
-  // K, P, Q, S → control es siempre letra
-  if ('KPQS'.includes(clean[0])) {
+  // N, P, Q, R, S, W → control es siempre letra (AEAT). Fix 2026-07-13: el set
+  // anterior ('KPQS') tenía K de más (ni siquiera es letra de entidad CIF
+  // válida, ver CIF_ENTITY_LETTERS en ocr/validateCIF.js) y le faltaban N, R
+  // y W — causaba falsos "CIF no válido" en empresas extranjeras (N),
+  // congregaciones religiosas (R) y establecimientos permanentes de entidad
+  // no residente (W). Fuente: Ministerio del Interior / Wikipedia NIF.
+  if ('NPQRSW'.includes(clean[0])) {
     return control === checkLetters[checkNum];
   }
 

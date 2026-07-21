@@ -958,7 +958,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
     // Verificar / auto-registrar la empresa con flujo de aprobación
     const clientCompanyResult = await pool.query(
       `SELECT id, nombre, activa, pendiente FROM client_companies
-       WHERE UPPER(REPLACE(cif, ' ', '')) = $1`,
+       WHERE UPPER(regexp_replace(cif, '[^A-Za-z0-9]', '', 'g')) = $1`,
       [cleanCompanyNif]
     );
 
@@ -1087,7 +1087,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     if (user.company_nif && !user.is_admin) {
       const cleanNif = String(user.company_nif).toUpperCase().replace(/[^A-Z0-9]/g, '');
       const compCheck = await pool.query(
-        `SELECT id, activa, pendiente FROM client_companies WHERE UPPER(REPLACE(cif, ' ', '')) = $1`,
+        `SELECT id, activa, pendiente FROM client_companies WHERE UPPER(regexp_replace(cif, '[^A-Za-z0-9]', '', 'g')) = $1`,
         [cleanNif]
       );
       if (compCheck.rows.length === 0) {
@@ -1169,7 +1169,7 @@ app.get('/api/company/status', authenticateToken, async (req, res) => {
     if (!nif) return res.json({ status: 'no_company' });
     const cleanNif = nif.toUpperCase().replace(/[^A-Z0-9]/g, '');
     const compRow = await pool.query(
-      `SELECT id, nombre, activa, pendiente FROM client_companies WHERE UPPER(REPLACE(cif, ' ', '')) = $1 LIMIT 1`,
+      `SELECT id, nombre, activa, pendiente FROM client_companies WHERE UPPER(regexp_replace(cif, '[^A-Za-z0-9]', '', 'g')) = $1 LIMIT 1`,
       [cleanNif]
     );
     if (!compRow.rows.length) return res.json({ status: 'not_found', company_nif: cleanNif });
@@ -2990,7 +2990,7 @@ async function findMatchingCompanies(nombre, cif) {
     if (cifNorm.length >= 5) {
       const exactRes = await pool.query(
         `SELECT id, nombre, cif, 1.0 AS score FROM client_companies
-         WHERE UPPER(REPLACE(cif, ' ', '')) = $1 AND pendiente = false AND activa = true LIMIT 5`,
+         WHERE UPPER(regexp_replace(cif, '[^A-Za-z0-9]', '', 'g')) = $1 AND pendiente = false AND activa = true LIMIT 5`,
         [cifNorm]
       );
       for (const row of exactRes.rows) {
@@ -3020,10 +3020,10 @@ async function findMatchingCompanies(nombre, cif) {
     if (cifNorm.length >= 5) {
       const levRes = await pool.query(
         `SELECT id, nombre, cif,
-                (1.0 - levenshtein(UPPER(REPLACE(cif,' ','')), $1)::float / GREATEST(length($1), length(REPLACE(cif,' ','')), 1)) AS score
+                (1.0 - levenshtein(UPPER(regexp_replace(cif, '[^A-Za-z0-9]', '', 'g')), $1)::float / GREATEST(length($1), length(regexp_replace(cif, '[^A-Za-z0-9]', '', 'g')), 1)) AS score
          FROM client_companies
-         WHERE levenshtein(UPPER(REPLACE(cif,' ','')), $1) <= 2
-           AND UPPER(REPLACE(cif,' ','')) <> $1
+         WHERE levenshtein(UPPER(regexp_replace(cif, '[^A-Za-z0-9]', '', 'g')), $1) <= 2
+           AND UPPER(regexp_replace(cif, '[^A-Za-z0-9]', '', 'g')) <> $1
            AND pendiente = false AND activa = true
          ORDER BY score DESC LIMIT 3`,
         [cifNorm]
@@ -3239,7 +3239,7 @@ async function requireActiveCompany(req, res, next) {
     const cleanNif = nif.toUpperCase().replace(/[^A-Z0-9]/g, '');
     const compRow = await pool.query(
       `SELECT activa, pendiente FROM client_companies
-       WHERE UPPER(REPLACE(cif, ' ', '')) = $1 LIMIT 1`,
+       WHERE UPPER(regexp_replace(cif, '[^A-Za-z0-9]', '', 'g')) = $1 LIMIT 1`,
       [cleanNif]
     );
     if (!compRow.rows.length) {
