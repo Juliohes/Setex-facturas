@@ -143,15 +143,20 @@ function amountsBothAgree(a, b) {
 // Compara el valor final de cada campo contra la salida de cada motor.
 // Resultado: 'consensus' si ≥2 coinciden, nombre del motor si solo uno coincide,
 // 'calculated' si fue calculado aritméticamente, null si el campo está vacío.
-function buildCampoSources(merged, oF, aF, extras) {
+// labelA/labelB identifican a los motores primarios reales según el modo activo
+// (ej. 'gemini_flash'/'azure' en modo gemini_azure) — sin esto, el nombre
+// quedaba fijo en 'openai'/'azure' aunque el motor real fuera otro (bug
+// detectado 2026-07-13: la vista OCR del panel admin mostraba siempre
+// "OpenAI"/"consenso" pese a que el motor activo era Gemini Flash + Azure).
+function buildCampoSources(merged, oF, aF, extras, labelA = 'openai', labelB = 'azure') {
   const TRACKABLE = [
     'proveedor_nif', 'proveedor_nombre', 'receptor_nif', 'receptor_nombre',
     'numero_factura', 'fecha_emision', 'total', 'base_imponible',
     'iva_porcentaje', 'cuota_iva', 'irpf_porcentaje', 'cuota_irpf',
   ];
   const engines = [
-    { name: 'openai', campos: oF },
-    { name: 'azure',  campos: aF },
+    { name: labelA, campos: oF },
+    { name: labelB, campos: aF },
     ...(extras || []).map(e => ({ name: e.name, campos: e.res?.campos || {} })),
   ];
   const sources = {};
@@ -428,7 +433,7 @@ function compareOCRResults(openaiRes, azureRes, extraResults, logger, labelA = '
 
   logger.info(`[DualOCR] confirmed=${dual_confirmed} nif_status=${nifStatus} totalOK=${totalAgree} fechaOK=${fechaAgree} ${labelA}Time=${openaiRes.processing_time_s}s ${labelB}Time=${azureRes.processing_time_s}s lineasIva=${merged.lineas_iva?.length || 0}`);
 
-  const campo_sources = buildCampoSources(merged, oF, aF, extras);
+  const campo_sources = buildCampoSources(merged, oF, aF, extras, labelA, labelB);
 
   return {
     success: true,
