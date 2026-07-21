@@ -8,6 +8,11 @@
 
 const CIF_ENTITY_LETTERS = 'ABCDEFGHJNPQRSUVW';
 
+// Letras de control NIF/NIE, indexadas por (número % 23). Fuente: Ministerio
+// del Interior. Tabla oficial única para persona física (NIF) y NIE
+// (sustituyendo X/Y/Z por 0/1/2 antes de aplicar el módulo).
+const LETRAS_NIF = 'TRWAGMYFPDXBNJZSQVHLCKE';
+
 // CIFs/NIFs placeholder que GPT-4o tiende a inventar (secuencias obvias)
 const BLACKLIST = new Set([
   'A12345678', 'B12345678', 'C12345678', 'D12345678',
@@ -118,4 +123,46 @@ function checkDigitCIF(taxId) {
   return control === String(checkNum);
 }
 
-module.exports = { validateSpanishTaxId, checkDigitCIF };
+/**
+ * Valida el dígito de control de un NIF de persona física (algoritmo módulo 23).
+ * Solo aplica a formato NIF (8 dígitos + letra).
+ *
+ * Retorna:
+ *   true  → dígito de control correcto
+ *   false → dígito de control incorrecto (probable error OCR)
+ *   null  → no se puede determinar (no es formato NIF)
+ *
+ * IMPORTANTE: igual que checkDigitCIF, usar solo como señal de confianza,
+ * NO como rechazo duro (2026-07-21: hasta ahora validateSpanishTaxId daba
+ * por válido cualquier NIF con formato correcto sin comprobar la letra —
+ * un solo dígito mal leído por el OCR pasaba desapercibido).
+ */
+function checkDigitNIF(taxId) {
+  if (!taxId || typeof taxId !== 'string') return null;
+  const clean = taxId.toUpperCase().replace(/[\s\-\.]/g, '');
+  if (!/^\d{8}[A-Z]$/.test(clean)) return null;
+
+  const numero = Number(clean.slice(0, 8));
+  const control = clean[8];
+  return control === LETRAS_NIF[numero % 23];
+}
+
+/**
+ * Valida el dígito de control de un NIE (algoritmo módulo 23, sustituyendo
+ * el prefijo X/Y/Z por 0/1/2 antes de calcular). Solo aplica a formato NIE.
+ *
+ * Retorna true / false / null con la misma semántica que checkDigitNIF.
+ */
+function checkDigitNIE(taxId) {
+  if (!taxId || typeof taxId !== 'string') return null;
+  const clean = taxId.toUpperCase().replace(/[\s\-\.]/g, '');
+  const m = /^([XYZ])(\d{7})([A-Z])$/.exec(clean);
+  if (!m) return null;
+
+  const EQUIVALENCIA_PREFIJO = { X: '0', Y: '1', Z: '2' };
+  const numero = Number(EQUIVALENCIA_PREFIJO[m[1]] + m[2]);
+  const control = m[3];
+  return control === LETRAS_NIF[numero % 23];
+}
+
+module.exports = { validateSpanishTaxId, checkDigitCIF, checkDigitNIF, checkDigitNIE };

@@ -143,6 +143,12 @@ function dropResumenArtifacts(lineas) {
 function validateIVACoherencia(campos) {
   const warnings = [];
   const errors   = [];
+  // Valores despejados por aritmética cuando una comprobación no cuadra
+  // (2026-07-21): base/tipo se tratan como ancla (el tipo pertenece a un
+  // conjunto legal cerrado, fácil de leer bien) y se propone el candidato
+  // del lado sospechoso. Es solo una PROPUESTA — quien la use decide si
+  // aplicarla (p.ej. solo sobre campos marcados ambiguos/ilegibles).
+  const sugerencias = {};
 
   const base      = parseSpanishAmount(campos.base_imponible);
   const cuotaIva  = parseSpanishAmount(campos.cuota_iva);
@@ -161,6 +167,7 @@ function validateIVACoherencia(campos) {
       errors.push(
         `IVA inconsistente: ${campos.base_imponible} × ${campos.iva_porcentaje}% = ${cuotaEsperada.toFixed(2)}€ ≠ cuota_iva ${campos.cuota_iva} (diff: ${diff.toFixed(2)}€)`
       );
+      sugerencias.cuota_iva = fmtAmountEs(cuotaEsperada);
     } else if (diff > 0.30 && esMulti) {
       // Con IVA múltiple, toleramos hasta 30 céntimos (sumas de redondeos)
       warnings.push(`IVA mixto: cuota total ${campos.cuota_iva}€ difiere ${diff.toFixed(2)}€ vs cálculo simple`);
@@ -176,6 +183,7 @@ function validateIVACoherencia(campos) {
       errors.push(
         `Total inconsistente: base(${campos.base_imponible}) + IVA(${campos.cuota_iva}) - IRPF(${campos.cuota_irpf || '0,00'}) = ${totalCalculado.toFixed(2)}€ ≠ total(${campos.total}) (diff: ${diff.toFixed(2)}€)`
       );
+      sugerencias.total = fmtAmountEs(totalCalculado);
     }
   }
 
@@ -255,6 +263,7 @@ function validateIVACoherencia(campos) {
     valid: errors.length === 0,
     warnings,
     errors,
+    sugerencias,
     desglose: {
       base_parseada:  base,
       cuota_parseada: cuotaIva,
@@ -453,6 +462,7 @@ module.exports = {
   parseSpanishAmount,
   parsePercent,
   parseRateEntero,
+  fmtAmountEs,
   fillDerivedBases,
   dropResumenArtifacts,
   normalizeConfirmedLineasIva,
