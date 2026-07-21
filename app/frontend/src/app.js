@@ -545,6 +545,114 @@ function setInvoiceType(type) {
     }
 }
 
+// ── Detección de documento en vivo ("modo documento", como cámaras móviles) ───
+// Usa jscanify (OpenCV.js) para resaltar en vivo el contorno de la factura y
+// recortar/enderezar la foto al capturar. Carga perezosa: las librerías (la
+// de OpenCV.js pesa ~9 MB) solo se descargan al abrir la cámara, nunca en la
+// carga inicial de la app. Módulo puramente ADITIVO: si algo falla al cargar
+// o al detectar, se degrada en silencio a la captura estándar de siempre —
+// nunca debe poder romper el flujo de "hacer la foto y subir la factura".
+let docScanner = null;
+let docScanLibsPromise = null;
+let docScanLoopTimer = null;
+let docScanActive = false;
+
+function loadScriptOnce(src) {
+    return new Promise((resolve, reject) => {
+        const existing = document.querySelector(`script[src="${src}"]`);
+        if (existing) { existing.dataset.loaded === 'true' ? resolve() : existing.addEventListener('load', resolve); return; }
+        const s = document.createElement('script');
+        s.src = src;
+        s.onload = () => { s.dataset.loaded = 'true'; resolve(); };
+        s.onerror = () => reject(new Error(`No se pudo cargar ${src}`));
+        document.head.appendChild(s);
+    });
+}
+
+function ensureDocScanLibs() {
+    if (docScanLibsPromise) return docScanLibsPromise;
+    docScanLibsPromise = (async () => {
+        await loadScriptOnce('opencv.js?v=20260713-001');
+        // opencv.js inicializa su runtime WASM de forma asíncrona.
+        await new Promise((resolve, reject) => {
+            if (typeof cv !== 'undefined' && cv.Mat) { resolve(); return; }
+            const timeout = setTimeout(() => reject(new Error('Timeout inicializando OpenCV.js')), 15000);
+            window.cv = window.cv || {};
+            cv['onRuntimeInitialized'] = () => { clearTimeout(timeout); resolve(); };
+        });
+        await loadScriptOnce('jscanify.js?v=20260713-001');
+        docScanner = new jscanify();
+    })().catch(err => {
+        console.warn('[DocScan] Detección de documento no disponible, se usa captura estándar:', err.message);
+        docScanLibsPromise = null; // permite reintentar la próxima vez que se abra la cámara
+        docScanner = null;
+        throw err;
+    });
+    return docScanLibsPromise;
+}
+
+function startDocScanLoop() {
+    ensureDocScanLibs().then(() => {
+        docScanActive = true;
+        docScanLoopTick();
+    }).catch(() => { /* degradación silenciosa: sin overlay, captura normal intacta */ });
+}
+
+function stopDocScanLoop() {
+    docScanActive = false;
+    if (docScanLoopTimer) { clearTimeout(docScanLoopTimer); docScanLoopTimer = null; }
+    const overlay = document.getElementById('camera-scan-overlay');
+    if (overlay) overlay.getContext('2d').clearRect(0, 0, overlay.width, overlay.height);
+}
+
+// Downscale para detección en vivo ligera (móviles gama baja); la captura
+// final (takePhoto) sí usa la resolución nativa completa del vídeo.
+const DOC_SCAN_LIVE_WIDTH = 480;
+
+function docScanLoopTick() {
+    if (!docScanActive || !docScanner) return;
+    try {
+        const video = document.getElementById('camera-video');
+        const overlay = document.getElementById('camera-scan-overlay');
+        if (video.videoWidth > 0 && overlay) {
+            const scale = Math.min(1, DOC_SCAN_LIVE_WIDTH / video.videoWidth);
+            const dw = Math.round(video.videoWidth * scale);
+            const dh = Math.round(video.videoHeight * scale);
+            const tmp = document.createElement('canvas');
+            tmp.width = dw; tmp.height = dh;
+            tmp.getContext('2d').drawImage(video, 0, 0, dw, dh);
+
+            const img = cv.imread(tmp);
+            const contour = docScanner.findPaperContour(img);
+            if (overlay.width !== video.videoWidth) overlay.width = video.videoWidth;
+            if (overlay.height !== video.videoHeight) overlay.height = video.videoHeight;
+            const ctx = overlay.getContext('2d');
+            ctx.clearRect(0, 0, overlay.width, overlay.height);
+            if (contour) {
+                const c = docScanner.getCornerPoints(contour);
+                if (c.topLeftCorner && c.topRightCorner && c.bottomLeftCorner && c.bottomRightCorner) {
+                    const kx = overlay.width / dw, ky = overlay.height / dh;
+                    const pts = [c.topLeftCorner, c.topRightCorner, c.bottomRightCorner, c.bottomLeftCorner];
+                    ctx.strokeStyle = '#48bb78';
+                    ctx.lineWidth = 6;
+                    ctx.beginPath();
+                    pts.forEach((p, i) => {
+                        const x = p.x * kx, y = p.y * ky;
+                        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+                    });
+                    ctx.closePath();
+                    ctx.stroke();
+                }
+            }
+            img.delete();
+        }
+    } catch (e) {
+        // La detección en vivo es puramente cosmética: cualquier fallo se
+        // ignora y la captura de foto normal sigue funcionando intacta.
+    }
+    docScanLoopTimer = setTimeout(docScanLoopTick, 400);
+}
+
 // ── File handling ─────────────────────────────────────────────────────────────
 
 let cameraStream = null;
@@ -563,6 +671,7 @@ function doCapturePhoto() {
                 const video = document.getElementById('camera-video');
                 video.srcObject = cameraStream;
                 document.getElementById('camera-overlay').style.display = 'flex';
+                video.addEventListener('loadedmetadata', startDocScanLoop, { once: true });
             }).catch(() => {
                 document.getElementById('camera-input').click();
             });
@@ -577,6 +686,7 @@ function selectFile() {
 }
 
 function closeCamera() {
+    stopDocScanLoop();
     if (cameraStream) {
         cameraStream.getTracks().forEach(t => t.stop());
         cameraStream = null;
@@ -587,9 +697,23 @@ function closeCamera() {
 function takePhoto() {
     const video = document.getElementById('camera-video');
     const canvas = document.getElementById('camera-canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    canvas.getContext('2d').drawImage(video, 0, 0);
+    let extracted = null;
+    if (docScanner) {
+        try {
+            extracted = docScanner.extractPaper(video, video.videoWidth, video.videoHeight);
+        } catch (e) {
+            extracted = null; // fallback silencioso a la captura estándar de todo el encuadre
+        }
+    }
+    if (extracted) {
+        canvas.width = extracted.width;
+        canvas.height = extracted.height;
+        canvas.getContext('2d').drawImage(extracted, 0, 0);
+    } else {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext('2d').drawImage(video, 0, 0);
+    }
     closeCamera();
     canvas.toBlob(function(blob) {
         if (blob) {
@@ -1975,9 +2099,14 @@ const _elCuotaMono = document.getElementById('confirm-cuota-iva');
 if (_elBaseMono)  _elBaseMono.addEventListener('input',  () => recalcCoherenciaMono('base'));
 if (_elCuotaMono) _elCuotaMono.addEventListener('input', () => recalcCoherenciaMono('cuota'));
 
-// Auto-capitalizar NIF en registro
+// Auto-capitalizar NIF en registro + aviso en vivo si no supera el dígito de
+// control AEAT (antes solo se avisaba después, en el perfil ya registrado).
 document.getElementById('register-company-nif').addEventListener('input', function() {
     this.value = this.value.toUpperCase().replace(/[\s\-\.]/g, '');
+    const warningEl = document.getElementById('register-cif-warning');
+    if (!warningEl) return;
+    const digitOk = window.SetexCifValidator ? SetexCifValidator.checkDigitCIF(this.value) : null;
+    warningEl.style.display = (digitOk === false) ? 'block' : 'none';
 });
 
 // Historial

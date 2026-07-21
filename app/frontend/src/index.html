@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SETEX - Captura de Facturas</title>
     <link rel="icon" href="favicon-app.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="styles.css?v=20260420-001">
+    <link rel="stylesheet" href="styles.css?v=20260713-001">
     <!-- PWA -->
     <link rel="manifest" href="/manifest.json">
     <meta name="theme-color" content="#667eea">
@@ -44,7 +44,8 @@
                 <h2>Registro</h2>
                 <p style="font-size: 14px; color: #888;">El registro está disponible solo para usuarios autorizados.</p>
                 <input type="text" id="register-company-name" placeholder="Nombre de la empresa">
-                <input type="text" id="register-company-nif" placeholder="CIF de la empresa (ej: B12345678)" maxlength="9" style="font-family:monospace;letter-spacing:2px;text-transform:uppercase;">
+                <input type="text" id="register-company-nif" placeholder="CIF de la empresa (ej: B12345678)" style="font-family:monospace;letter-spacing:2px;text-transform:uppercase;">
+                <p id="register-cif-warning" style="display:none; font-size:12px; color:#c05621; margin:2px 0 8px; line-height:1.4;">⚠ Ese CIF no supera el algoritmo de validación AEAT. Puedes continuar, pero revisa si hay algún error de transcripción.</p>
                 <input type="email" id="register-email" placeholder="Email">
                 <input type="password" id="register-password" placeholder="Contraseña (mínimo 8 caracteres)">
                 <button id="btn-register">Registrarse</button>
@@ -290,6 +291,7 @@
             </div>
             <div class="camera-viewfinder">
                 <video id="camera-video" autoplay playsinline muted></video>
+                <canvas id="camera-scan-overlay"></canvas>
                 <div class="camera-guide">
                     <div class="guide-corner tl"></div>
                     <div class="guide-corner tr"></div>
@@ -302,8 +304,8 @@
         </div>
     </div>
     <script src="auth.js?v=20260414-004"></script>
-    <script src="cif-validator.js?v=20260507-003"></script>
-    <script src="app.js?v=20260616-002"></script>
+    <script src="cif-validator.js?v=20260713-001"></script>
+    <script src="app.js?v=20260713-001"></script>
     <script>
         // ── Service Worker: registro + detección de actualizaciones ─────────
         if ('serviceWorker' in navigator) {
