@@ -100,61 +100,89 @@ async function testOpenAI(apiKey, imageBuffer) {
 }
 
 // ─── Test 2ª pasada receptor: extractReceptorCIFOnly equivalente ─────────────
-// Recorta el 60% inferior de la imagen y pide a GPT-4.1 los 9 caracteres del
-// CIF/NIF del CLIENTE. Mismo schema strict que la función de producción para
-// detectar regresiones.
-async function testReceptorPass(apiKey, imageBuffer) {
-  // Sharp no está disponible en el HOST sin instalarlo. Para que el smoke
-  // test no requiera dependencias, mandamos la imagen completa (sin recorte)
-  // — el objetivo aquí es validar que el schema strict + prompt sigue siendo
-  // aceptado por OpenAI. La función de producción sí recorta, pero la
-  // validación del contrato API es la misma.
+// Motor primario: Gemini Flash (desde 2026-07-07, mismo motor que producción).
+// Si Gemini no está configurado → usa OpenAI como fallback (coherente con producción).
+// Sin recorte de imagen: el objetivo es validar que el schema CIF_ONLY +
+// responseJsonSchema sigue siendo aceptado por la API. La producción sí recorta,
+// pero el contrato API es el mismo.
+async function testReceptorPass(geminiKey, openaiKey, imageBuffer) {
+  const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+  const geminiConfigured = geminiKey && geminiKey.length >= 8
+    && !geminiKey.includes('PLACEHOLDER') && !geminiKey.includes('INSERTAR');
+
+  if (geminiConfigured) {
+    // Gemini Flash — mismo schema CIF que gemini.extractReceptorCIFOnly()
+    const body = {
+      system_instruction: { parts: [{ text: 'Eres especialista en CIF/NIF español. ÚNICA misión: leer el CIF del CLIENTE/RECEPTOR. 9 chars exactos o null.' }] },
+      contents: [{
+        role: 'user',
+        parts: [
+          { inline_data: { mime_type: 'image/jpeg', data: imageBuffer.toString('base64') } },
+          { text: 'Lee el CIF/NIF del CLIENTE/RECEPTOR. Devuelve SOLO el campo "cif" con los 9 caracteres exactos o null.' }
+        ]
+      }],
+      generationConfig: {
+        temperature: 0,
+        maxOutputTokens: 64,
+        responseMimeType: 'application/json',
+        responseJsonSchema: {
+          type: 'object',
+          properties: { cif: { type: ['string', 'null'] } },
+          required: ['cif']
+        }
+      }
+    };
+    const res = await fetch(`${GEMINI_BASE_URL}/gemini-3.5-flash:generateContent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': geminiKey },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      throw new Error(`Gemini Flash 2ª pasada HTTP ${res.status}: ${txt.substring(0, 300)}`);
+    }
+    const data  = await res.json();
+    const parts = data?.candidates?.[0]?.content?.parts;
+    if (!parts || !parts.find(p => typeof p.text === 'string')) {
+      throw new Error('Gemini Flash 2ª pasada: sin campo text en respuesta');
+    }
+    return true;
+  }
+
+  // Fallback OpenAI (entorno sin Gemini configurado)
+  if (!openaiKey) throw new Error('Gemini no configurado y OpenAI ausente — no se puede testear 2ª pasada receptor');
   const dataUrl = `data:image/jpeg;base64,${imageBuffer.toString('base64')}`;
   const body = {
     model: 'gpt-4.1',
     messages: [
       { role: 'system', content: 'Lee el CIF/NIF del CLIENTE/RECEPTOR. Si no lo ves, devuelve chars:null.' },
-      {
-        role: 'user',
-        content: [
-          { type: 'image_url', image_url: { url: dataUrl, detail: 'low' } },
-          { type: 'text', text: 'Devuelve chars con los 9 caracteres del CIF del cliente, o null si no lo encuentras.' }
-        ]
-      }
+      { role: 'user', content: [
+        { type: 'image_url', image_url: { url: dataUrl, detail: 'low' } },
+        { type: 'text', text: 'Devuelve chars con los 9 caracteres del CIF del cliente, o null si no lo encuentras.' }
+      ]}
     ],
     max_tokens: 80,
     temperature: 0,
     response_format: {
       type: 'json_schema',
-      json_schema: {
-        name: 'smoke_receptor_cif',
-        strict: true,
-        schema: {
-          type: 'object',
-          properties: {
-            chars: { type: ['array', 'null'], items: { type: 'string' } }
-          },
-          required: ['chars'],
-          additionalProperties: false
-        }
+      json_schema: { name: 'smoke_receptor_cif', strict: true,
+        schema: { type: 'object', properties: { chars: { type: ['array', 'null'], items: { type: 'string' } } }, required: ['chars'], additionalProperties: false }
       }
     }
   };
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openaiKey}` },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(60000),
   });
   if (!res.ok) {
     const txt = await res.text().catch(() => '');
-    throw new Error(`OpenAI HTTP ${res.status}: ${txt.substring(0, 300)}`);
+    throw new Error(`OpenAI fallback 2ª pasada HTTP ${res.status}: ${txt.substring(0, 300)}`);
   }
-  // Sólo validamos que la respuesta es parseable y respeta el contrato.
-  // chars puede ser null (si la imagen no tiene CIF claro de receptor) — eso
-  // sigue siendo OK desde el punto de vista del smoke test (el schema funciona).
   const data = await res.json();
-  if (!data.choices?.[0]?.message?.content) throw new Error('OpenAI sin contenido en respuesta');
+  if (!data.choices?.[0]?.message?.content) throw new Error('OpenAI fallback: sin contenido en respuesta');
   return true;
 }
 
@@ -174,6 +202,90 @@ async function testAzure(apiKey, endpoint, imageBuffer) {
   }
   if (!res.headers.get('Operation-Location')) {
     throw new Error('Azure aceptó submit pero no devolvió Operation-Location');
+  }
+  return true;
+}
+
+// ─── Test Mistral OCR 4: /v1/ocr con document_annotation json_schema ──────────
+// Petición real con la muestra y el MISMO mecanismo de annotation que usa
+// producción (ocr/mistral.js) — detecta regresiones de contrato (schema
+// rechazado, modelo retirado, key sin permisos) igual que el test de OpenAI.
+async function testMistral(apiKey, imageBuffer) {
+  const dataUrl = `data:image/jpeg;base64,${imageBuffer.toString('base64')}`;
+  const body = {
+    model: 'mistral-ocr-latest',
+    document: { type: 'image_url', image_url: dataUrl },
+    document_annotation_format: {
+      type: 'json_schema',
+      json_schema: {
+        name: 'smoke_ocr_mistral',
+        strict: true,
+        schema: {
+          type: 'object',
+          properties: { es_factura: { type: 'boolean' } },
+          required: ['es_factura'],
+          additionalProperties: false
+        }
+      }
+    },
+    document_annotation_prompt: 'Devuelve es_factura:true si la imagen es una factura.',
+    include_image_base64: false
+  };
+  const res = await fetch('https://api.mistral.ai/v1/ocr', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(60000),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '');
+    throw new Error(`Mistral HTTP ${res.status}: ${txt.substring(0, 300)}`);
+  }
+  const data = await res.json();
+  if (data.document_annotation == null) throw new Error('Mistral sin document_annotation en respuesta');
+  return true;
+}
+
+// ─── Test Gemini 3.5 Flash: generateContent con responseJsonSchema ────────────
+// Motor primario desde 2026-07-07 (bench winner, reemplaza OpenAI en gemini_azure).
+// Detecta: key inválida, créditos agotados (429), cambio de model ID por Google.
+// Si el secret no existe o es placeholder → skip con warning (entorno legacy dual).
+async function testGeminiFlash(apiKey, imageBuffer) {
+  const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+  const model = 'gemini-3.5-flash';
+  const body = {
+    contents: [{
+      role: 'user',
+      parts: [
+        { inline_data: { mime_type: 'image/jpeg', data: imageBuffer.toString('base64') } },
+        { text: 'Devuelve es_factura:true si la imagen contiene una factura.' }
+      ]
+    }],
+    generationConfig: {
+      temperature: 0,
+      maxOutputTokens: 64,
+      responseMimeType: 'application/json',
+      responseJsonSchema: {
+        type: 'object',
+        properties: { es_factura: { type: 'boolean' } },
+        required: ['es_factura']
+      }
+    }
+  };
+  const res = await fetch(`${GEMINI_BASE_URL}/${model}:generateContent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(60000),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '');
+    throw new Error(`Gemini Flash HTTP ${res.status}: ${txt.substring(0, 300)}`);
+  }
+  const data  = await res.json();
+  const parts = data?.candidates?.[0]?.content?.parts;
+  if (!parts || !parts.find(p => typeof p.text === 'string')) {
+    throw new Error('Gemini Flash sin campo text en respuesta candidates[0].content.parts');
   }
   return true;
 }
@@ -215,13 +327,57 @@ async function testAzure(apiKey, endpoint, imageBuffer) {
     errors.push(`AZURE: ${e.message}`);
   }
 
-  try {
-    const t0 = Date.now();
-    await testReceptorPass(openaiKey, img);
-    log('info', `OpenAI 2ª pasada receptor: OK (${Date.now() - t0}ms)`);
-  } catch (e) {
-    log('error', `OpenAI 2ª pasada receptor: FAIL — ${e.message}`);
-    errors.push(`OPENAI_RECEPTOR_PASS: ${e.message}`);
+  {
+    const geminiKeyForReceptor = readSecret('gemini_api_key');
+    const motorLabel = (geminiKeyForReceptor && geminiKeyForReceptor.length >= 8
+      && !geminiKeyForReceptor.includes('PLACEHOLDER') && !geminiKeyForReceptor.includes('INSERTAR'))
+      ? 'Gemini Flash' : 'OpenAI fallback';
+    try {
+      const t0 = Date.now();
+      await testReceptorPass(geminiKeyForReceptor, openaiKey, img);
+      log('info', `2ª pasada receptor (${motorLabel}): OK (${Date.now() - t0}ms)`);
+    } catch (e) {
+      log('error', `2ª pasada receptor (${motorLabel}): FAIL — ${e.message}`);
+      errors.push(`RECEPTOR_PASS: ${e.message}`);
+    }
+  }
+
+  // Mistral OCR 4 (modo triple, 2026-07-05). Si el secret no existe o es
+  // placeholder → skip con warning (entorno en modo dual), NO fallo. Si la
+  // key está configurada, el motor debe responder — igual de crítico que
+  // los otros dos: "una sola IA activa NO es aceptable".
+  const mistralKey = readSecret('mistral_api_key');
+  const mistralConfigured = mistralKey && mistralKey.length >= 8
+    && !mistralKey.includes('PLACEHOLDER') && !mistralKey.includes('INSERTAR');
+  if (!mistralConfigured) {
+    log('warn', 'Mistral OCR: secret mistral_api_key ausente o placeholder — skip (entorno sin modo triple)');
+  } else {
+    try {
+      const t0 = Date.now();
+      await testMistral(mistralKey, img);
+      log('info', `Mistral OCR 4: OK (${Date.now() - t0}ms)`);
+    } catch (e) {
+      log('error', `Mistral OCR 4: FAIL — ${e.message}`);
+      errors.push(`MISTRAL: ${e.message}`);
+    }
+  }
+
+  // Gemini Flash (motor primario desde 2026-07-07). Si el secret no existe o es
+  // placeholder → skip con warning (entorno legacy sin modo gemini_azure).
+  const geminiKey = readSecret('gemini_api_key');
+  const geminiConfigured = geminiKey && geminiKey.length >= 8
+    && !geminiKey.includes('PLACEHOLDER') && !geminiKey.includes('INSERTAR');
+  if (!geminiConfigured) {
+    log('warn', 'Gemini Flash: secret gemini_api_key ausente o placeholder — skip (entorno sin modo gemini_azure)');
+  } else {
+    try {
+      const t0 = Date.now();
+      await testGeminiFlash(geminiKey, img);
+      log('info', `Gemini Flash: OK (${Date.now() - t0}ms)`);
+    } catch (e) {
+      log('error', `Gemini Flash: FAIL — ${e.message}`);
+      errors.push(`GEMINI_FLASH: ${e.message}`);
+    }
   }
 
   if (errors.length > 0) {
