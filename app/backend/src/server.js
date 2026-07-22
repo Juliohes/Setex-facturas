@@ -1893,37 +1893,47 @@ app.post('/api/upload-preview', authenticateToken, requireActiveCompany, uploadL
     //   4. Proveedor conocido (ya confirmado antes) O dígito de control explícitamente correcto
     const digitCheck = finalNif ? checkDigitCIF(finalNif) : null;
     const cifConfident = !nifUncertain && digitCheck !== false;
-    const requiresReview = missingFields.length > 0 || nifUncertain || digitCheck === false;
+    // v1 (lógica real hasta hoy) — se conservan SIEMPRE, aunque el switch de
+    // abajo las sustituya: son la "banda v1" que se sigue registrando en el
+    // shadow log para poder seguir comparando incluso con v2 ya al mando.
+    const requiresReviewV1 = missingFields.length > 0 || nifUncertain || digitCheck === false;
     // Auto-confirm SOLO para proveedores ya verificados por el usuario (knownProvider = true).
     // Para proveedores nuevos, siempre mostrar modal aunque el dígito de control sea correcto.
     // Motivo: el dígito de control valida el formato matemático, no la precisión de lectura del OCR.
     // Un CIF leído incorrectamente puede pasar el dígito de control y guardarse silenciosamente.
     // Auto-confirm: proveedor conocido O (nuevo + dígito de control explícitamente correcto)
     // El dígito de control correcto garantiza que el CIF fue leído sin errores matemáticamente.
-    const autoConfirm = !requiresReview && userAutoConfirmPref && (knownProvider || digitCheck === true);
+    const autoConfirmV1 = !requiresReviewV1 && userAutoConfirmPref && (knownProvider || digitCheck === true);
     // Q4: NIF no leído por ningún motor → confianza siempre baja sin importar proveedor conocido
     const ocrNifStatus = ocrData?.nif_status;
-    const confidenceLevel =
+    const confidenceLevelV1 =
       ocrNifStatus === 'both_missing'     ? 'low'    :
-      (knownProvider && !requiresReview)  ? 'high'   :
+      (knownProvider && !requiresReviewV1) ? 'high'   :
       (missingFields.length > 0)          ? 'low'    : 'medium';
 
-    // ── FASE 3 pipeline v2: routing determinista en modo SHADOW (2026-07-21) ──
-    // Calcula la decisión del nuevo routing determinista (domain/routing.js)
-    // en paralelo a la lógica real de arriba, SIN afectar la respuesta al
-    // usuario ni el flujo de la petición. Se registra para comparar contra la
-    // decisión real (banda v1) antes de que Julio decida activar el switch.
+    // Variables REALES que usa el resto del handler (respuesta al usuario +
+    // preview en Redis). Por defecto = v1; el switch de abajo las sustituye
+    // SOLO si pipeline_v2_validacion_enabled está activo.
+    let requiresReview = requiresReviewV1;
+    let autoConfirm = autoConfirmV1;
+    let confidenceLevel = confidenceLevelV1;
+
+    // ── Pipeline v2: routing determinista — shadow log SIEMPRE + SWITCH real ──
+    // (Fase 3, 2026-07-21 → switch real activado 2026-07-22 a petición de
+    // Julio, SIN datos de shadow mode todavía que lo validen — riesgo asumido
+    // explícitamente por él, no es una decisión que tomé yo por mi cuenta.)
     // Fail-safe: cualquier error aquí se traga y se loguea — nunca debe
-    // romper la subida de la factura (regla de oro del modo shadow).
+    // romper la subida de la factura, ni con el switch activo.
     const previewId = crypto.randomUUID();
     try {
       // Lectura en caliente de features.json (regla 4 del CLAUDE.md — el
       // fichero cambia sin rebuild, nunca se cachea el valor entre peticiones)
       const shadowCfg = JSON.parse(fsSync.readFileSync(FEATURES_PATH, 'utf8'));
+      const bandaV1 = requiresReviewV1 ? 'revision_humana' : 'auto_aceptada';
+      const v2 = decidirRouting(campos);
+      const coincide = v2.decision === bandaV1;
+
       if (shadowCfg.pipeline_v2_shadow_mode) {
-        const bandaV1 = requiresReview ? 'revision_humana' : 'auto_aceptada';
-        const v2 = decidirRouting(campos);
-        const coincide = v2.decision === bandaV1;
         pool.query(
           `INSERT INTO ocr_shadow_validaciones
              (preview_id, decision_v1, decision_v2, coincide, incidencias, sugerencias, creado_en)
@@ -1934,8 +1944,32 @@ app.post('/api/upload-preview', authenticateToken, requireActiveCompany, uploadL
           logger.info(`[ShadowV2] Discrepancia v1=${bandaV1} v2=${v2.decision} preview=${previewId} motivo="${v2.motivo}"`);
         }
       }
+
+      if (shadowCfg.pipeline_v2_validacion_enabled) {
+        // SWITCH REAL: a partir de aquí decide v2, no v1. Mapeo de bandas:
+        //   auto_aceptada    → requiresReview=false (respeta la preferencia
+        //                      auto-confirm del usuario, sin exigir además
+        //                      "proveedor conocido" — v2 ya validó por su
+        //                      cuenta con checksums + cuadre aritmético)
+        //   revision_humana  → requiresReview=true
+        //   recaptura        → a estas alturas ya pasamos el filtro
+        //                      es_factura_valida !== false más arriba; si v2
+        //                      igualmente decide recaptura, se trata como
+        //                      revisión humana (no se descarta la factura en
+        //                      un punto tan tardío del flujo)
+        if (v2.decision === 'auto_aceptada') {
+          requiresReview = false;
+          autoConfirm = userAutoConfirmPref;
+          confidenceLevel = 'high';
+        } else {
+          requiresReview = true;
+          autoConfirm = false;
+          confidenceLevel = v2.incidencias.some((i) => i.severidad === 'error') ? 'low' : 'medium';
+        }
+        logger.info(`[PipelineV2] SWITCH activo — decide v2: ${v2.decision} (v1 habría dicho: ${bandaV1}) motivo="${v2.motivo}"`);
+      }
     } catch (shadowErr) {
-      logger.error('[ShadowV2] Error calculando routing v2', { error: shadowErr.message });
+      logger.error('[ShadowV2] Error calculando/aplicando routing v2', { error: shadowErr.message });
     }
 
     // ── Bloque 5 pipeline v2: variante de contraste (2026-07-22) ────────────
