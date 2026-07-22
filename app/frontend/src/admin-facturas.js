@@ -2085,6 +2085,42 @@ async function openOcrModal(facturaId) {
     const ivaOk      = meta.iva_validation_ok ? '&#10003; Sí' : '&#10007; No';
     const motorLabel = escHtml(meta.ocr_engine || '—');
 
+    // ── Comparativa de imagen: original vs variante de contraste (2026-07-22) ──
+    // Bloque 5: solo aparece si esta factura se procesó con
+    // pipeline_v2_imagen_variante_enabled activo.
+    const imagenVariante = d.imagen_variante || null;
+    let imagenComparativaHtml = '';
+    if (imagenVariante) {
+      const diffs = imagenVariante.diffs || [];
+      const diffsRows = diffs.length === 0
+        ? '<tr><td colspan="3" style="padding:6px 8px;color:#276749;text-align:center;">Sin diferencias — el motor leyó lo mismo en ambas imágenes</td></tr>'
+        : diffs.map((df) => `<tr>
+            <td style="padding:6px 8px;font-weight:600;">${escHtml(df.campo)}</td>
+            <td style="padding:6px 8px;font-family:monospace;">${df.original != null ? escHtml(String(df.original)) : '—'}</td>
+            <td style="padding:6px 8px;font-family:monospace;">${df.variante != null ? escHtml(String(df.variante)) : '—'}</td>
+          </tr>`).join('');
+      imagenComparativaHtml = `
+        <h4 style="margin:18px 0 8px;color:#2d3748;font-size:13px;">🖼️ Comparativa de imagen — original vs contraste (CLAHE)</h4>
+        <div style="display:flex;gap:10px;margin-bottom:8px;flex-wrap:wrap;">
+          <div style="flex:1;min-width:160px;">
+            <div style="font-size:11px;color:#718096;margin-bottom:4px;">Original</div>
+            <img id="ocr-img-original" style="width:100%;border-radius:6px;border:1px solid #e2e8f0;background:#f7fafc;" alt="Original">
+          </div>
+          <div style="flex:1;min-width:160px;">
+            <div style="font-size:11px;color:#718096;margin-bottom:4px;">Variante contraste (motor: ${escHtml(imagenVariante.motor)})</div>
+            <img id="ocr-img-variante" style="width:100%;border-radius:6px;border:1px solid #e2e8f0;background:#f7fafc;" alt="Variante de contraste">
+          </div>
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:14px;">
+          <thead><tr style="background:#f7fafc;border-bottom:2px solid #e2e8f0;">
+            <th style="padding:6px 8px;text-align:left;">Campo distinto</th>
+            <th style="padding:6px 8px;text-align:left;">Original</th>
+            <th style="padding:6px 8px;text-align:left;">Variante</th>
+          </tr></thead>
+          <tbody>${diffsRows}</tbody>
+        </table>`;
+    }
+
     // ── Ranking multi-motor (2026-07-22) — qué leyó cada motor de verdad ──────
     // Solo para tech_admin: ver campo a campo qué IA acierta más/menos en esta
     // factura concreta, sin depender de campo_sources (que solo dice quién
@@ -2146,7 +2182,21 @@ async function openOcrModal(facturaId) {
         <span><strong>Confianza:</strong> <span style="font-family:monospace;">${confidence}</span></span>
         <span><strong>IVA válido:</strong> <span style="font-family:monospace;">${ivaOk}</span></span>
       </div>
-      ${motorRankingHtml}`;
+      ${motorRankingHtml}
+      ${imagenComparativaHtml}`;
+
+    // Cargar las imágenes autenticadas (blob) tras pintar el HTML — un <img
+    // src="url"> normal no llevaría el header de autenticación.
+    if (imagenVariante) {
+      authFetch(`${API_URL}/admin/facturas/${facturaId}/imagen`)
+        .then((r) => r.blob())
+        .then((b) => { document.getElementById('ocr-img-original').src = URL.createObjectURL(b); })
+        .catch(() => {});
+      authFetch(`${API_URL}/admin/facturas/${facturaId}/imagen-variante`)
+        .then((r) => r.blob())
+        .then((b) => { document.getElementById('ocr-img-variante').src = URL.createObjectURL(b); })
+        .catch(() => {});
+    }
   } catch (err) {
     body.innerHTML = `<p style="color:#9b2335;padding:20px 0;text-align:center;">Error al cargar datos OCR: ${escHtml(err.message)}</p>`;
   }

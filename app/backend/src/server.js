@@ -16,7 +16,7 @@ const path = require('path');
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const sharp = require('sharp');
-const { extractInvoiceOCR, extractCIFOnlyOCR } = require('./ocr/index');
+const { extractInvoiceOCR, extractCIFOnlyOCR, compararVarianteContraste } = require('./ocr/index');
 
 // ── Módulos refactorizados (Strangler-Fig, pasos 1-20 completados) ────────────
 // Ubicación objetivo: domain/, services/, repositories/, middleware/, lib/, config/
@@ -442,6 +442,22 @@ async function initDB() {
       FROM ocr_shadow_validaciones s
       LEFT JOIN uploads u ON u.preview_id = s.preview_id
       ORDER BY s.creado_en DESC;
+
+    -- Bloque 5 pipeline v2 (2026-07-22): comparativa original vs variante de
+    -- contraste (CLAHE) — automático en cada factura mientras el flag esté
+    -- activo (decisión de Julio). Solo trazabilidad, no participa en el flujo
+    -- real: el usuario nunca ve ni la variante ni esta comparación.
+    CREATE TABLE IF NOT EXISTS ocr_imagen_variante_comparativa (
+      id SERIAL PRIMARY KEY,
+      preview_id UUID NOT NULL,
+      motor VARCHAR(30) NOT NULL,
+      ruta_variante TEXT,
+      campos_original JSONB NOT NULL DEFAULT '{}',
+      campos_variante JSONB NOT NULL DEFAULT '{}',
+      diffs JSONB NOT NULL DEFAULT '[]',
+      creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_imagen_variante_preview ON ocr_imagen_variante_comparativa(preview_id);
   `);
 
   // Backfill: uploads anteriores sin upload_status → 'active'
@@ -1922,6 +1938,35 @@ app.post('/api/upload-preview', authenticateToken, requireActiveCompany, uploadL
       logger.error('[ShadowV2] Error calculando routing v2', { error: shadowErr.message });
     }
 
+    // ── Bloque 5 pipeline v2: variante de contraste (2026-07-22) ────────────
+    // Genera una segunda imagen (contraste local CLAHE + brillo/saturación
+    // reducidos) y compara qué lee el MISMO motor primario en cada una.
+    // Automático en cada factura mientras el flag esté activo (decisión de
+    // Julio). FIRE-AND-FORGET: nunca se espera (await) — jamás debe añadir
+    // latencia a la respuesta real ni afectar lo que ve el usuario.
+    try {
+      const varianteCfg = JSON.parse(fsSync.readFileSync(FEATURES_PATH, 'utf8'));
+      if (varianteCfg.pipeline_v2_imagen_variante_enabled) {
+        compararVarianteContraste(filePath, fileInfo.mimetype, campos, ocrContext, logger)
+          .then((resultado) => {
+            if (!resultado) return;
+            return pool.query(
+              `INSERT INTO ocr_imagen_variante_comparativa
+                 (preview_id, motor, ruta_variante, campos_original, campos_variante, diffs)
+               VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb)`,
+              [
+                previewId, resultado.engine, resultado.rutaVariante,
+                JSON.stringify(campos), JSON.stringify(resultado.camposVariante),
+                JSON.stringify(resultado.diffs),
+              ]
+            );
+          })
+          .catch((err) => logger.error('[ImagenVariante] Error en comparación de variante', { error: err.message }));
+      }
+    } catch (varianteErr) {
+      logger.error('[ImagenVariante] Error leyendo configuración', { error: varianteErr.message });
+    }
+
     // ── FASE 6: Guardar preview en Redis (TTL 30 min) ───────────────────
     const viesResult = await Promise.race([
       viesPromise,
@@ -2662,6 +2707,37 @@ app.get('/api/admin/facturas/:id/imagen', authenticateToken, requireAdmin, async
   }
 });
 
+// GET /api/admin/facturas/:id/imagen-variante — sirve la variante de contraste
+// (bloque 5, 2026-07-22), solo tech_admin. No existe para facturas procesadas
+// sin el flag pipeline_v2_imagen_variante_enabled activo.
+app.get('/api/admin/facturas/:id/imagen-variante', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    if (!isTechAdmin(req.user.email)) {
+      return res.status(403).json({ error: 'Acceso restringido a administradores técnicos.' });
+    }
+    const result = await pool.query(
+      `SELECT v.ruta_variante
+         FROM uploads u
+         JOIN ocr_imagen_variante_comparativa v ON v.preview_id = u.preview_id
+        WHERE u.id = $1
+        ORDER BY v.creado_en DESC LIMIT 1`,
+      [req.params.id]
+    );
+    if (result.rows.length === 0 || !result.rows[0].ruta_variante) {
+      return res.status(404).json({ error: 'Variante no disponible para esta factura' });
+    }
+    const safePath = path.resolve(result.rows[0].ruta_variante);
+    if (!safePath.startsWith('/app/uploads/')) return res.status(403).json({ error: 'Acceso denegado' });
+    res.removeHeader('X-Frame-Options');
+    res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.sendFile(safePath);
+  } catch (err) {
+    logger.error('Error sirviendo imagen variante:', err);
+    res.status(500).json({ error: 'Error al obtener la imagen variante' });
+  }
+});
+
 // GET /api/admin/facturas/:id/ocr-detail — datos OCR raw vs confirmados (solo tech_admin).
 // Permite comparar lo que leyó la IA vs lo que confirmó el humano.
 app.get('/api/admin/facturas/:id/ocr-detail', authenticateToken, requireAdmin, async (req, res) => {
@@ -2677,13 +2753,35 @@ app.get('/api/admin/facturas/:id/ocr-detail', authenticateToken, requireAdmin, a
         id, proveedor_nif, proveedor_nombre, receptor_nif, receptor_nombre,
         numero_factura, fecha_emision, total_factura, base_imponible,
         iva_porcentaje, cuota_iva, irpf_porcentaje, cuota_irpf, lineas_iva,
-        ocr_result, confidence_level, iva_validation_ok, iva_warnings, ocr_engine
+        ocr_result, confidence_level, iva_validation_ok, iva_warnings, ocr_engine,
+        preview_id
       FROM uploads WHERE id = $1
     `, [id]);
     if (result.rows.length === 0) return res.status(404).json({ error: 'Factura no encontrada' });
 
     const row = result.rows[0];
     const ocr = row.ocr_result || {};
+
+    // Bloque 5 (2026-07-22): comparativa original vs variante de contraste,
+    // si se generó para esta factura (flag pipeline_v2_imagen_variante_enabled).
+    let imagenVariante = null;
+    if (row.preview_id) {
+      const varRes = await pool.query(
+        `SELECT motor, campos_variante, diffs, creado_en
+           FROM ocr_imagen_variante_comparativa
+          WHERE preview_id = $1
+          ORDER BY creado_en DESC LIMIT 1`,
+        [row.preview_id]
+      );
+      if (varRes.rows.length > 0) {
+        imagenVariante = {
+          motor: varRes.rows[0].motor,
+          campos_variante: varRes.rows[0].campos_variante,
+          diffs: varRes.rows[0].diffs,
+          creado_en: varRes.rows[0].creado_en,
+        };
+      }
+    }
 
     // 2026-07-22: ranking multi-motor — construir dinámicamente TODOS los
     // motores que de verdad participaron en esta factura (antes hardcodeado
@@ -2728,6 +2826,7 @@ app.get('/api/admin/facturas/:id/ocr-detail', authenticateToken, requireAdmin, a
         nif_discrepancy:   ocr.nif_discrepancy || null,
       },
       validacion_determinista: ocr.validacion_determinista || null,
+      imagen_variante: imagenVariante,
     });
   } catch (err) {
     logger.error('[ocr-detail] Error:', err.message);

@@ -35,6 +35,9 @@ const { validateSpanishTaxId } = require('./validateCIF');
 // adjunta al resultado, pero NO cambia ningún campo existente ni el
 // comportamiento actual del fan-out — es la base para el modo shadow.
 const { validarFactura } = require('../domain/routing');
+// Bloque 5 (2026-07-22): comparativa original vs variante de contraste (CLAHE).
+const { generarYGuardarVariante } = require('./image-variants');
+const fsPromises = require('fs').promises;
 
 function getSecret(name) {
   try {
@@ -101,6 +104,77 @@ const EXTRA_ENGINES = {
   gemini_pro:   (fp, mt, ctx, cfg) => tryGemini(fp, mt, ctx, cfg, 'pro'),
 };
 const DEFAULT_MULTI_ENGINES = ['mistral', 'gemini_flash', 'gemini_pro'];
+
+// ─── Bloque 5 (2026-07-22): variante de contraste — motor de referencia ─────
+// Resuelve el MISMO motor que actúa como primario A en el modo activo, para
+// poder comparar "mismo motor, dos imágenes" en vez de mezclar variables.
+function resolverMotorPrincipal(cfg, filePath, mimeType, context) {
+  const mode = cfg.ocr_mode || 'dual';
+  if (mode === 'gemini_azure') {
+    return { name: 'gemini_flash', run: () => tryGemini(filePath, mimeType, context, cfg, 'flash') };
+  }
+  if (mode === 'openai') return { name: 'openai', run: () => tryOpenAI(filePath, mimeType, context) };
+  if (mode === 'azure')  return { name: 'azure',  run: () => tryAzure(filePath, mimeType, context) };
+  if (EXTRA_ENGINES[mode]) {
+    return { name: mode, run: () => EXTRA_ENGINES[mode](filePath, mimeType, context, cfg) };
+  }
+  // dual/triple/multi (legacy): primario A = OpenAI
+  return { name: 'openai', run: () => tryOpenAI(filePath, mimeType, context) };
+}
+
+// Campos clave para la comparación (los mismos que arbitran el routing v2).
+const CAMPOS_COMPARABLES = [
+  'proveedor_nif', 'proveedor_nombre', 'receptor_nif', 'receptor_nombre',
+  'numero_factura', 'fecha_emision', 'total', 'base_imponible',
+  'iva_porcentaje', 'cuota_iva',
+];
+
+function normalizarParaComparar(v) {
+  if (v == null) return null;
+  return String(v).trim().toUpperCase().replace(/^(-?\d+)[,.](\d+)$/, '$1.$2');
+}
+
+/**
+ * Genera la variante de contraste (CLAHE) de la imagen original, ejecuta el
+ * MISMO motor primario sobre ella, y compara campo a campo contra lo leído
+ * en la imagen original. Pensada para ejecutarse en segundo plano
+ * (fire-and-forget) — nunca debe bloquear ni afectar la respuesta real al
+ * usuario. Borra el fichero temporal si el motor falla; si tiene éxito, dej
+ * a la variante en disco (junto al original) para poder mostrarla después.
+ *
+ * @param {string} filePath - ruta del fichero original ya subido
+ * @param {string} mimeType
+ * @param {object} camposOriginal - campos ya fusionados de la imagen original (ocrData.campos)
+ * @param {object} context
+ * @param {object} logger
+ * @returns {Promise<{engine:string, rutaVariante:string, camposVariante:object, diffs:Array}|null>}
+ */
+async function compararVarianteContraste(filePath, mimeType, camposOriginal, context, logger) {
+  const cfg = getConfig();
+  let rutaVariante = null;
+  try {
+    rutaVariante = await generarYGuardarVariante(filePath);
+    const { name: engine, run } = resolverMotorPrincipal(cfg, rutaVariante, mimeType, context);
+    const resultado = await run();
+    const camposVariante = resultado.campos || {};
+
+    const diffs = [];
+    for (const campo of CAMPOS_COMPARABLES) {
+      const vOriginal = normalizarParaComparar(camposOriginal[campo]);
+      const vVariante  = normalizarParaComparar(camposVariante[campo]);
+      if (vOriginal !== vVariante) {
+        diffs.push({ campo, original: camposOriginal[campo] ?? null, variante: camposVariante[campo] ?? null });
+      }
+    }
+
+    logger.info(`[ImagenVariante] Motor ${engine}: ${diffs.length} campo(s) distintos entre original y variante de contraste`);
+    return { engine, rutaVariante, camposVariante, diffs };
+  } catch (err) {
+    logger.warn(`[ImagenVariante] Comparación de variante fallida: ${err.message}`);
+    if (rutaVariante) await fsPromises.unlink(rutaVariante).catch(() => {});
+    return null;
+  }
+}
 
 // ─── Normalización para comparar ─────────────────────────────────────────────
 
@@ -687,4 +761,9 @@ module.exports = {
   // Exportada 2026-07-21 (Fase 2 pipeline v2) para poder testear la fusión y
   // la validación determinista sin llamadas de red a los motores OCR.
   compareOCRResults,
+  // Bloque 5 (2026-07-22): comparativa original vs variante de contraste.
+  compararVarianteContraste,
+  resolverMotorPrincipal,
+  normalizarParaComparar,
+  CAMPOS_COMPARABLES,
 };
