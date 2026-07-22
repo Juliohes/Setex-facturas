@@ -3379,3 +3379,14 @@ Añade esta línea (backup cada día a las 3:00 AM):
 **Verificación**: suite completa 133/134 en verde (único fallo preexistente: paridad de rutas v3, ajeno). `node --check` en todos los ficheros tocados. Sin rebuild/deploy — todo en working tree + commits en `feature/pipeline-facturas-v2-validacion-determinista-2026-07-21`, pendiente de que Julio decida activar los flags y/o desplegar frontend.
 
 **Explícitamente NO hecho**: Kimi K2 (riesgo RGPD sin resolver, decisión de Julio); activar `pipeline_v2_imagen_variante_enabled` en prod (queda en `false`); desplegar el frontend (cámara/login admin/edición admin siguen pendientes de aprobación, ahora junto con el ranking multi-motor y la comparativa de imagen).
+
+### 2026-07-22 (continuación) — Deploy completo backend + frontend, flag de variante de imagen activado
+
+Julio pidió activar `pipeline_v2_imagen_variante_enabled` y desplegar el frontend. Se detectó antes de ejecutar que el backend en producción (desplegado 25h antes) **no tenía** el código de los bloques 2/3/5 de la sesión anterior (persistencia OCR completa, ranking multi-motor, variante de contraste) — confirmado por la ausencia de la tabla `ocr_imagen_variante_comparativa` en Postgres. Julio confirmó explícitamente desplegar backend Y frontend juntos.
+
+- `docker compose build backend frontend` → `stop` → `up -d` de ambos (Regla 3, nunca `restart`). Los 4 contenedores de prod healthy antes y después; `HTTPS setex-facturas.es: HTTP 200`.
+- Logs de arranque backend limpios (`Database initialized`); tabla `ocr_imagen_variante_comparativa` verificada con `\d` en psql tras el deploy.
+- `pipeline_v2_imagen_variante_enabled: true` confirmado leído dentro del contenedor backend.
+- Frontend verificado: `admin-facturas.html` sirve `admin-facturas.js?v=20260722-002`; `jscanify.js`, `opencv.js`, `admin-login.html/js` presentes en la imagen desplegada.
+- **Estado actual**: TODO el trabajo de esta sesión (bloques 1-5 + WIP de cámara/login admin/edición admin de la sesión anterior) está ahora en producción. `pipeline_v2_shadow_mode` y `pipeline_v2_imagen_variante_enabled` activos; `pipeline_v2_validacion_enabled` sigue en `false` (routing v2 no decide nada real todavía).
+- **Pendiente**: probar en dispositivo real el modo cámara/documento (nunca verificado en móvil real); revisar con calma el panel admin (login dedicado, edición de facturas, ranking multi-motor, comparativa de imagen) ahora que están en vivo; decidir cuándo activar `pipeline_v2_validacion_enabled` con datos reales del shadow mode.
