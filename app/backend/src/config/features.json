@@ -14,5 +14,5 @@
   "pipeline_v2_shadow_mode": true,
   "pipeline_v2_validacion_enabled": false,
   "_IMAGEN_VARIANTE": "Bloque 5 (2026-07-22): compara el motor primario sobre la foto original vs una variante con contraste local CLAHE + brillo/saturación reducidos. Automático en cada factura si está activo (decisión de Julio) — coste real de UNA llamada extra al motor primario por factura. Nunca afecta la respuesta al usuario (fire-and-forget). Ver panel admin → ver facturas → OCR.",
-  "pipeline_v2_imagen_variante_enabled": false
+  "pipeline_v2_imagen_variante_enabled": true
 }
