@@ -2015,6 +2015,14 @@ app.post('/api/upload-preview', authenticateToken, requireActiveCompany, uploadL
         openai: ocrData?.openai_result || null,
         azure: ocrData?.azure_result || null,
         campo_sources: ocrData?.campo_sources || null,
+        // 2026-07-22: antes se descartaban aquí mismo (nunca llegaban a
+        // persistirse en uploads.ocr_result) — necesarios para el ranking
+        // multi-motor y la trazabilidad del pipeline v2 en el panel admin.
+        extra_results: ocrData?.extra_results || [],
+        mistral_result: ocrData?.mistral_result || null,
+        nif_status: ocrData?.nif_status || null,
+        nif_discrepancy: ocrData?.nif_discrepancy || null,
+        validacion_determinista: ocrData?.validacion_determinista || null,
       },
       ocrData: {
         processing_time_s: ocrData?.processing_time_s,
@@ -2314,6 +2322,15 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
       azure: preview.ocr_dual_full?.azure || null,
       campo_sources: preview.ocr_dual_full?.campo_sources || null,
       ocr_engine: preview.ocrData?.ocr_engine || null,
+      // 2026-07-22: se persisten también los motores extra (Mistral, Gemini
+      // Pro...) y la validación determinista — antes se calculaban en el
+      // fan-out pero se perdían al confirmar, dejando el ranking multi-motor
+      // sin datos reales que mostrar.
+      extra_results: preview.ocr_dual_full?.extra_results || [],
+      mistral_result: preview.ocr_dual_full?.mistral_result || null,
+      nif_status: preview.ocr_dual_full?.nif_status || null,
+      nif_discrepancy: preview.ocr_dual_full?.nif_discrepancy || null,
+      validacion_determinista: preview.ocr_dual_full?.validacion_determinista || null,
     });
 
     // Resolver campos IVA con prioridad: usuario > OCR-preview > OCR-full.
