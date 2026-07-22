@@ -2684,6 +2684,21 @@ app.get('/api/admin/facturas/:id/ocr-detail', authenticateToken, requireAdmin, a
 
     const row = result.rows[0];
     const ocr = row.ocr_result || {};
+
+    // 2026-07-22: ranking multi-motor — construir dinámicamente TODOS los
+    // motores que de verdad participaron en esta factura (antes hardcodeado
+    // a openai/azure/gemini_flash, y `gemini_flash` como clave de nivel
+    // superior nunca existió en ocrResultJson: era una lectura muerta desde
+    // que se activó el modo gemini_azure). Cada entrada expone `engine` con
+    // el nombre real del motor (labelA/labelB, ver fix 2026-07-13), no la
+    // clave interna `openai`/`azure` que es solo el nombre del slot.
+    const motors = {};
+    if (ocr.openai) motors.openai = ocr.openai;
+    if (ocr.azure)  motors.azure  = ocr.azure;
+    for (const extra of (ocr.extra_results || [])) {
+      if (extra && extra.name) motors[extra.name] = extra;
+    }
+
     res.json({
       confirmed: {
         proveedor_nif:    row.proveedor_nif,
@@ -2700,12 +2715,8 @@ app.get('/api/admin/facturas/:id/ocr-detail', authenticateToken, requireAdmin, a
         cuota_irpf:       row.cuota_irpf,
         lineas_iva:       row.lineas_iva,
       },
-      ocr_raw:  ocr.merged  || null,
-      motors: {
-        openai:       ocr.openai       || null,
-        azure:        ocr.azure        || null,
-        gemini_flash: ocr.gemini_flash || null,
-      },
+      ocr_raw: ocr.merged || null,
+      motors,
       campo_sources: ocr.campo_sources || null,
       meta: {
         dual_confirmed:    ocr.dual_confirmed   ?? null,
@@ -2713,7 +2724,10 @@ app.get('/api/admin/facturas/:id/ocr-detail', authenticateToken, requireAdmin, a
         iva_validation_ok: row.iva_validation_ok ?? null,
         iva_warnings:      row.iva_warnings      || [],
         ocr_engine:        row.ocr_engine || ocr.ocr_engine || null,
+        nif_status:        ocr.nif_status || null,
+        nif_discrepancy:   ocr.nif_discrepancy || null,
       },
+      validacion_determinista: ocr.validacion_determinista || null,
     });
   } catch (err) {
     logger.error('[ocr-detail] Error:', err.message);

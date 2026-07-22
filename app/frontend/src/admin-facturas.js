@@ -1990,7 +1990,8 @@ async function openOcrModal(facturaId) {
       consensus:    { bg: '#276749', label: 'consenso' },
       openai:       { bg: '#2b6cb0', label: 'OpenAI'   },
       azure:        { bg: '#553c9a', label: 'Azure DI'  },
-      gemini_flash: { bg: '#c05621', label: 'Gemini'    },
+      gemini_flash: { bg: '#c05621', label: 'Gemini Flash' },
+      gemini_pro:   { bg: '#b83280', label: 'Gemini Pro' },
       gemini:       { bg: '#c05621', label: 'Gemini'    },
       mistral:      { bg: '#9b2335', label: 'Mistral'   },
       calculated:   { bg: '#718096', label: 'calculado' },
@@ -2084,6 +2085,49 @@ async function openOcrModal(facturaId) {
     const ivaOk      = meta.iva_validation_ok ? '&#10003; Sí' : '&#10007; No';
     const motorLabel = escHtml(meta.ocr_engine || '—');
 
+    // ── Ranking multi-motor (2026-07-22) — qué leyó cada motor de verdad ──────
+    // Solo para tech_admin: ver campo a campo qué IA acierta más/menos en esta
+    // factura concreta, sin depender de campo_sources (que solo dice quién
+    // "ganó" el campo final, no qué leyeron los demás).
+    const motors = d.motors || {};
+    const motorEntries = Object.entries(motors);
+    const motorRankingHtml = motorEntries.length === 0 ? '' : `
+      <h4 style="margin:18px 0 8px;color:#2d3748;font-size:13px;">🏆 Ranking por motor — qué leyó cada IA</h4>
+      <div style="overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:6px;">
+        <thead>
+          <tr style="background:#f7fafc;border-bottom:2px solid #e2e8f0;">
+            <th style="padding:6px 8px;text-align:left;white-space:nowrap;">Campo</th>
+            ${motorEntries.map(([key, m]) => {
+              const engineKey = (m && m.engine) || key;
+              const cfg = MOTOR_COLOR[engineKey] || { bg: '#718096', label: engineKey };
+              return `<th style="padding:6px 8px;text-align:left;white-space:nowrap;"><span style="display:inline-block;padding:1px 6px;border-radius:3px;background:${cfg.bg};color:#fff;font-size:11px;">${escHtml(cfg.label)}</span></th>`;
+            }).join('')}
+            <th style="padding:6px 8px;text-align:left;background:#edf2f7;white-space:nowrap;">Confirmado</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${CAMPOS.map(c => {
+            const fmt = c.fmt || (v => v != null && v !== '' ? escHtml(String(v)) : '—');
+            const vConf = confirmed[c.key];
+            const cells = motorEntries.map(([, m]) => {
+              const campoObj = (m && m.campos) || {};
+              const v = c.key === 'total_factura' ? (campoObj.total_factura ?? campoObj.total) : campoObj[c.key];
+              const matches = v != null && vConf != null && normCmp(v) === normCmp(vConf);
+              const bg = (v != null && vConf != null) ? (matches ? 'background:#f0fff4;' : 'background:#fff5f5;') : '';
+              return `<td style="padding:6px 8px;font-family:monospace;${bg}">${fmt(v)}</td>`;
+            }).join('');
+            return `<tr>
+              <td style="padding:6px 8px;font-weight:600;color:#2d3748;white-space:nowrap;">${escHtml(c.label)}</td>
+              ${cells}
+              <td style="padding:6px 8px;font-family:monospace;font-weight:700;background:#edf2f7;">${fmt(vConf)}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+      </div>
+      <p style="font-size:11px;color:#718096;margin:0 0 14px;">Verde = coincide con lo confirmado · Rojo = discrepa. Para comparar qué motor se equivoca más en esta factura concreta.</p>`;
+
     body.innerHTML = `
       <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:14px;">
         <thead>
@@ -2096,12 +2140,13 @@ async function openOcrModal(facturaId) {
         </thead>
         <tbody>${rows}${rowLineas}</tbody>
       </table>
-      <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px;padding:10px 12px;background:#f7fafc;border:1px solid #e2e8f0;border-radius:6px;">
+      <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px;padding:10px 12px;background:#f7fafc;border:1px solid #e2e8f0;border-radius:6px;margin-bottom:6px;">
         <span><strong>Motor OCR:</strong> <span style="font-family:monospace;">${motorLabel}</span></span>
         <span><strong>Dual confirmado:</strong> <span style="font-family:monospace;">${dualConf}</span></span>
         <span><strong>Confianza:</strong> <span style="font-family:monospace;">${confidence}</span></span>
         <span><strong>IVA válido:</strong> <span style="font-family:monospace;">${ivaOk}</span></span>
-      </div>`;
+      </div>
+      ${motorRankingHtml}`;
   } catch (err) {
     body.innerHTML = `<p style="color:#9b2335;padding:20px 0;text-align:center;">Error al cargar datos OCR: ${escHtml(err.message)}</p>`;
   }
