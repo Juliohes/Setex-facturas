@@ -32,7 +32,7 @@ test('reconcile: corrige base agregada errónea (SubTotal ≠ Σ bases) usando e
   reconcileMultiIvaAggregates(campos, silentLogger);
   assert.equal(campos.base_imponible, '1500,00');
   assert.equal(campos.cuota_iva, '260,00');
-  assert.equal(campos.iva_porcentaje, '21,0');
+  assert.equal(campos.iva_porcentaje, '21');
 });
 
 test('reconcile: deriva bases null de tramos (Azure) antes de sumar', () => {

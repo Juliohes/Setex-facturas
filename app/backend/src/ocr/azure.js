@@ -50,7 +50,10 @@ function toSpanishPercent(value) {
   if (value == null || isNaN(value)) return null;
   const num = Number(value);
   const pct = num < 1 ? num * 100 : num;
-  return pct.toFixed(1).replace('.', ',');
+  // 2026-07-22: sin decimal superfluo para el % de IVA (21 en vez de 21,0);
+  // se conserva la coma decimal si el valor tiene parte fraccionaria real.
+  const rounded = Math.round(pct * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1).replace('.', ',');
 }
 
 // ── Polling de resultado asíncrono ────────────────────────────────────────────

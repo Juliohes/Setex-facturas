@@ -393,9 +393,15 @@ function normalizeConfirmedLineasIva(rawLineas) {
   const fmtAmount = (n) => Number.isFinite(n)
     ? n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     : null;
-  const fmtPct = (n) => Number.isFinite(n)
-    ? (Math.round(n * 10) / 10).toFixed(1).replace('.', ',')
-    : null;
+  // 2026-07-22: solo el % de IVA se muestra SIN decimal superfluo (21 en vez de
+  // 21,0) — el resto de importes/porcentajes del sistema mantiene su formato
+  // decimal habitual. Si el valor SÍ tiene parte decimal real, se conserva
+  // (21,5 sigue mostrándose con coma).
+  const fmtPct = (n) => {
+    if (!Number.isFinite(n)) return null;
+    const rounded = Math.round(n * 10) / 10;
+    return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1).replace('.', ',');
+  };
 
   const cleanLineas = [];
   let sumBase = 0;

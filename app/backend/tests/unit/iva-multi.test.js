@@ -114,7 +114,16 @@ test('normalizeConfirmedLineasIva: base agregada = Σ bases de tramos', () => {
   assert.equal(norm.errors.length, 0);
   assert.equal(norm.base, '1500,00');
   assert.equal(norm.cuota, '260,00');
-  assert.equal(norm.porcentaje, '21,0'); // tramo dominante por cuota
+  assert.equal(norm.porcentaje, '21'); // tramo dominante por cuota
+});
+
+test('normalizeConfirmedLineasIva: el % de línea nunca lleva ",0" superfluo (2026-07-22)', () => {
+  const norm = normalizeConfirmedLineasIva([
+    { base: '100,00', porcentaje: '4,0', cuota: '4,00', productos: [] },
+    { base: '50,00',  porcentaje: '0,0', cuota: '0,00',  productos: [] },
+  ]);
+  assert.equal(norm.lineas[0].porcentaje, '4');
+  assert.equal(norm.lineas[1].porcentaje, '0');
 });
 
 test('normalizeConfirmedLineasIva: tramo exento cuenta en la base', () => {

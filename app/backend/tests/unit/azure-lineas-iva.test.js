@@ -46,7 +46,7 @@ test('extractLineasIvaAzure: tramo exento (rate 0 sin Amount) ya NO se descarta'
   };
   const lineas = extractLineasIvaAzure(fields);
   assert.equal(lineas.length, 2, 'el tramo exento debe conservarse');
-  const exento = lineas.find(l => l.porcentaje === '0,0');
+  const exento = lineas.find(l => l.porcentaje === '0');
   assert.equal(exento.cuota, '0,00');
 });
 
@@ -84,5 +84,5 @@ test('reconcile E2E azure: fila resumen espuria no bloquea reconciliación', () 
   // Azure omitió el tramo exento (120€) → Σ tipadas (1050) ≠ base real (1170):
   // el guard de cordura PROTEGE el agregado correcto de Azure y no lo pisa.
   assert.equal(campos.base_imponible, '1.170,00');
-  assert.equal(campos.iva_porcentaje, '21,0'); // tipo dominante corrige el 14,6 absurdo
+  assert.equal(campos.iva_porcentaje, '21'); // tipo dominante corrige el 14,6 absurdo
 });
