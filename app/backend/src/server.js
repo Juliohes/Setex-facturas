@@ -2990,6 +2990,14 @@ app.post('/api/admin/benchmark-flag', authenticateToken, requireAdmin, requireXH
   }
 });
 
+// 2026-07-23: bloqueo de lote concurrente. Julio disparó el botón dos veces
+// (probablemente doble clic sin que hubiera ninguna señal de progreso en el
+// panel) y ambas ejecuciones corrieron en paralelo sobre las mismas
+// facturas — duplicó el gasto real en OCR sin ningún beneficio. Este
+// candado en memoria del proceso rechaza un segundo lote mientras el
+// primero siga en marcha.
+let benchmarkLoteEnCurso = null; // null | { total, completadas, iniciadoEn }
+
 /** POST /api/admin/facturas/benchmark/ultimas — dispara el benchmark retroactivo
  * sobre las últimas N facturas ya registradas (por defecto 10, tope de seguridad 30).
  * Responde de inmediato ("iniciado") y procesa en segundo plano, una factura
@@ -2999,6 +3007,11 @@ app.post('/api/admin/facturas/benchmark/ultimas', authenticateToken, requireAdmi
   try {
     if (!isTechAdmin(req.user.email)) {
       return res.status(403).json({ error: 'Acceso restringido a administradores técnicos.' });
+    }
+    if (benchmarkLoteEnCurso) {
+      return res.status(409).json({
+        error: `Ya hay un lote en curso (${benchmarkLoteEnCurso.completadas}/${benchmarkLoteEnCurso.total} facturas) — espera a que termine antes de lanzar otro.`,
+      });
     }
     const limit = Math.min(parseInt(req.body?.limit, 10) || 10, 30);
     const result = await pool.query(
@@ -3013,6 +3026,7 @@ app.post('/api/admin/facturas/benchmark/ultimas', authenticateToken, requireAdmi
       [limit]
     );
     const facturas = result.rows;
+    benchmarkLoteEnCurso = { total: facturas.length, completadas: 0, iniciadoEn: new Date().toISOString() };
     res.json({ success: true, iniciado: true, facturas: facturas.length });
 
     (async () => {
@@ -3020,7 +3034,10 @@ app.post('/api/admin/facturas/benchmark/ultimas', authenticateToken, requireAdmi
       for (const f of facturas) {
         try {
           const safePath = path.resolve(f.file_path);
-          if (!safePath.startsWith('/app/uploads/')) continue;
+          if (!safePath.startsWith('/app/uploads/')) {
+            logger.warn(`[Benchmark] upload ${f.id} descartado: file_path fuera de /app/uploads/`);
+            continue;
+          }
           await fs.access(safePath); // el fichero debe seguir existiendo en disco
           const confirmado = {
             proveedor_nif: f.proveedor_nif, proveedor_nombre: f.proveedor_nombre,
@@ -3047,14 +3064,28 @@ app.post('/api/admin/facturas/benchmark/ultimas', authenticateToken, requireAdmi
           logger.info(`[Benchmark] Retroactivo completado para upload ${f.id}`);
         } catch (errFactura) {
           logger.error(`[Benchmark] Error retroactivo en upload ${f.id}`, { error: errFactura.message });
+        } finally {
+          if (benchmarkLoteEnCurso) benchmarkLoteEnCurso.completadas++;
         }
       }
       logger.info(`[Benchmark] Lote retroactivo de ${facturas.length} facturas terminado`);
-    })().catch((err) => logger.error('[Benchmark] Error en lote retroactivo', { error: err.message }));
+      benchmarkLoteEnCurso = null;
+    })().catch((err) => {
+      logger.error('[Benchmark] Error en lote retroactivo', { error: err.message });
+      benchmarkLoteEnCurso = null;
+    });
   } catch (err) {
     logger.error('[Benchmark] Error iniciando lote retroactivo:', err.message);
     res.status(500).json({ error: 'Error al iniciar el benchmark retroactivo' });
   }
+});
+
+/** GET /api/admin/facturas/benchmark/estado — progreso del lote retroactivo en curso */
+app.get('/api/admin/facturas/benchmark/estado', authenticateToken, requireAdmin, (req, res) => {
+  if (!isTechAdmin(req.user.email)) {
+    return res.status(403).json({ error: 'Acceso restringido a administradores técnicos.' });
+  }
+  res.json({ enCurso: !!benchmarkLoteEnCurso, ...(benchmarkLoteEnCurso || { total: 0, completadas: 0 }) });
 });
 
 /** GET /api/admin/facturas/benchmark — resultados del benchmark para el panel */

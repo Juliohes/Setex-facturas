@@ -2415,15 +2415,56 @@ function initBenchmarkModal() {
         body: JSON.stringify({ limit: 10 }),
       });
       const data = await res.json();
+      if (res.status === 409) {
+        // Ya había un lote en curso (p.ej. doble clic) — el backend lo
+        // rechaza para no duplicar el gasto en OCR. Nos limitamos a
+        // engancharnos al progreso del que ya está corriendo.
+        statusEl.textContent = data.error;
+        pollBenchmarkEstado();
+        return;
+      }
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      statusEl.textContent = `Procesando ${data.facturas} facturas en segundo plano (hasta 15 llamadas cada una) — tardará varios minutos. Cierra y vuelve a abrir este panel para ver resultados.`;
+      pollBenchmarkEstado();
     } catch (err) {
       statusEl.textContent = `Error: ${err.message}`;
-    } finally {
       btnUltimas.disabled = false;
       btnUltimas.textContent = '▶ Ejecutar sobre las últimas 10 facturas';
     }
   });
+}
+
+// 2026-07-23: progreso real del lote retroactivo (antes no había ninguna
+// señal — Julio pulsó el botón, no vio nada, y lo volvió a pulsar,
+// duplicando sin querer el gasto real en OCR sobre las mismas facturas).
+let benchmarkPollTimer = null;
+
+async function pollBenchmarkEstado() {
+  const statusEl = document.getElementById('benchmark-status');
+  const btnUltimas = document.getElementById('btn-benchmark-ultimas');
+  if (benchmarkPollTimer) { clearTimeout(benchmarkPollTimer); benchmarkPollTimer = null; }
+
+  try {
+    const res = await authFetch(`${API_URL}/admin/facturas/benchmark/estado`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const estado = await res.json();
+    if (estado.enCurso) {
+      btnUltimas.disabled = true;
+      btnUltimas.textContent = `Procesando… (${estado.completadas}/${estado.total})`;
+      statusEl.textContent = `Factura ${estado.completadas + 1} de ${estado.total} en curso (hasta 15 llamadas cada una) — puedes dejar el panel abierto o cerrarlo, seguirá en segundo plano.`;
+      benchmarkPollTimer = setTimeout(pollBenchmarkEstado, 4000);
+    } else {
+      btnUltimas.disabled = false;
+      btnUltimas.textContent = '▶ Ejecutar sobre las últimas 10 facturas';
+      if (estado.total > 0) {
+        statusEl.textContent = `Lote completado (${estado.total} facturas). Actualizando tabla…`;
+        openBenchmarkModal(); // refresca la tabla con los resultados ya guardados
+      }
+    }
+  } catch (err) {
+    statusEl.textContent = `Error consultando progreso: ${err.message}`;
+    btnUltimas.disabled = false;
+    btnUltimas.textContent = '▶ Ejecutar sobre las últimas 10 facturas';
+  }
 }
 
 function benchmarkVarianteLabel(v) {
@@ -2435,6 +2476,13 @@ async function openBenchmarkModal() {
   const modal = document.getElementById('benchmark-modal');
   modal.style.display = 'flex';
   document.getElementById('benchmark-status').textContent = '';
+
+  // Si ya hay un lote en curso (p.ej. lanzado antes de cerrar el panel), que
+  // el botón lo refleje de inmediato en vez de invitar a pulsarlo otra vez.
+  authFetch(`${API_URL}/admin/facturas/benchmark/estado`)
+    .then((r) => r.ok ? r.json() : null)
+    .then((estado) => { if (estado && estado.enCurso) pollBenchmarkEstado(); })
+    .catch(() => {});
 
   try {
     const flagRes = await authFetch(`${API_URL}/admin/benchmark-flag`);
