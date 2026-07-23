@@ -144,14 +144,18 @@ async function saveEdit() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Error al guardar');
 
-    // Actualizar tanto el campo display como el raw en la fila de Tabulator
+    // 2026-07-23: refrescar SIEMPRE con lo que el backend confirma que quedó
+    // guardado (data.factura), no con lo que el admin escribió en el input.
+    // Bug reportado por Julio: el panel se quedaba mostrando el valor
+    // antiguo (sobre todo en "Total") hasta volver a pulsar la celda.
     const row = table.getRow(editingRow.id);
-    if (row) {
-      const updates = {
-        [actualField]: newValue || null,
-        [editingField]: newValue || null, // actualiza también el campo display
-      };
+    if (row && data.factura) {
+      const updates = { ...data.factura };
+      // El campo display virtual (display_empresa, etc.) no existe en BD:
+      // se sincroniza a mano con el valor real ya confirmado.
+      if (editingField !== actualField) updates[editingField] = data.factura[actualField];
       row.update(updates);
+      row.reformat(); // fuerza el repintado de la fila, no depender solo de la reactividad de Tabulator
     }
     closeEditModal();
   } catch (err) {
@@ -202,11 +206,38 @@ function ivaPctUnifiedCellClick(_e, cell) {
   openDesgloseModal(cell.getRow().getData());
 }
 
+// Parsea un importe en formato español "1.234,56" (o inglés "1234.56") a
+// número JS. 2026-07-23: `parseFloat` ingenuo interpreta la coma como fin de
+// número — "1.234,56" se leía como 1.234 (mostrando "1,23 €" en vez de
+// "1.234,56 €") para cualquier importe ≥ 1.000€. Bug real reportado por
+// Julio como "el total sigue apareciendo mal" tras editar. Fuente única
+// reutilizada en la tabla principal, el modal de desglose y las tarjetas de
+// la galería de facturas de empresa — antes cada sitio tenía su propia
+// copia (o ninguna) de este parseo.
+function parseSpanishAmountAdmin(v) {
+  if (v == null || v === '') return null;
+  let s = String(v).replace(/[€$\s]/g, '');
+  if (!s) return null;
+  const hasComma = s.includes(','), hasDot = s.includes('.');
+  let n;
+  if (hasComma && hasDot) {
+    n = s.lastIndexOf(',') > s.lastIndexOf('.')
+      ? parseFloat(s.replace(/\./g, '').replace(',', '.'))
+      : parseFloat(s.replace(/,/g, ''));
+  } else if (hasComma) {
+    const after = s.split(',').pop() || '';
+    n = after.length === 3 ? parseFloat(s.replace(/,/g, '')) : parseFloat(s.replace(',', '.'));
+  } else {
+    n = parseFloat(s);
+  }
+  return Number.isFinite(n) ? n : null;
+}
+
 function formatEuro(cell) {
   const v = cell.getValue();
   if (v == null || v === '') return '<span style="color:#a0aec0">—</span>';
-  const n = parseFloat(v);
-  if (isNaN(n)) return v;
+  const n = parseSpanishAmountAdmin(v);
+  if (n == null) return escHtml(String(v));
   return n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
 }
 function formatEstado(cell) {
@@ -229,17 +260,8 @@ function formatEuroStr(cell) {
   // Formatea importes guardados como string español "1.234,56" a display legible
   const v = cell.getValue();
   if (v == null || v === '') return '<span style="color:#a0aec0">—</span>';
-  // Intentar parsear formato español
-  let s = String(v).replace(/[€\s]/g, '');
-  const hasComma = s.includes(','), hasDot = s.includes('.');
-  let n;
-  if (hasComma && hasDot) {
-    n = s.lastIndexOf(',') > s.lastIndexOf('.') ? parseFloat(s.replace(/\./g,'').replace(',','.')) : parseFloat(s.replace(/,/g,''));
-  } else if (hasComma) {
-    const after = s.split(',').pop() || '';
-    n = after.length === 3 ? parseFloat(s.replace(/,/g,'')) : parseFloat(s.replace(',','.'));
-  } else { n = parseFloat(s); }
-  if (isNaN(n)) return escHtml(v);
+  const n = parseSpanishAmountAdmin(v);
+  if (n == null) return escHtml(String(v));
   return n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
 }
 function formatPct(cell) {
@@ -790,8 +812,11 @@ window._empVerFacturas = async function(id, cif, nombre) {
       const cardNombre = escHtml(f.proveedor_nombre || f.display_nombre || '—');
 
       // Tarea 3: importe con mínimos y máximos de 2 decimales
-      const totalNum = parseFloat(f.total_factura);
-      const total = f.total_factura != null && !isNaN(totalNum)
+      // 2026-07-23: parseSpanishAmountAdmin (no parseFloat ingenuo) — un total
+      // "1.234,56" con parseFloat directo se leía como 1.234 (mal para
+      // importes ≥ 1.000€, bug reportado por Julio en esta misma tarjeta).
+      const totalNum = parseSpanishAmountAdmin(f.total_factura);
+      const total = totalNum != null
         ? totalNum.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €'
         : '—';
 
@@ -1686,7 +1711,7 @@ function openDesgloseModal(rowData) {
     <strong>${escHtml(rowData.display_empresa || rowData.proveedor_nombre || '—')}</strong>
     ${rowData.display_empresa_nif ? ` · <code>${escHtml(rowData.display_empresa_nif)}</code>` : ''}
     ${rowData.fecha_emision ? ` · ${escHtml(rowData.fecha_emision)}` : ''}
-    ${rowData.total_factura != null ? ` · Total: <strong>${parseFloat(rowData.total_factura).toLocaleString('es-ES', {minimumFractionDigits:2, maximumFractionDigits:2})} €</strong>` : ''}
+    ${(() => { const t = parseSpanishAmountAdmin(rowData.total_factura); return t != null ? ` · Total: <strong>${t.toLocaleString('es-ES', {minimumFractionDigits:2, maximumFractionDigits:2})} €</strong>` : ''; })()}
   `;
   renderDesgloseBlocks(lineas);
   document.getElementById('desglose-error').style.display = 'none';
@@ -1926,27 +1951,17 @@ async function saveDesglose() {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-    // Actualizar la fila en Tabulator con el nuevo lineas_iva (y que el backend ya
-    // habrá recalculado base/iva%/cuota agregados — los recargamos haciendo un
-    // GET del registro, o aplicamos el cálculo local).
+    // 2026-07-23: refrescar SIEMPRE con data.factura (lo que el backend
+    // confirma que quedó guardado), no con un recálculo local optimista.
+    // Bug reportado por Julio: el recálculo local (suma de tramos, tramo
+    // dominante) podía divergir de lo que normalizeConfirmedLineasIva()
+    // calcula de verdad en el backend (redondeos, tramos descartados por
+    // inválidos, etc.), dejando el panel mostrando un total/IVA% distinto
+    // al que realmente quedó en BD hasta refrescar la página.
     const row = table.getRow(desgloseRowId);
-    if (row) {
-      // Cálculo rápido local para reflejar al instante (el backend hace lo mismo
-      // canónicamente). Evita un round-trip extra al endpoint GET.
-      let sumB = 0, sumC = 0, dom = null, domC = -1;
-      lineas.forEach(l => {
-        const b = parseDesgNum(l.base), c = parseDesgNum(l.cuota);
-        sumB += b; sumC += c;
-        if (c > domC) { domC = c; dom = l.porcentaje; }
-      });
-      row.update({
-        lineas_iva:     lineas,
-        base_imponible: fmtDesgNum(sumB),
-        cuota_iva:      fmtDesgNum(sumC),
-        iva_porcentaje: dom || null,
-        cuota_irpf:     payload.cuota_irpf,
-        total_factura:  payload.total_factura,
-      });
+    if (row && data.factura) {
+      row.update({ ...data.factura });
+      row.reformat(); // fuerza el repintado de la fila (Total, IVA%, badge de tramos...)
     }
     closeDesgloseModal();
   } catch (err) {

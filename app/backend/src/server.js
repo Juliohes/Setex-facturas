@@ -4085,15 +4085,27 @@ app.put('/api/admin/facturas/:id', authenticateToken, requireAdmin, requireXHR, 
   const setClauses = Object.keys(updates).map((f, i) => `${f} = $${i + 1}`);
   const values = [...Object.values(updates), id];
   try {
+    // 2026-07-23: se devuelve la fila COMPLETA ya guardada (no solo el id).
+    // Bug reportado por Julio: el panel se quedaba mostrando el valor
+    // antiguo tras editar a mano (total, desglose IVA...) hasta que se
+    // volvía a pulsar. La causa era que el frontend actualizaba su tabla
+    // con el valor que el ADMIN HABÍA ESCRITO, no con lo que de verdad
+    // quedó en BD — cualquier divergencia (formato, redondeo, recálculo del
+    // desglose) se quedaba invisible hasta refrescar. Ahora el frontend usa
+    // esta respuesta como única fuente de verdad para refrescar la fila.
     const r = await pool.query(
-      `UPDATE uploads SET ${setClauses.join(', ')} WHERE id = $${values.length} RETURNING id`,
+      `UPDATE uploads SET ${setClauses.join(', ')} WHERE id = $${values.length}
+       RETURNING id, proveedor_nombre, proveedor_nif, receptor_nombre, receptor_nif,
+                 numero_factura, fecha_emision, total_factura, base_imponible,
+                 iva_porcentaje, cuota_iva, irpf_porcentaje, cuota_irpf, lineas_iva,
+                 moneda, invoice_type`,
       values
     );
     if (r.rows.length === 0) return res.status(404).json({ error: 'Factura no encontrada' });
 
     auditLog('ADMIN_EDIT_FACTURA', { upload_id: id, fields: Object.keys(updates) }, req.user.userId, req.ip);
     logger.info(`[Admin] Factura ${id} editada por ${req.user.email}: ${Object.keys(updates).join(', ')}`);
-    res.json({ success: true });
+    res.json({ success: true, factura: r.rows[0] });
   } catch (err) {
     logger.error('Admin edit factura error:', err);
     res.status(500).json({ error: 'Error al actualizar la factura' });
