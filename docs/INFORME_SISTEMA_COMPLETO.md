@@ -3401,3 +3401,11 @@ Julio pidió activar `pipeline_v2_imagen_variante_enabled` y desplegar el fronte
 - Redeploy solo de backend (rebuild → stop → up -d). Breve parón visto en el primer `docker ps` tras el deploy (contenedor "Up 1 segundo") — verificado que NO fue un crash (`RestartCount=0`, logs de arranque limpios en ambos intentos): fue simplemente el arranque normal coincidiendo con el instante de la comprobación. Se estabilizó a los ~30s con los 4 contenedores healthy y HTTP 200.
 - `pipeline_v2_validacion_enabled: true` confirmado leído dentro del contenedor backend.
 - **Estado actual**: v2 decide de verdad el routing de auto-aceptación/revisión de cada factura nueva en producción. **Sin validación previa con datos reales** — recomendación pendiente: vigilar de cerca las próximas facturas (vía el panel "Pipeline v2" o consultando `ocr_shadow_comparativa`) para detectar cuanto antes si v2 se equivoca más que v1.
+
+### 2026-07-23 — Fix: columna IVA% siempre editable como desglose de tramos
+
+Julio reportó un bug real usando el panel: una factura con 2 tramos de IVA se procesó mal como mono-IVA (10%), y no había forma de corregirlo — la columna "IVA%" solo permitía editar el número cuando la factura tenía 0 o 1 tramo guardado; el modal de desglose completo (añadir/quitar tramos, editar base y cuota de cada uno) solo se abría con 2+ tramos ya presentes, pese a soportar perfectamente 1 tramo o ninguno.
+
+- `admin-facturas.js`: `formatIvaPctUnified`/`ivaPctUnifiedCellClick` eliminan la distinción mono/multi-IVA — el click en la celda SIEMPRE abre `openDesgloseModal()`, sin importar cuántos tramos tenga hoy la factura.
+- `openDesgloseModal()`: si `lineas_iva` viene vacío, reconstruye un tramo inicial desde `iva_porcentaje`/`base_imponible`/`cuota_iva` antes de renderizar, para no perder lo que ya había al abrir el desglose por primera vez.
+- Deploy solo de frontend (backend sin cambios). 4 contenedores healthy, HTTP 200, cache-buster `admin-facturas.js?v=20260723-001` verificado en la imagen desplegada.
