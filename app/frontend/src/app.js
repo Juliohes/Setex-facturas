@@ -573,12 +573,27 @@ function ensureDocScanLibs() {
     if (docScanLibsPromise) return docScanLibsPromise;
     docScanLibsPromise = (async () => {
         await loadScriptOnce('opencv.js?v=20260713-001');
-        // opencv.js inicializa su runtime WASM de forma asíncrona.
+        // 2026-07-23 — FIX de condición de carrera real (bug encontrado tras
+        // reporte de Julio de que el modo documento "sigue igual", nunca se
+        // ve el contorno): `loadScriptOnce` solo espera a que el <script> se
+        // ejecute; el runtime WASM de opencv.js puede terminar de inicializar
+        // ANTES de que este código llegue a asignar `cv.onRuntimeInitialized`.
+        // El propio glue code de opencv.js dispara ese callback UNA SOLA VEZ,
+        // en el instante exacto en que `calledRun` pasa a true — si ya pasó,
+        // asignar el callback después nunca lo dispara, y la promesa se
+        // quedaba colgada hasta el timeout de 15s (fallo silencioso).
+        // Arreglo: usar `cv.then(...)`, que el propio opencv.js expone
+        // precisamente para este caso — comprueba `calledRun` internamente y
+        // llama al callback YA MISMO si el runtime ya estaba listo, o lo
+        // encola si no. Es el mecanismo seguro documentado por Emscripten.
         await new Promise((resolve, reject) => {
             if (typeof cv !== 'undefined' && cv.Mat) { resolve(); return; }
+            if (typeof cv === 'undefined' || typeof cv.then !== 'function') {
+                reject(new Error('opencv.js cargado pero cv/cv.then no está definido'));
+                return;
+            }
             const timeout = setTimeout(() => reject(new Error('Timeout inicializando OpenCV.js')), 15000);
-            window.cv = window.cv || {};
-            cv['onRuntimeInitialized'] = () => { clearTimeout(timeout); resolve(); };
+            cv.then(() => { clearTimeout(timeout); resolve(); });
         });
         await loadScriptOnce('jscanify.js?v=20260713-001');
         docScanner = new jscanify();
@@ -591,11 +606,36 @@ function ensureDocScanLibs() {
     return docScanLibsPromise;
 }
 
+// Indicador visible de si el modo documento está activo (2026-07-23). Antes
+// fallaba en silencio: si opencv.js/jscanify no cargaban a tiempo, no había
+// forma de saberlo sin abrir la consola del navegador. Ahora se ve un texto
+// explícito en la barra superior de la cámara.
+function setDocScanStatus(state) {
+    const el = document.getElementById('docscan-status');
+    if (!el) return;
+    el.classList.remove('is-active', 'is-unavailable');
+    if (state === 'loading') {
+        el.textContent = 'Modo documento: cargando…';
+    } else if (state === 'active') {
+        el.textContent = 'Modo documento: ✓ activo';
+        el.classList.add('is-active');
+    } else {
+        el.textContent = 'Modo documento: no disponible';
+        el.classList.add('is-unavailable');
+    }
+}
+
 function startDocScanLoop() {
+    setDocScanStatus('loading');
     ensureDocScanLibs().then(() => {
         docScanActive = true;
+        setDocScanStatus('active');
         docScanLoopTick();
-    }).catch(() => { /* degradación silenciosa: sin overlay, captura normal intacta */ });
+    }).catch(() => {
+        // Degradación silenciosa para la CAPTURA (sigue funcionando igual),
+        // pero ya no es silenciosa para el USUARIO: el indicador avisa.
+        setDocScanStatus('unavailable');
+    });
 }
 
 function stopDocScanLoop() {
@@ -653,6 +693,47 @@ function docScanLoopTick() {
     docScanLoopTimer = setTimeout(docScanLoopTick, 400);
 }
 
+// ── Flash / linterna (2026-07-23) ────────────────────────────────────────────
+// MediaStreamTrack.applyConstraints({torch}) — soportado en Chrome Android
+// (desde 2017) y en Safari iOS 17.4+ (desde 2024, pese al mito extendido de
+// que Apple nunca lo permite: solo la API ImageCapture completa está sin
+// soportar en WebKit, el control de torch vía applyConstraints es aparte).
+// Sin soporte en Firefox Android. El botón SOLO se muestra si el track
+// activo confirma la capacidad — nunca se ofrece un control que no vaya a
+// funcionar. Nunca se activa solo: siempre requiere pulsación explícita.
+let flashOn = false;
+
+function setupFlashButton(track) {
+    const btn = document.getElementById('btn-toggle-flash');
+    if (!btn) return;
+    flashOn = false;
+    btn.classList.remove('is-on');
+    btn.setAttribute('aria-label', 'Activar linterna');
+    const capabilities = track.getCapabilities ? track.getCapabilities() : null;
+    const supported = !!(capabilities && capabilities.torch);
+    btn.style.display = supported ? 'inline-block' : 'none';
+    if (!supported) { btn.onclick = null; return; }
+    btn.onclick = async () => {
+        const next = !flashOn;
+        try {
+            await track.applyConstraints({ advanced: [{ torch: next }] });
+            flashOn = next;
+            btn.classList.toggle('is-on', flashOn);
+            btn.setAttribute('aria-label', flashOn ? 'Desactivar linterna' : 'Activar linterna');
+        } catch (e) {
+            // Fallo puntual del dispositivo al cambiar el torch (bug conocido en
+            // gama baja Android): no debe romper la captura, solo se ignora.
+            console.warn('[Flash] No se pudo cambiar el estado de la linterna:', e.message);
+        }
+    };
+}
+
+function resetFlashButton() {
+    flashOn = false;
+    const btn = document.getElementById('btn-toggle-flash');
+    if (btn) { btn.style.display = 'none'; btn.classList.remove('is-on'); btn.onclick = null; }
+}
+
 // ── File handling ─────────────────────────────────────────────────────────────
 
 let cameraStream = null;
@@ -671,6 +752,7 @@ function doCapturePhoto() {
                 const video = document.getElementById('camera-video');
                 video.srcObject = cameraStream;
                 document.getElementById('camera-overlay').style.display = 'flex';
+                setupFlashButton(stream.getVideoTracks()[0]);
                 video.addEventListener('loadedmetadata', startDocScanLoop, { once: true });
             }).catch(() => {
                 document.getElementById('camera-input').click();
@@ -691,6 +773,9 @@ function closeCamera() {
         cameraStream.getTracks().forEach(t => t.stop());
         cameraStream = null;
     }
+    resetFlashButton();
+    const statusEl = document.getElementById('docscan-status');
+    if (statusEl) { statusEl.textContent = ''; statusEl.classList.remove('is-active', 'is-unavailable'); }
     document.getElementById('camera-overlay').style.display = 'none';
 }
 
