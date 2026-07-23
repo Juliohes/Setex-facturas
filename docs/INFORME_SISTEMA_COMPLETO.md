@@ -3429,3 +3429,7 @@ Julio reportó otro bug real: tras corregir a mano un valor en el panel (sobre t
 3. Además: `row.reformat()` tras `row.update()` en ambos flujos, para forzar el repintado visual sin depender solo de la reactividad por defecto de Tabulator.
 
 Deploy de backend + frontend (el endpoint PUT cambió). 4 contenedores healthy, logs de arranque limpios, HTTP 200, cache-buster `admin-facturas.js?v=20260723-003` verificado. Suite backend 133/134 en verde (único fallo preexistente, ajeno).
+
+### 2026-07-23 (continuación) — Cuota IRPF muestra "—" cuando es 0
+
+Petición de Julio: la columna "Cuota IRPF" mostraba "0,00 €" en vez de "—" para facturas sin retención, a diferencia de "IRPF %" que ya trataba su 0 como "sin dato" (`formatPct`). Nuevo formatter `formatCuotaIrpf()` aplicado ÚNICAMENTE a esa columna (cuota_iva/base_imponible siguen con `formatEuroStr` sin cambios — un 0,00€ de IVA sí es un dato real en factura exenta). Cambio puramente de visualización, sin migración de BD: se aplica igual a facturas nuevas y existentes. Deploy solo frontend, 4 contenedores healthy, cache-buster `admin-facturas.js?v=20260723-004` verificado.
