@@ -160,7 +160,16 @@ async function extractInvoice(filePath, mimeType, apiKey, context = {}, modelId,
     }],
     generationConfig: {
       temperature: 0,
-      maxOutputTokens: 2048,
+      // 2026-07-23 — FIX bug real encontrado con el benchmark multi-motor:
+      // los modelos Gemini 3.x son "thinking" por defecto y ese razonamiento
+      // interno consume del MISMO presupuesto que maxOutputTokens (confirmado:
+      // finishReason MAX_TOKENS con thoughtsTokenCount alto y candidatesTokenCount
+      // bajo/cero). Con 2048 no quedaba margen para el JSON final → se cortaba
+      // a medias en casi todas las llamadas. thinkingLevel "low" es el mínimo
+      // disponible en esta familia (no existe "off" en Gemini 3.x, a diferencia
+      // de 2.5) y maxOutputTokens se amplía para cubrir pensamiento + respuesta.
+      maxOutputTokens: label === 'pro' ? 16384 : 8192,
+      thinkingConfig: { thinkingLevel: 'low' },
       responseMimeType: 'application/json',
       responseJsonSchema: INVOICE_JSON_SCHEMA,
     },
@@ -181,14 +190,29 @@ async function extractInvoice(filePath, mimeType, apiKey, context = {}, modelId,
   const data    = await res.json();
   const elapsed = ((Date.now() - start) / 1000).toFixed(2);
 
+  // 2026-07-23: diagnóstico del corte por presupuesto de tokens agotado.
+  // thoughtsTokenCount = lo que el modelo gastó "pensando" (Gemini 3.x es
+  // thinking por defecto y ese gasto sale del MISMO maxOutputTokens que el
+  // JSON final) — si finishReason=MAX_TOKENS, es un fallo explícito de
+  // presupuesto, no un JSON realmente mal formado: se distingue para poder
+  // diagnosticarlo de un vistazo en los logs en vez de un JSON.parse a ciegas.
+  const finishReason = data?.candidates?.[0]?.finishReason;
+  const thoughtsTokens = data.usageMetadata?.thoughtsTokenCount || 0;
+  const outputTokens = data.usageMetadata?.candidatesTokenCount || 0;
+  if (finishReason === 'MAX_TOKENS') {
+    throw new Error(
+      `Gemini(${model}) cortado por MAX_TOKENS (pensamiento=${thoughtsTokens} salida=${outputTokens} tokens — sube maxOutputTokens o baja thinkingLevel)`
+    );
+  }
+
   const text = extractResponseText(data);
-  if (!text) throw new Error(`Gemini(${model}): respuesta sin texto JSON`);
+  if (!text) throw new Error(`Gemini(${model}): respuesta sin texto JSON (finishReason=${finishReason || 'desconocido'}, pensamiento=${thoughtsTokens} tokens)`);
 
   let campos;
   try {
     campos = JSON.parse(text);
   } catch {
-    throw new Error(`Gemini(${model}) devolvió JSON inválido: ${text.substring(0, 200)}`);
+    throw new Error(`Gemini(${model}) devolvió JSON inválido (finishReason=${finishReason || 'desconocido'}, pensamiento=${thoughtsTokens} tokens): ${text.substring(0, 200)}`);
   }
 
   const esValida = campos.es_factura_valida !== false;
@@ -265,7 +289,13 @@ async function _extractCIFZone(filePath, mimeType, apiKey, cfg, zone, roleHint) 
       }],
       generationConfig: {
         temperature: 0,
-        maxOutputTokens: 64,
+        // 2026-07-23: mismo fix que extractInvoice — con 64 tokens no quedaba
+        // margen para el "pensamiento" de los modelos Gemini 3.x, cortando
+        // esta lectura de CIF casi siempre (fallaba en silencio: el catch de
+        // esta función devuelve null, así que este bug llevaba tiempo
+        // degradando la segunda pasada de receptor sin que se notara).
+        maxOutputTokens: 1024,
+        thinkingConfig: { thinkingLevel: 'low' },
         responseMimeType: 'application/json',
         responseJsonSchema: CIF_ONLY_SCHEMA,
       },
@@ -279,13 +309,19 @@ async function _extractCIFZone(filePath, mimeType, apiKey, cfg, zone, roleHint) 
     });
     if (!res.ok) return null;
     const data = await res.json();
+    const finishReason = data?.candidates?.[0]?.finishReason;
+    if (finishReason === 'MAX_TOKENS') {
+      console.warn(`[Gemini CIF-zone] Cortado por MAX_TOKENS (pensamiento=${data.usageMetadata?.thoughtsTokenCount || 0} tokens)`);
+      return null;
+    }
     const text = extractResponseText(data);
     if (!text) return null;
     const parsed = JSON.parse(text);
     const cif = parsed?.cif;
     if (!cif || typeof cif !== 'string' || cif.length !== 9) return null;
     return cif.toUpperCase();
-  } catch {
+  } catch (err) {
+    console.warn(`[Gemini CIF-zone] Error: ${err.message}`);
     return null;
   }
 }
