@@ -132,11 +132,13 @@ function parseAnnotation(annotation) {
  * @param {string} mimeType
  * @param {string} apiKey    - Mistral API key
  * @param {object} context   - { invoice_type, empresa_nif, empresa_nombre } (informativo)
+ * @param {{buffer:Buffer, mime:string}|null} preparedImage - 2026-07-23 (benchmark
+ *   multi-imagen): si se pasa, se usa TAL CUAL sin volver a redimensionar/comprimir.
  */
-async function extractInvoice(filePath, mimeType, apiKey, context = {}) {
+async function extractInvoice(filePath, mimeType, apiKey, context = {}, preparedImage = null) {
   const start = Date.now();
 
-  const { buffer, mime } = await optimizeImage(filePath, mimeType);
+  const { buffer, mime } = preparedImage || await optimizeImage(filePath, mimeType);
   const dataUrl = `data:${mime};base64,${buffer.toString('base64')}`;
 
   // Imagen → image_url · PDF → document_url (ambos aceptan data-URI base64)

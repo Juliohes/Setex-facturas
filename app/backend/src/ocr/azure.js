@@ -245,11 +245,13 @@ function buildEmptyCampos() {
  * @param {string} apiKey
  * @param {string} endpoint
  * @param {object} context  - { invoice_type, empresa_nif, empresa_nombre } (opcional)
+ * @param {{buffer:Buffer, mime:string}|null} preparedImage - 2026-07-23 (benchmark
+ *   multi-imagen): si se pasa, se usa TAL CUAL sin volver a redimensionar/comprimir.
  */
-async function extractInvoice(filePath, mimeType, apiKey, endpoint, context = {}) {
+async function extractInvoice(filePath, mimeType, apiKey, endpoint, context = {}, preparedImage = null) {
   const start = Date.now();
 
-  const { buffer, mime } = await optimizeImage(filePath, mimeType);
+  const { buffer, mime } = preparedImage || await optimizeImage(filePath, mimeType);
   const base64 = buffer.toString('base64');
 
   const cleanEndpoint = endpoint.replace(/\/$/, '');

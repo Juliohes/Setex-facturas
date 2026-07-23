@@ -130,12 +130,17 @@ function extractResponseText(data) {
  * @param {object} context  - { invoice_type, empresa_nif, empresa_nombre }
  * @param {string} modelId  - ej. "gemini-3-flash-preview" | "gemini-3.1-pro-preview"
  * @param {string} label    - "flash" | "pro" (para ocr_engine)
+ * @param {{buffer:Buffer, mime:string}|null} preparedImage - 2026-07-23 (benchmark
+ *   multi-imagen): si se pasa, se usa TAL CUAL (sin volver a redimensionar/comprimir)
+ *   en vez de leer filePath y optimizarlo. Permite comparar variantes de imagen
+ *   (original sin reducir, contraste...) contra el mismo motor. `filePath` se
+ *   ignora en ese caso — sigue siendo obligatorio por compatibilidad de firma.
  */
-async function extractInvoice(filePath, mimeType, apiKey, context = {}, modelId, label = 'flash') {
+async function extractInvoice(filePath, mimeType, apiKey, context = {}, modelId, label = 'flash', preparedImage = null) {
   const start = Date.now();
   const model = modelId || DEFAULT_MODELS[label] || DEFAULT_MODELS.flash;
 
-  const { buffer, mime } = await optimizeImage(filePath, mimeType);
+  const { buffer, mime } = preparedImage || await optimizeImage(filePath, mimeType);
 
   let prompt = USER_PROMPT;
   if (context.invoice_type === 'compra' && context.empresa_nif) {

@@ -270,11 +270,13 @@ async function optimizeImage(filePath, mimeType) {
  * @param {string} mimeType   - MIME type del archivo
  * @param {string} apiKey     - OpenAI API key
  * @param {object} context    - Contexto opcional: { invoice_type, empresa_nif, empresa_nombre }
+ * @param {{buffer:Buffer, mime:string}|null} preparedImage - 2026-07-23 (benchmark
+ *   multi-imagen): si se pasa, se usa TAL CUAL sin volver a redimensionar/comprimir.
  */
-async function extractInvoice(filePath, mimeType, apiKey, context = {}) {
+async function extractInvoice(filePath, mimeType, apiKey, context = {}, preparedImage = null) {
   const start = Date.now();
 
-  const { buffer, mime } = await optimizeImage(filePath, mimeType);
+  const { buffer, mime } = preparedImage || await optimizeImage(filePath, mimeType);
   const base64  = buffer.toString('base64');
   const dataUrl = `data:${mime};base64,${base64}`;
 

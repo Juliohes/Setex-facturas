@@ -1361,6 +1361,9 @@ function launchApp(authData) {
   // Botón "Pipeline v2" (comparativa shadow) — solo administradores técnicos
   const btnShadowV2 = document.getElementById('btn-shadow-v2');
   if (btnShadowV2) btnShadowV2.style.display = window._isTechAdmin ? 'inline-block' : 'none';
+  // Botón "Benchmark IA" (3 imágenes × todos los motores) — solo tech_admin
+  const btnBenchmark = document.getElementById('btn-benchmark');
+  if (btnBenchmark) btnBenchmark.style.display = window._isTechAdmin ? 'inline-block' : 'none';
 
   const select = document.getElementById('f-usuario');
   (authData.usuarios || []).forEach(u => {
@@ -1378,6 +1381,7 @@ function launchApp(authData) {
   initDesgloseModal();
   initOcrModal();
   initShadowModal();
+  initBenchmarkModal();
   loadData();
 
   document.getElementById('btn-filtrar').addEventListener('click', () => { currentFilters = getFilters(); loadData(currentFilters); });
@@ -2354,6 +2358,168 @@ async function openShadowModal() {
   } catch (err) {
     document.getElementById('shadow-table').innerHTML =
       `<p style="color:#9b2335;padding:20px 0;text-align:center;">Error al cargar la comparativa: ${escHtml(err.message)}</p>`;
+  }
+}
+
+// ── Benchmark IA — 3 imágenes × todos los motores (2026-07-23) ──────────────
+// Petición de Julio: comparar actual/original/contraste contra TODOS los
+// motores OCR, puntuado contra lo confirmado por el humano. Coste real
+// asumido explícitamente — solo tech_admin, "activable" desde el propio panel.
+let benchmarkTable = null;
+
+function closeBenchmarkModal() {
+  const m = document.getElementById('benchmark-modal');
+  if (m) m.style.display = 'none';
+}
+
+function initBenchmarkModal() {
+  const modal = document.getElementById('benchmark-modal');
+  const closeBtn = document.getElementById('benchmark-modal-close');
+  const openBtn = document.getElementById('btn-benchmark');
+  const toggle = document.getElementById('benchmark-toggle');
+  const btnUltimas = document.getElementById('btn-benchmark-ultimas');
+  if (!modal || !closeBtn || !openBtn || !toggle || !btnUltimas) return;
+  closeBtn.addEventListener('click', closeBenchmarkModal);
+  modal.addEventListener('click', (e) => { if (e.target === modal) closeBenchmarkModal(); });
+  openBtn.addEventListener('click', openBenchmarkModal);
+
+  toggle.addEventListener('change', async () => {
+    const statusEl = document.getElementById('benchmark-status');
+    const wanted = toggle.checked;
+    toggle.disabled = true;
+    try {
+      const res = await authFetch(`${API_URL}/admin/benchmark-flag`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: wanted }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      statusEl.textContent = wanted ? 'Activado — se ejecutará en cada factura nueva.' : 'Desactivado.';
+    } catch (err) {
+      toggle.checked = !wanted; // revertir visualmente si falló el guardado
+      statusEl.textContent = `Error: ${err.message}`;
+    } finally {
+      toggle.disabled = false;
+    }
+  });
+
+  btnUltimas.addEventListener('click', async () => {
+    const statusEl = document.getElementById('benchmark-status');
+    btnUltimas.disabled = true;
+    btnUltimas.textContent = 'Iniciando…';
+    try {
+      const res = await authFetch(`${API_URL}/admin/facturas/benchmark/ultimas`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ limit: 10 }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      statusEl.textContent = `Procesando ${data.facturas} facturas en segundo plano (hasta 15 llamadas cada una) — tardará varios minutos. Cierra y vuelve a abrir este panel para ver resultados.`;
+    } catch (err) {
+      statusEl.textContent = `Error: ${err.message}`;
+    } finally {
+      btnUltimas.disabled = false;
+      btnUltimas.textContent = '▶ Ejecutar sobre las últimas 10 facturas';
+    }
+  });
+}
+
+function benchmarkVarianteLabel(v) {
+  const map = { actual: 'Actual (1536px)', original: 'Original (sin reducir)', contraste: 'Contraste (CLAHE)' };
+  return map[v] || v;
+}
+
+async function openBenchmarkModal() {
+  const modal = document.getElementById('benchmark-modal');
+  modal.style.display = 'flex';
+  document.getElementById('benchmark-status').textContent = '';
+
+  try {
+    const flagRes = await authFetch(`${API_URL}/admin/benchmark-flag`);
+    if (flagRes.ok) {
+      const flagData = await flagRes.json();
+      document.getElementById('benchmark-toggle').checked = !!flagData.enabled;
+    }
+  } catch { /* no-op: el toggle se queda como estaba si falla la lectura */ }
+
+  try {
+    const res = await authFetch(`${API_URL}/admin/facturas/benchmark`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+
+    // El "ganador" es relativo a CADA factura (mayor % de acierto), no un
+    // recuento absoluto entre facturas con distinto nº de campos comparables.
+    const porFactura = {};
+    (data.rows || []).forEach((r) => {
+      (porFactura[r.upload_id] = porFactura[r.upload_id] || []).push(r);
+    });
+    const ganadorPorFactura = {};
+    Object.entries(porFactura).forEach(([uploadId, filas]) => {
+      let mejorClave = null, mejorRatio = -1;
+      filas.forEach((f) => {
+        const ratio = f.comparables > 0 ? f.aciertos / f.comparables : -1;
+        if (ratio > mejorRatio) { mejorRatio = ratio; mejorClave = `${f.variante}|${f.motor}`; }
+      });
+      ganadorPorFactura[uploadId] = mejorClave;
+    });
+
+    const rows = (data.rows || []).map((r) => ({
+      ...r,
+      total_factura: r.total_factura != null ? parseFloat(r.total_factura) : null,
+      ratio: r.comparables > 0 ? Math.round((r.aciertos / r.comparables) * 100) : null,
+      es_ganador: ganadorPorFactura[r.upload_id] === `${r.variante}|${r.motor}`,
+      _rowId: `${r.upload_id}-${r.variante}-${r.motor}`,
+    }));
+
+    if (benchmarkTable) {
+      benchmarkTable.replaceData(rows);
+      return;
+    }
+
+    benchmarkTable = new Tabulator('#benchmark-table', {
+      data: rows,
+      index: '_rowId',
+      height: 'calc(80vh - 240px)',
+      layout: 'fitDataFill',
+      groupBy: 'upload_id',
+      groupHeader: (value, count, data0) => {
+        const first = (data0 && data0[0]) || {};
+        const fecha = first.uploaded_at ? new Date(first.uploaded_at).toLocaleDateString('es-ES') : '—';
+        const total = first.total_factura != null
+          ? first.total_factura.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €'
+          : '—';
+        return `Factura #${escHtml(String(value))} — ${escHtml(first.proveedor_nombre || '—')} · ${fecha} · ${total} (${count} combinaciones)`;
+      },
+      placeholder: 'Sin datos todavía — activa el benchmark o pulsa "Ejecutar sobre las últimas 10 facturas".',
+      columns: [
+        { title: 'Variante', field: 'variante', width: 170, sorter: 'string',
+          formatter: (cell) => escHtml(benchmarkVarianteLabel(cell.getValue())) },
+        { title: 'Motor', field: 'motor', width: 120, sorter: 'string' },
+        { title: '¿Válida?', field: 'es_factura_valida', width: 90, hozAlign: 'center',
+          formatter: (cell) => {
+            const v = cell.getValue();
+            return v === true ? '<span style="color:#276749;">✓</span>' : v === false ? '<span style="color:#9b2335;">✗</span>' : '<span style="color:#a0aec0;">—</span>';
+          } },
+        { title: 'Aciertos', field: 'aciertos', width: 100, hozAlign: 'center', sorter: 'number',
+          formatter: (cell) => { const d = cell.getRow().getData(); return `${d.aciertos}/${d.comparables}`; } },
+        { title: '% acierto', field: 'ratio', width: 100, hozAlign: 'center', sorter: 'number',
+          formatter: (cell) => cell.getValue() != null ? `${cell.getValue()}%` : '<span style="color:#a0aec0;">—</span>' },
+        { title: 'Tiempo', field: 'tiempo_ms', width: 90, hozAlign: 'right', sorter: 'number',
+          formatter: (cell) => cell.getValue() != null ? `${(cell.getValue() / 1000).toFixed(1)}s` : '—' },
+        { title: 'Error', field: 'error', minWidth: 180,
+          formatter: (cell) => cell.getValue() ? `<span style="color:#c53030;">${escHtml(cell.getValue())}</span>` : '' },
+      ],
+      rowFormatter: (row) => {
+        const d = row.getData();
+        if (d.es_ganador) row.getElement().style.background = '#f0fff4';
+        else if (d.error) row.getElement().style.background = '#fff5f5';
+      },
+    });
+  } catch (err) {
+    document.getElementById('benchmark-table').innerHTML =
+      `<p style="color:#9b2335;padding:20px 0;text-align:center;">Error al cargar el benchmark: ${escHtml(err.message)}</p>`;
   }
 }
 

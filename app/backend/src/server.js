@@ -17,6 +17,7 @@ const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const sharp = require('sharp');
 const { extractInvoiceOCR, extractCIFOnlyOCR, compararVarianteContraste } = require('./ocr/index');
+const { ejecutarBenchmarkCompleto } = require('./ocr/benchmark');
 
 // ── Módulos refactorizados (Strangler-Fig, pasos 1-20 completados) ────────────
 // Ubicación objetivo: domain/, services/, repositories/, middleware/, lib/, config/
@@ -458,6 +459,28 @@ async function initDB() {
       creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS idx_imagen_variante_preview ON ocr_imagen_variante_comparativa(preview_id);
+
+    -- Benchmark multi-imagen × multi-motor (2026-07-23, petición de Julio):
+    -- 3 variantes de la foto (actual/original/contraste) × todos los motores
+    -- OCR disponibles, puntuado contra lo confirmado por el humano. Cuesta
+    -- dinero real (hasta 15 llamadas por factura) — solo corre si el flag
+    -- pipeline_v2_benchmark_enabled está activo, o al pulsar el botón de
+    -- "últimas facturas" en el panel admin. Nunca afecta al pipeline real.
+    CREATE TABLE IF NOT EXISTS ocr_benchmark_resultados (
+      id SERIAL PRIMARY KEY,
+      upload_id INTEGER NOT NULL REFERENCES uploads(id) ON DELETE CASCADE,
+      variante VARCHAR(20) NOT NULL,
+      motor VARCHAR(30) NOT NULL,
+      campos JSONB NOT NULL DEFAULT '{}',
+      es_factura_valida BOOLEAN,
+      tiempo_ms INTEGER,
+      error TEXT,
+      aciertos INTEGER NOT NULL DEFAULT 0,
+      comparables INTEGER NOT NULL DEFAULT 0,
+      creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_benchmark_unico ON ocr_benchmark_resultados(upload_id, variante, motor);
+    CREATE INDEX IF NOT EXISTS idx_benchmark_upload ON ocr_benchmark_resultados(upload_id);
   `);
 
   // Backfill: uploads anteriores sin upload_status → 'active'
@@ -2550,6 +2573,42 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
     );
     const uploadId = dbResult.rows[0].id;
 
+    // ── Benchmark multi-imagen × multi-motor (2026-07-23, petición de Julio) ──
+    // FIRE-AND-FORGET: nunca se espera (await) — no debe añadir latencia a la
+    // respuesta real ni afectar lo que ve el usuario. Solo corre si el flag
+    // está activo (coste real de hasta 15 llamadas OCR por factura, asumido
+    // explícitamente por Julio para tener datos desde las primeras facturas).
+    try {
+      const benchCfg = JSON.parse(fsSync.readFileSync(FEATURES_PATH, 'utf8'));
+      if (benchCfg.pipeline_v2_benchmark_enabled) {
+        const confirmadoBench = {
+          proveedor_nif: finalProveedorNif, proveedor_nombre: finalProveedorNombre,
+          receptor_nif: finalReceptorNif, receptor_nombre: finalReceptorNombre,
+          numero_factura: finalNumeroFactura, fecha_emision: normFecha,
+          total: normTotal, base_imponible: finalBaseImponible,
+          iva_porcentaje: finalIvaPorcentaje, cuota_iva: finalCuotaIva,
+        };
+        ejecutarBenchmarkCompleto(
+          finalFilePath, fileInfo.mimetype,
+          { invoice_type: invoiceType, empresa_nif: userCompanyNif },
+          benchCfg, confirmadoBench, logger
+        ).then((resultados) => Promise.all(resultados.map((r) => pool.query(
+          `INSERT INTO ocr_benchmark_resultados
+             (upload_id, variante, motor, campos, es_factura_valida, tiempo_ms, error, aciertos, comparables)
+           VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9)
+           ON CONFLICT (upload_id, variante, motor) DO UPDATE SET
+             campos = EXCLUDED.campos, es_factura_valida = EXCLUDED.es_factura_valida,
+             tiempo_ms = EXCLUDED.tiempo_ms, error = EXCLUDED.error,
+             aciertos = EXCLUDED.aciertos, comparables = EXCLUDED.comparables, creado_en = NOW()`,
+          [uploadId, r.variante, r.motor, JSON.stringify(r.campos), r.es_factura_valida, r.tiempo_ms, r.error, r.aciertos, r.comparables]
+        ))))
+          .then(() => logger.info(`[Benchmark] Completado para upload ${uploadId}`))
+          .catch((err) => logger.error('[Benchmark] Error ejecutando benchmark automático', { error: err.message, upload_id: uploadId }));
+      }
+    } catch (benchErr) {
+      logger.error('[Benchmark] Error leyendo configuración', { error: benchErr.message });
+    }
+
     // Aprendizaje por usuario (privado): guarda nombre canónico confirmado y su CIF.
     // SEC-006: solo en known_cifs por usuario, no en company_catalog global.
     // La columna proveedor_nombre almacena el nombre real para corregir futuros OCR
@@ -2890,6 +2949,133 @@ app.get('/api/admin/facturas/shadow-comparativa', authenticateToken, requireAdmi
   } catch (err) {
     logger.error('[shadow-comparativa] Error:', err.message);
     res.status(500).json({ error: 'Error al obtener la comparativa del pipeline v2' });
+  }
+});
+
+// ─── Benchmark multi-imagen × multi-motor (2026-07-23, solo tech_admin) ─────
+// 3 variantes de la foto (actual/original/contraste) × todos los motores OCR.
+// Coste real asumido explícitamente por Julio — nunca afecta al pipeline real.
+
+/** GET /api/admin/benchmark-flag — estado del flag pipeline_v2_benchmark_enabled */
+app.get('/api/admin/benchmark-flag', authenticateToken, requireAdmin, (req, res) => {
+  try {
+    if (!isTechAdmin(req.user.email)) {
+      return res.status(403).json({ error: 'Acceso restringido a administradores técnicos.' });
+    }
+    const cfg = JSON.parse(fsSync.readFileSync(FEATURES_PATH, 'utf8'));
+    res.json({ enabled: cfg.pipeline_v2_benchmark_enabled === true });
+  } catch (err) {
+    logger.error('Error leyendo features.json', { error: err.message });
+    res.status(500).json({ error: 'Error leyendo configuración' });
+  }
+});
+
+/** POST /api/admin/benchmark-flag — activa/desactiva el benchmark automático en facturas nuevas */
+app.post('/api/admin/benchmark-flag', authenticateToken, requireAdmin, requireXHR, (req, res) => {
+  try {
+    if (!isTechAdmin(req.user.email)) {
+      return res.status(403).json({ error: 'Acceso restringido a administradores técnicos.' });
+    }
+    const { enabled } = req.body || {};
+    if (typeof enabled !== 'boolean') return res.status(400).json({ error: 'enabled debe ser booleano' });
+    const cfg = JSON.parse(fsSync.readFileSync(FEATURES_PATH, 'utf8'));
+    cfg.pipeline_v2_benchmark_enabled = enabled;
+    fsSync.writeFileSync(FEATURES_PATH, JSON.stringify(cfg, null, 2), 'utf8');
+    auditLog('BENCHMARK_FLAG_CHANGED', { enabled }, req.user.userId, req.ip);
+    logger.info(`[Benchmark] Flag cambiado a ${enabled} por ${req.user.email}`);
+    res.json({ success: true, enabled });
+  } catch (err) {
+    logger.error('Error escribiendo features.json', { error: err.message });
+    res.status(500).json({ error: 'Error guardando configuración' });
+  }
+});
+
+/** POST /api/admin/facturas/benchmark/ultimas — dispara el benchmark retroactivo
+ * sobre las últimas N facturas ya registradas (por defecto 10, tope de seguridad 30).
+ * Responde de inmediato ("iniciado") y procesa en segundo plano, una factura
+ * detrás de otra (no las 10 a la vez), para no saturar las APIs externas con
+ * ~150 llamadas simultáneas. */
+app.post('/api/admin/facturas/benchmark/ultimas', authenticateToken, requireAdmin, requireXHR, async (req, res) => {
+  try {
+    if (!isTechAdmin(req.user.email)) {
+      return res.status(403).json({ error: 'Acceso restringido a administradores técnicos.' });
+    }
+    const limit = Math.min(parseInt(req.body?.limit, 10) || 10, 30);
+    const result = await pool.query(
+      `SELECT id, file_path, mimetype, invoice_type,
+              proveedor_nif, proveedor_nombre, receptor_nif, receptor_nombre,
+              numero_factura, fecha_emision, total_factura, base_imponible,
+              iva_porcentaje, cuota_iva
+       FROM uploads
+       WHERE file_path IS NOT NULL
+       ORDER BY uploaded_at DESC
+       LIMIT $1`,
+      [limit]
+    );
+    const facturas = result.rows;
+    res.json({ success: true, iniciado: true, facturas: facturas.length });
+
+    (async () => {
+      const cfg = JSON.parse(fsSync.readFileSync(FEATURES_PATH, 'utf8'));
+      for (const f of facturas) {
+        try {
+          const safePath = path.resolve(f.file_path);
+          if (!safePath.startsWith('/app/uploads/')) continue;
+          await fs.access(safePath); // el fichero debe seguir existiendo en disco
+          const confirmado = {
+            proveedor_nif: f.proveedor_nif, proveedor_nombre: f.proveedor_nombre,
+            receptor_nif: f.receptor_nif, receptor_nombre: f.receptor_nombre,
+            numero_factura: f.numero_factura, fecha_emision: f.fecha_emision,
+            total: f.total_factura, base_imponible: f.base_imponible,
+            iva_porcentaje: f.iva_porcentaje, cuota_iva: f.cuota_iva,
+          };
+          const resultados = await ejecutarBenchmarkCompleto(
+            safePath, f.mimetype, { invoice_type: f.invoice_type }, cfg, confirmado, logger
+          );
+          for (const r of resultados) {
+            await pool.query(
+              `INSERT INTO ocr_benchmark_resultados
+                 (upload_id, variante, motor, campos, es_factura_valida, tiempo_ms, error, aciertos, comparables)
+               VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9)
+               ON CONFLICT (upload_id, variante, motor) DO UPDATE SET
+                 campos = EXCLUDED.campos, es_factura_valida = EXCLUDED.es_factura_valida,
+                 tiempo_ms = EXCLUDED.tiempo_ms, error = EXCLUDED.error,
+                 aciertos = EXCLUDED.aciertos, comparables = EXCLUDED.comparables, creado_en = NOW()`,
+              [f.id, r.variante, r.motor, JSON.stringify(r.campos), r.es_factura_valida, r.tiempo_ms, r.error, r.aciertos, r.comparables]
+            );
+          }
+          logger.info(`[Benchmark] Retroactivo completado para upload ${f.id}`);
+        } catch (errFactura) {
+          logger.error(`[Benchmark] Error retroactivo en upload ${f.id}`, { error: errFactura.message });
+        }
+      }
+      logger.info(`[Benchmark] Lote retroactivo de ${facturas.length} facturas terminado`);
+    })().catch((err) => logger.error('[Benchmark] Error en lote retroactivo', { error: err.message }));
+  } catch (err) {
+    logger.error('[Benchmark] Error iniciando lote retroactivo:', err.message);
+    res.status(500).json({ error: 'Error al iniciar el benchmark retroactivo' });
+  }
+});
+
+/** GET /api/admin/facturas/benchmark — resultados del benchmark para el panel */
+app.get('/api/admin/facturas/benchmark', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    if (!isTechAdmin(req.user.email)) {
+      return res.status(403).json({ error: 'Acceso restringido a administradores técnicos.' });
+    }
+    const result = await pool.query(
+      `SELECT b.upload_id, u.proveedor_nombre, u.total_factura, u.fecha_emision, u.uploaded_at,
+              b.variante, b.motor, b.campos, b.es_factura_valida, b.tiempo_ms, b.error,
+              b.aciertos, b.comparables, b.creado_en
+       FROM ocr_benchmark_resultados b
+       JOIN uploads u ON u.id = b.upload_id
+       ORDER BY u.uploaded_at DESC, b.upload_id DESC, b.variante, b.motor
+       LIMIT 1000`
+    );
+    res.json({ rows: result.rows });
+  } catch (err) {
+    logger.error('[benchmark] Error:', err.message);
+    res.status(500).json({ error: 'Error al obtener resultados del benchmark' });
   }
 });
 
