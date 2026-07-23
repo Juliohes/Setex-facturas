@@ -3456,3 +3456,12 @@ Julio pidió un sistema de comparación exhaustivo: 3 versiones de cada foto (ac
 - `admin-facturas.js`/`.html`: botón "🧪 Benchmark IA" con modal — toggle activable desde la propia UI, botón "Ejecutar sobre las últimas 10", tabla agrupada por factura con la mejor combinación resaltada en verde.
 - Deploy de backend + frontend, con recordatorio explícito del coste real antes de confirmar. 4 contenedores healthy, HTTP 200, tabla y flag verificados dentro del contenedor, cache-buster `admin-facturas.js?v=20260723-005`.
 - **Pendiente**: pulsar "Ejecutar sobre las últimas 10 facturas" desde el panel para obtener los primeros datos retroactivos (tarda varios minutos, no se ha lanzado aún en esta sesión).
+
+### 2026-07-23 (continuación) — Diagnóstico "no me hace nada" + fix doble ejecución del lote
+
+Julio pulsó "Ejecutar sobre las últimas 10" y no vio ningún cambio, así que lo pulsó otra vez. Diagnóstico con logs reales: **sí funcionaba** — cada factura tarda 40-90s (Azure DI en tier gratuito devuelve 429 con frecuencia, ralentiza el conjunto), y al no haber ninguna señal de progreso en el panel, el segundo clic disparó un SEGUNDO lote en paralelo sobre las mismas 10 facturas (confirmado por nginx access log: 2 POST a `/benchmark/ultimas` con 11s de diferencia), duplicando sin necesidad el gasto real en OCR. El lote (las dos ejecuciones) terminó del todo a las 17:11 — las 10 facturas quedaron procesadas correctamente, solo que pagadas dos veces.
+
+- `server.js`: candado en memoria del proceso (`benchmarkLoteEnCurso`) — un segundo POST mientras el primero sigue en marcha se rechaza con 409 y el motivo exacto. Nuevo endpoint `GET /benchmark/estado` con progreso en tiempo real.
+- `admin-facturas.js`: el botón sondea el progreso cada 4s ("Procesando… (3/10)"), se deshabilita mientras el lote corre, detecta un lote ya en marcha al reabrir el panel, y refresca la tabla solo al terminar.
+- Deploy de backend + frontend (esperando primero a que el lote en curso terminara del todo, para no cortarlo a medias con el redeploy). 4 contenedores healthy, HTTP 200, cache-buster `admin-facturas.js?v=20260723-006`.
+- **Modelos de IA en juego en el benchmark** (los 5 motores del fan-out real): OpenAI GPT-4.1 Vision · Azure Document Intelligence `prebuilt-invoice` · Google Gemini 3.5 Flash (`gemini-3.5-flash`) · Google Gemini 3.1 Pro preview (`gemini-3.1-pro-preview`) · Mistral OCR 4. Los IDs de modelo Gemini son configurables en caliente vía `features.json` (`ocr_gemini_flash_model`/`ocr_gemini_pro_model`).
