@@ -169,18 +169,22 @@ function makeEditableFormatter(field, innerFormatter) {
   };
 }
 
-// Formatter UNIFICADO de IVA %: fusiona la antigua columna "IVA %" con la antigua "Desglose".
-//   - Multi-IVA (lineas_iva.length >= 2)  → badge "🧾 N tramos" clickable (abre modal desglose).
-//   - Mono-IVA (length 0/1 o sin lineas)  → porcentaje editable con lápiz, igual que antes.
+// Formatter UNIFICADO de IVA %: SIEMPRE abre el modal de desglose completo
+// (base/% /cuota por tramo, añadir/quitar tramos), tenga 0, 1, 2, 3 o 4 tramos
+// guardados. Antes, con 0/1 tramo, solo se podía editar el número de IVA% —
+// si el OCR se equivocaba y detectaba mono-IVA cuando en realidad había 2+
+// tramos, no había forma de corregirlo desde el panel (bug reportado por
+// Julio 2026-07-23). openDesgloseModal() reconstruye un tramo inicial a
+// partir de iva_porcentaje/base_imponible/cuota_iva cuando lineas_iva viene
+// vacío, así nunca se pierde lo que ya había.
 function formatIvaPctUnified(cell) {
   const row = cell.getRow().getData();
-  const lineas = row.lineas_iva;
-  const isMulti = Array.isArray(lineas) && lineas.length >= 2;
-  if (isMulti) {
+  const lineas = Array.isArray(row.lineas_iva) ? row.lineas_iva : [];
+  if (lineas.length >= 2) {
     return `<span class="desglose-badge" title="Click para ver/editar el desglose completo" style="background:#ebf8ff;color:#2b6cb0;border:1px solid #90cdf4;border-radius:10px;padding:2px 8px;font-size:11px;font-weight:700;cursor:pointer;">🧾 ${lineas.length} tramos</span>`;
   }
   const val = formatPct(cell);
-  return `<span class="cell-val">${val}</span><button class="edit-cell-btn" title="Editar IVA %">✏️</button>`;
+  return `<span class="cell-val">${val}</span><span class="desglose-badge" title="Click para ver/editar como desglose de tramos (permite añadir más tramos)" style="margin-left:4px;background:#ebf8ff;color:#2b6cb0;border:1px solid #90cdf4;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;cursor:pointer;">🧾</span>`;
 }
 
 function makeEditableCellClick(field) {
@@ -192,19 +196,10 @@ function makeEditableCellClick(field) {
   };
 }
 
-// CellClick UNIFICADO de IVA %:
-//   - Multi-IVA: cualquier click sobre el badge abre el modal de desglose.
-//   - Mono-IVA: delega en el botón ✏️ para abrir el modal de edición de IVA %.
+// CellClick UNIFICADO de IVA %: siempre abre el modal de desglose completo,
+// independientemente de cuántos tramos tenga guardados hoy la factura.
 function ivaPctUnifiedCellClick(_e, cell) {
-  const row = cell.getRow().getData();
-  const isMulti = Array.isArray(row.lineas_iva) && row.lineas_iva.length >= 2;
-  if (isMulti) {
-    openDesgloseModal(row);
-    return;
-  }
-  if (_e.target.classList.contains('edit-cell-btn')) {
-    openEditModal(row, 'iva_porcentaje');
-  }
+  openDesgloseModal(cell.getRow().getData());
 }
 
 function formatEuro(cell) {
@@ -1670,7 +1665,20 @@ function openDesgloseModal(rowData) {
     const n = parseFloat(clean);
     desgloseIrpfCuota = Number.isFinite(n) ? n : 0;
   }
-  const lineas = Array.isArray(rowData.lineas_iva) ? rowData.lineas_iva : [];
+  let lineas = Array.isArray(rowData.lineas_iva) ? rowData.lineas_iva : [];
+  // 2026-07-23: si la factura no tiene tramos guardados (mono-IVA de toda la
+  // vida, o el caso que reportó Julio: el OCR detectó mal 1 solo tramo cuando
+  // en realidad había 2), se reconstruye un tramo inicial desde los campos
+  // agregados de la factura — así el admin ve lo que ya había y puede
+  // corregirlo añadiendo/editando tramos, en vez de partir de una pantalla
+  // vacía que perdería esos datos.
+  if (lineas.length === 0 && rowData.iva_porcentaje != null && rowData.iva_porcentaje !== '') {
+    lineas = [{
+      porcentaje: rowData.iva_porcentaje,
+      base: rowData.base_imponible || '',
+      cuota: rowData.cuota_iva || '',
+    }];
+  }
   document.getElementById('desglose-modal-title').textContent =
     `Desglose IVA — Factura ${rowData.numero_factura ? '#' + rowData.numero_factura : '#' + rowData.id}`;
   const metaEl = document.getElementById('desglose-meta');
