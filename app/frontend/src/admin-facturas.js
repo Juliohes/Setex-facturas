@@ -264,6 +264,22 @@ function formatEuroStr(cell) {
   if (n == null) return escHtml(String(v));
   return n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
 }
+// 2026-07-23 (petición de Julio): SOLO para la columna "Cuota IRPF" — un
+// importe de 0 (o "0,00", "0.00"...) se muestra como "—", igual que ya hace
+// "IRPF %" (formatPct) con su 0. Es puramente de visualización: no toca el
+// valor guardado en BD ni ninguna otra columna (cuota_iva/base_imponible
+// siguen usando formatEuroStr sin cambios — un 0,00€ de IVA sí es un dato
+// real en una factura exenta). El "—" solo deja de verse cuando alguien
+// edita la celda a mano, o cuando el usuario/la IA capturan un IRPF real
+// antes de guardar la factura.
+function formatCuotaIrpf(cell) {
+  const v = cell.getValue();
+  if (v == null || v === '') return '<span style="color:#a0aec0">—</span>';
+  const n = parseSpanishAmountAdmin(v);
+  if (n == null) return escHtml(String(v));
+  if (n === 0) return '<span style="color:#a0aec0">—</span>';
+  return n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+}
 function formatPct(cell) {
   const v = cell.getValue();
   if (v == null || v === '' || v === '0,0' || v === '0') return '<span style="color:#a0aec0">—</span>';
@@ -378,7 +394,7 @@ function initTable() {
       { title: 'IRPF %',           field: 'irpf_porcentaje', width: 80,  sorter: 'string', hozAlign: 'center',
         formatter: makeEditableFormatter('irpf_porcentaje', formatPct), cellClick: makeEditableCellClick('irpf_porcentaje') },
       { title: 'Cuota IRPF',       field: 'cuota_irpf',      width: 110, sorter: 'string', hozAlign: 'right',
-        formatter: makeEditableFormatter('cuota_irpf', formatEuroStr), cellClick: makeEditableCellClick('cuota_irpf') },
+        formatter: makeEditableFormatter('cuota_irpf', formatCuotaIrpf), cellClick: makeEditableCellClick('cuota_irpf') },
       { title: 'Total',            field: 'total_factura',   width: 120, sorter: 'number', hozAlign: 'right',
         cellStyle: () => ({ fontWeight: '700', color: '#1a365d' }),
         formatter: makeEditableFormatter('total_factura', formatEuro), cellClick: makeEditableCellClick('total_factura') },
