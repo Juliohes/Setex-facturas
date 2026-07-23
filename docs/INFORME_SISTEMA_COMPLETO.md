@@ -3409,3 +3409,13 @@ Julio reportó un bug real usando el panel: una factura con 2 tramos de IVA se p
 - `admin-facturas.js`: `formatIvaPctUnified`/`ivaPctUnifiedCellClick` eliminan la distinción mono/multi-IVA — el click en la celda SIEMPRE abre `openDesgloseModal()`, sin importar cuántos tramos tenga hoy la factura.
 - `openDesgloseModal()`: si `lineas_iva` viene vacío, reconstruye un tramo inicial desde `iva_porcentaje`/`base_imponible`/`cuota_iva` antes de renderizar, para no perder lo que ya había al abrir el desglose por primera vez.
 - Deploy solo de frontend (backend sin cambios). 4 contenedores healthy, HTTP 200, cache-buster `admin-facturas.js?v=20260723-001` verificado en la imagen desplegada.
+
+### 2026-07-23 (continuación) — Investigación pipeline_v2 ("no creo que funcione bien") + fix de claridad en el panel
+
+Julio dudaba del funcionamiento de pipeline_v2. Investigación con datos reales (consulta directa a `ocr_shadow_validaciones`/`ocr_shadow_comparativa` y logs del backend):
+
+- **Solo 1 factura real** procesada desde que existe el shadow mode (#28, 22-jul 11:30) — y fue **antes** de desplegar el switch real (18:44 ese mismo día). v1 y v2 coincidieron (`revision_humana`, NIF de proveedor ausente) y el humano corrigió, tal como debía ser.
+- **Cero actividad de subida desde que el switch real está activo** (confirmado por ausencia total de logs `[OCR]`/`[Preview]` desde el redeploy) — el switch no ha tenido ocasión de procesar ninguna factura todavía.
+- La preocupación concreta de Julio: vio en el panel una fila con `decision_v2=auto_aceptada` pero proveedor/NIF/total en blanco — parecía que el sistema "aceptaba una factura vacía". Diagnóstico: esa fila (`preview_id c3e2f48c...`) es una foto que se analizó sin errores (`incidencias: []`) pero que el usuario **nunca confirmó/guardó** — no existe como factura real, de ahí las columnas vacías al hacer el JOIN con `uploads`. No es un fallo de `decidirRouting()`.
+- **Fix aplicado**: `admin-facturas.js`/`.html` — nueva columna "Factura" (✓ Confirmada / ⚠ Sin confirmar), textos explícitos "(foto abandonada)" en vez de celdas vacías, y fila en gris cursiva para estas fotos sin confirmar — para que nunca más se confundan con una factura real aceptada con datos vacíos. Deploy solo frontend, 4 contenedores healthy, cache-buster `?v=20260723-002` verificado.
+- **Conclusión**: no se encontró evidencia de que pipeline_v2 decida mal — el malestar de Julio era un problema real de claridad del panel, ya corregido. Sigue pendiente la primera validación real del switch en cuanto se suba la próxima factura.
