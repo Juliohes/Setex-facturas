@@ -2282,11 +2282,23 @@ async function openShadowModal() {
       columns: [
         { title: 'Fecha proceso', field: 'creado_en', width: 150, sorter: 'datetime',
           formatter: (cell) => { const v = cell.getValue(); return v ? new Date(v).toLocaleString('es-ES') : '—'; } },
+        // 2026-07-23: fix reportado por Julio — sin esto, una foto que se
+        // previsualizó pero NUNCA se confirmó (usuario cerró la app, fallo,
+        // etc.) aparecía con proveedor/NIF/total en blanco y la decisión de
+        // v2 al lado, dando la falsa impresión de "aceptó una factura
+        // vacía". No es eso: decidirRouting() sí analizó una foto real en su
+        // momento, pero como nunca se confirmó no queda registrada como
+        // factura (los datos del preview viven solo 30 min en Redis).
+        { title: 'Factura', field: 'upload_id', width: 130, hozAlign: 'center',
+          formatter: (cell) => cell.getValue()
+            ? '<span style="color:#276749;font-weight:600;">✓ Confirmada</span>'
+            : '<span style="color:#c05621;font-weight:600;" title="Se analizó la foto pero el usuario nunca confirmó/guardó la factura — no hay datos reales que mostrar, la decisión fue sobre esa foto en su momento.">⚠ Sin confirmar</span>' },
         { title: 'Proveedor',  field: 'proveedor_nombre', minWidth: 160, sorter: 'string',
-          formatter: (cell) => escHtml(cell.getValue() || '—') },
-        { title: 'NIF',        field: 'proveedor_nif', width: 110, sorter: 'string' },
+          formatter: (cell) => cell.getValue() ? escHtml(cell.getValue()) : '<span style="color:#a0aec0;">(foto abandonada)</span>' },
+        { title: 'NIF',        field: 'proveedor_nif', width: 110, sorter: 'string',
+          formatter: (cell) => cell.getValue() ? escHtml(cell.getValue()) : '<span style="color:#a0aec0;">—</span>' },
         { title: 'Total',      field: 'total_factura', width: 100, sorter: 'number', hozAlign: 'right',
-          formatter: (cell) => { const v = cell.getValue(); return v != null ? v.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €' : '—'; } },
+          formatter: (cell) => { const v = cell.getValue(); return v != null ? v.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €' : '<span style="color:#a0aec0;">—</span>'; } },
         { title: 'Decisión v1 (real)', field: 'decision_v1', width: 140, sorter: 'string' },
         { title: 'Decisión v2 (nueva)', field: 'decision_v2', width: 140, sorter: 'string' },
         { title: '¿Coincide?', field: 'coincide', width: 90, hozAlign: 'center',
@@ -2297,7 +2309,15 @@ async function openShadowModal() {
       ],
       rowFormatter: (row) => {
         const d = row.getData();
-        if (d.coincide === false) row.getElement().style.background = '#fff5f5';
+        if (!d.upload_id) {
+          // Foto sin confirmar: gris + cursiva, para que nunca se confunda
+          // con una factura real ya guardada (aunque coincida y no tenga
+          // incidencias, no representa una decisión real sobre datos reales).
+          row.getElement().style.background = '#f7fafc';
+          row.getElement().style.fontStyle = 'italic';
+        } else if (d.coincide === false) {
+          row.getElement().style.background = '#fff5f5';
+        }
       },
     });
   } catch (err) {
