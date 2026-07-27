@@ -3303,6 +3303,49 @@ app.get('/api/admin/facturas/benchmark/ranking', authenticateToken, requireAdmin
   }
 });
 
+/** GET /api/v2/metricas — Fase 9 de PROMPT-PIPELINE-OCR-FACTURAS-V2.md:
+ * "% auto-aprobadas, % revisión, % ilegibles, precisión sobre el dataset
+ * dorado, coste medio por factura". Agrega extracciones_v2 (Fase 8) — sin
+ * datos reales todavía (nada escribe ahí hasta la Fase 10), responde con
+ * ceros/null de forma explícita en vez de fallar. Solo tech_admin, mismo
+ * patrón que el benchmark. */
+app.get('/api/v2/metricas', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    if (!isTechAdmin(req.user.email)) {
+      return res.status(403).json({ error: 'Acceso restringido a administradores técnicos.' });
+    }
+    const result = await pool.query(
+      `SELECT estado, COUNT(*) AS total, AVG(score_global) AS score_medio,
+              AVG(coste_estimado_usd) AS coste_medio_usd, AVG(latencia_ms) AS latencia_media_ms
+       FROM extracciones_v2
+       GROUP BY estado`
+    );
+    const totalRes = await pool.query('SELECT COUNT(*) AS total FROM extracciones_v2');
+    const total = parseInt(totalRes.rows[0].total, 10);
+
+    const porEstado = { auto_aprobada: 0, pendiente_revision: 0, ilegible: 0 };
+    let costeMedioUsd = null, latenciaMediaMs = null;
+    for (const fila of result.rows) {
+      porEstado[fila.estado] = parseInt(fila.total, 10);
+      if (fila.coste_medio_usd != null) costeMedioUsd = parseFloat(fila.coste_medio_usd);
+      if (fila.latencia_media_ms != null) latenciaMediaMs = parseFloat(fila.latencia_media_ms);
+    }
+
+    res.json({
+      total_facturas_v2: total,
+      porcentaje_auto_aprobada: total > 0 ? +((porEstado.auto_aprobada / total) * 100).toFixed(1) : null,
+      porcentaje_pendiente_revision: total > 0 ? +((porEstado.pendiente_revision / total) * 100).toFixed(1) : null,
+      porcentaje_ilegible: total > 0 ? +((porEstado.ilegible / total) * 100).toFixed(1) : null,
+      coste_medio_usd: costeMedioUsd,
+      latencia_media_ms: latenciaMediaMs,
+      nota: total === 0 ? 'Sin datos todavía — el pipeline v2 no está conectado al flujo real (pendiente Fase 10).' : null,
+    });
+  } catch (err) {
+    logger.error('[metricas-v2] Error:', err.message);
+    res.status(500).json({ error: 'Error al calcular las métricas del pipeline v2' });
+  }
+});
+
 // GET /api/mis-facturas/export.xlsx — exportar todas las facturas del usuario como Excel
 app.get('/api/mis-facturas/export.xlsx', authenticateToken, requireActiveCompany, async (req, res) => {
   try {
