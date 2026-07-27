@@ -19,7 +19,7 @@
   "pipeline_v2_benchmark_enabled": true,
   "_OCR_EXTRACCION_V2": "Migración a pipeline por capas (2026-07-27, PROMPT-PIPELINE-OCR-FACTURAS-V2.md, Fase 1). NOTA: prefijo 'ocr_extraccion_v2_' a propósito, NO 'pipeline_v2_' — ese nombre ya está en uso para el routing/validación de arriba (sistema distinto, activo desde 2026-07-22). Todo en false/vacío por defecto: el pipeline actual (ocr/index.js) sigue siendo la ruta real y el fallback automático ante cualquier excepción del nuevo. ocr_extraccion_v2_modelos: motores que participan en el nuevo árbitro por campo cuando se active. Umbrales de confianza global (0-1) para las 3 bandas de Fase 8: >=auto -> auto_aprobada; <revision -> ilegible/recaptura; en medio -> pendiente_revision.",
   "ocr_extraccion_v2_enabled": false,
-  "ocr_extraccion_v2_shadow_mode": false,
+  "ocr_extraccion_v2_shadow_mode": true,
   "ocr_extraccion_v2_modelos": ["azure", "gemini_flash", "openai"],
   "ocr_extraccion_v2_umbral_auto": 0.9,
   "ocr_extraccion_v2_umbral_revision": 0.6,
