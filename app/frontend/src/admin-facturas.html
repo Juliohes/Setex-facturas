@@ -6,7 +6,7 @@
   <title>SETEX — Panel de Administración</title>
   <link rel="icon" href="favicon-admin.svg" type="image/svg+xml">
   <link rel="stylesheet" href="tabulator.min.css">
-  <link rel="stylesheet" href="admin-facturas.css?v=20260727-002">
+  <link rel="stylesheet" href="admin-facturas.css?v=20260727-003">
 </head>
 <body>
 
@@ -292,20 +292,13 @@
         <button id="benchmark-modal-close" class="modal-close">&times;</button>
       </div>
       <div class="modal-body benchmark-modal-body">
-        <p class="benchmark-intro">
-          Cada factura se prueba con 3 versiones de la foto (<strong>actual</strong> = la que ya se
-          optimiza hoy · <strong>original</strong> = sin reducir píxeles · <strong>contraste</strong> =
-          contraste local + brillo/saturación mínimos, sobre la original) contra
-          <strong>todos</strong> los motores OCR disponibles, puntuado campo a campo contra lo que
-          confirmaste tú. Coste real: hasta 15 llamadas por factura.
-        </p>
-        <div class="benchmark-controls">
+        <div class="benchmark-controls benchmark-controls-compacta">
           <label class="benchmark-toggle-label">
             <input type="checkbox" id="benchmark-toggle">
             Automático en facturas nuevas
           </label>
-          <button id="btn-benchmark-ultimas" class="btn-primary" style="width:auto;">▶ Ejecutar sobre las últimas 10 facturas</button>
-          <span id="benchmark-status" style="font-size:12px;color:#718096;"></span>
+          <button id="btn-benchmark-ultimas" class="btn-primary btn-compacto" style="width:auto;">▶ Últimas 10</button>
+          <span id="benchmark-status" style="font-size:11px;color:#718096;"></span>
         </div>
 
         <div class="benchmark-tabs">
@@ -314,6 +307,7 @@
         </div>
 
         <div id="benchmark-view-ranking" class="benchmark-view">
+          <div id="benchmark-mejores-combinaciones" class="benchmark-mejores"></div>
           <div class="benchmark-chart-controls">
             <div class="benchmark-chip-group">
               <span class="benchmark-chip-label">Vista:</span>
@@ -346,6 +340,6 @@
 
   <script src="tabulator.min.js"></script>
   <script src="auth.js?v=20260414-003"></script>
-  <script src="admin-facturas.js?v=20260727-002"></script>
+  <script src="admin-facturas.js?v=20260727-003"></script>
 </body>
 </html>

@@ -2725,7 +2725,47 @@ function renderBenchmarkLineas() {
   cont.innerHTML = `<div class="benchmark-lineas-wrap">${svg}<div class="benchmark-leyenda">${leyenda}</div></div>`;
 }
 
+/** Para cada grupo de campo (CIF, Nombre, Fecha, Nº factura, Importes,
+ *  Tramos IVA), encuentra qué combinación motor+variante saca el mejor
+ *  ratio — "quiero una parte que me diga la combinación... del mejor
+ *  modelo unido con la mejor forma de imagen para cada variable" (Julio,
+ *  2026-07-27). Siempre visible, independiente de la vista/chips elegidos.*/
+function renderBenchmarkMejoresCombinaciones() {
+  const cont = document.getElementById('benchmark-mejores-combinaciones');
+  if (!cont) return;
+  if (!benchmarkRankingData || !benchmarkRankingData.ranking.length) {
+    cont.innerHTML = '';
+    return;
+  }
+  const tarjetas = BENCHMARK_ORDEN_GRUPOS.map((grupo) => {
+    let mejor = null;
+    benchmarkRankingData.ranking.forEach((c) => {
+      const g = (c.por_grupo || []).find((x) => x.grupo === grupo);
+      if (g && g.ratio != null && g.comparables > 0 && (!mejor || g.ratio > mejor.ratio)) {
+        mejor = { ratio: g.ratio, motor: c.motor, variante: c.variante };
+      }
+    });
+    return { grupo, mejor };
+  });
+
+  cont.innerHTML = tarjetas.map(({ grupo, mejor }) => {
+    if (!mejor) {
+      return `<div class="benchmark-mejor-card">
+                <span class="benchmark-mejor-grupo">${escHtml(grupo)}</span>
+                <span class="benchmark-mejor-combo" style="color:#a0aec0;">Sin datos</span>
+              </div>`;
+    }
+    const color = benchmarkColorGradiente(mejor.ratio);
+    return `<div class="benchmark-mejor-card" style="border-left-color:${color}">
+              <span class="benchmark-mejor-grupo">${escHtml(grupo)}</span>
+              <span class="benchmark-mejor-combo">${escHtml(BENCHMARK_MOTOR_LABELS[mejor.motor] || mejor.motor)} · ${escHtml(benchmarkVarianteLabel(mejor.variante))}</span>
+              <span class="benchmark-mejor-pct" style="background:${color}">${mejor.ratio}%</span>
+            </div>`;
+  }).join('');
+}
+
 function renderBenchmarkRanking() {
+  renderBenchmarkMejoresCombinaciones();
   if (benchmarkVistaActual === 'heatmap') {
     renderBenchmarkHeatmap();
   } else if (benchmarkVistaActual === 'lineas') {
@@ -2799,7 +2839,7 @@ function initBenchmarkModal() {
     } catch (err) {
       statusEl.textContent = `Error: ${err.message}`;
       btnUltimas.disabled = false;
-      btnUltimas.textContent = '▶ Ejecutar sobre las últimas 10 facturas';
+      btnUltimas.textContent = '▶ Últimas 10';
     }
   });
 }
@@ -2825,7 +2865,7 @@ async function pollBenchmarkEstado() {
       benchmarkPollTimer = setTimeout(pollBenchmarkEstado, 4000);
     } else {
       btnUltimas.disabled = false;
-      btnUltimas.textContent = '▶ Ejecutar sobre las últimas 10 facturas';
+      btnUltimas.textContent = '▶ Últimas 10';
       if (estado.total > 0) {
         statusEl.textContent = `Lote completado (${estado.total} facturas). Actualizando tabla…`;
         openBenchmarkModal(); // refresca la tabla con los resultados ya guardados
@@ -2834,7 +2874,7 @@ async function pollBenchmarkEstado() {
   } catch (err) {
     statusEl.textContent = `Error consultando progreso: ${err.message}`;
     btnUltimas.disabled = false;
-    btnUltimas.textContent = '▶ Ejecutar sobre las últimas 10 facturas';
+    btnUltimas.textContent = '▶ Últimas 10';
   }
 }
 

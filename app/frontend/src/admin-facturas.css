@@ -593,11 +593,34 @@ body {
   margin-bottom: 14px; padding: 10px 12px; background: #f7fafc;
   border: 1px solid #e2e8f0; border-radius: 6px; flex-shrink: 0;
 }
+/* 2026-07-27: versión compacta a petición de Julio ("más espacio en el
+   scroll, scrollear menos") — quitado el párrafo explicativo y reducido
+   el bloque de interruptor+botón. */
+.benchmark-controls-compacta { padding: 5px 10px; margin-bottom: 8px; gap: 10px; }
+.benchmark-controls-compacta .benchmark-toggle-label { font-size: 11px; gap: 5px; }
+.benchmark-controls-compacta .benchmark-toggle-label input { width: 13px; height: 13px; }
+.btn-compacto { padding: 5px 12px !important; font-size: 12px !important; }
 .benchmark-toggle-label {
   display: flex; align-items: center; gap: 8px; font-size: 13px;
   font-weight: 600; color: #2d3748; cursor: pointer;
 }
 .benchmark-toggle-label input { width: 16px; height: 16px; cursor: pointer; }
+
+/* "Mejor combinación por variable" (2026-07-27) — una tarjeta por grupo de
+   campo, siempre visible, con el motor+variante que mejor acierta en ESE
+   campo concreto (no el ranking global). */
+.benchmark-mejores { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.benchmark-mejor-card {
+  display: flex; align-items: center; gap: 6px; padding: 5px 9px;
+  background: #f7fafc; border: 1px solid #e2e8f0; border-left: 4px solid #cbd5e0;
+  border-radius: 6px; font-size: 11px; white-space: nowrap;
+}
+.benchmark-mejor-grupo { font-weight: 700; color: #4a5568; }
+.benchmark-mejor-combo { color: #2d3748; }
+.benchmark-mejor-pct {
+  font-weight: 800; color: #fff; padding: 1px 7px; border-radius: 9px;
+  font-size: 10px; text-shadow: 0 1px 2px rgba(0,0,0,0.35);
+}
 
 .benchmark-tabs { display: flex; gap: 6px; margin-bottom: 12px; flex-shrink: 0; }
 .benchmark-tab {
