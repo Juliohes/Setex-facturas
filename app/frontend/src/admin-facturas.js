@@ -2041,10 +2041,22 @@ async function openOcrModal(facturaId) {
       mistral:      { bg: '#9b2335', label: 'Mistral'   },
       calculated:   { bg: '#718096', label: 'calculado' },
     };
-    function motorBadge(key) {
+    function motorBadge(key, vRaw) {
       if (!campoSources) return '';
       const src = campoSources[key];
       if (!src) return '';
+      if (src === 'consensus' && vRaw != null) {
+        const nombres = motorEntries
+          .filter(([, m]) => {
+            const campoObj = (m && m.campos) || {};
+            const v = key === 'total_factura' ? (campoObj.total_factura ?? campoObj.total) : campoObj[key];
+            return v != null && v !== '' && normCmp(v) === normCmp(vRaw);
+          })
+          .map(([k, m]) => (MOTOR_COLOR[(m && m.engine) || k] || { label: k }).label);
+        if (nombres.length >= 2) {
+          return ` <span style="display:inline-block;font-size:10px;padding:1px 5px;border-radius:3px;background:${MOTOR_COLOR.consensus.bg};color:#fff;vertical-align:middle;font-family:sans-serif;">consenso: ${escHtml(nombres.join(' + '))}</span>`;
+        }
+      }
       const m = MOTOR_COLOR[src] || { bg: '#718096', label: src };
       return ` <span style="display:inline-block;font-size:10px;padding:1px 5px;border-radius:3px;background:${m.bg};color:#fff;vertical-align:middle;font-family:sans-serif;">${m.label}</span>`;
     }
@@ -2095,9 +2107,11 @@ async function openOcrModal(facturaId) {
         return lineas.some((l) => tramoMatches(tramo, l));
       });
       if (matching.length === 0) return '';
-      const cfg = matching.length >= 2
-        ? MOTOR_COLOR.consensus
-        : (MOTOR_COLOR[(matching[0][1] && matching[0][1].engine) || matching[0][0]] || { bg: '#718096', label: matching[0][0] });
+      if (matching.length >= 2) {
+        const nombres = matching.map(([k, m]) => (MOTOR_COLOR[(m && m.engine) || k] || { label: k }).label).join(' + ');
+        return ` <span style="display:inline-block;font-size:10px;padding:1px 5px;border-radius:3px;background:${MOTOR_COLOR.consensus.bg};color:#fff;vertical-align:middle;font-family:sans-serif;">consenso: ${escHtml(nombres)}</span>`;
+      }
+      const cfg = MOTOR_COLOR[(matching[0][1] && matching[0][1].engine) || matching[0][0]] || { bg: '#718096', label: matching[0][0] };
       return ` <span style="display:inline-block;font-size:10px;padding:1px 5px;border-radius:3px;background:${cfg.bg};color:#fff;vertical-align:middle;font-family:sans-serif;">${cfg.label}</span>`;
     }
     function fmtLineasIva(lineas, conBadges) {
@@ -2133,7 +2147,7 @@ async function openOcrModal(facturaId) {
       const rowBg = (vRaw != null && vConf != null && !igual) ? 'background:#fff5f5;' : '';
       return `<tr style="${rowBg}">
         <td style="padding:7px 10px;font-weight:600;color:#2d3748;white-space:nowrap;">${escHtml(c.label)}</td>
-        <td style="padding:7px 10px;font-family:monospace;font-size:13px;">${fmt(vRaw)}${motorBadge(c.key)}</td>
+        <td style="padding:7px 10px;font-family:monospace;font-size:13px;">${fmt(vRaw)}${motorBadge(c.key, vRaw)}</td>
         <td style="padding:7px 10px;font-family:monospace;font-size:13px;">${fmt(vConf)}</td>
         <td style="padding:7px 10px;text-align:center;">${badge}</td>
       </tr>`;

@@ -2068,14 +2068,36 @@ app.post('/api/upload-preview', authenticateToken, requireActiveCompany, uploadL
       const varianteCfg = JSON.parse(fsSync.readFileSync(FEATURES_PATH, 'utf8'));
       if (varianteCfg.pipeline_v2_imagen_variante_enabled) {
         compararVarianteContraste(filePath, fileInfo.mimetype, campos, ocrContext, logger)
-          .then((resultado) => {
+          .then(async (resultado) => {
             if (!resultado) return;
+            let rutaFinal = resultado.rutaVariante;
+            // Carrera con auto-confirmación: si /api/upload-confirm ya movió el
+            // fichero original (y su intento de mover esta variante llegó
+            // demasiado pronto, cuando aún no existía) mientras generábamos la
+            // comparación, la reubicamos aquí usando la ruta final ya conocida
+            // en `uploads`. Sin esto, el fichero queda huérfano en la carpeta
+            // plana pre-confirmación para siempre.
+            try {
+              const yaConfirmada = await pool.query(
+                'SELECT file_path FROM uploads WHERE preview_id = $1 LIMIT 1',
+                [previewId]
+              );
+              if (yaConfirmada.rows.length > 0) {
+                const destino = `${yaConfirmada.rows[0].file_path}.variante-contraste.jpg`;
+                if (destino !== rutaFinal) {
+                  await fs.rename(rutaFinal, destino);
+                  rutaFinal = destino;
+                }
+              }
+            } catch (moveErr) {
+              logger.warn(`[ImagenVariante] No se pudo reubicar variante tras confirmación concurrente: ${moveErr.message}`);
+            }
             return pool.query(
               `INSERT INTO ocr_imagen_variante_comparativa
                  (preview_id, motor, ruta_variante, campos_original, campos_variante, diffs)
                VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb)`,
               [
-                previewId, resultado.engine, resultado.rutaVariante,
+                previewId, resultado.engine, rutaFinal,
                 JSON.stringify(campos), JSON.stringify(resultado.camposVariante),
                 JSON.stringify(resultado.diffs),
               ]
@@ -2093,17 +2115,24 @@ app.post('/api/upload-preview', authenticateToken, requireActiveCompany, uploadL
       new Promise(resolve => setTimeout(() => resolve(null), 4500))
     ]);
 
-    // Detectar tipo de factura (compra o venta) basándose en el NIF de la empresa del usuario
-    let invoiceType = 'desconocida';
+    // Detectar tipo de factura (compra o venta): la fuente de verdad es la
+    // selección EXPLÍCITA del usuario en el formulario (invoiceTypeFromUser,
+    // línea ~1663), nunca el OCR. Antes se re-derivaba comparando el NIF de
+    // la empresa contra campos.receptor_nif/finalNif (lectura OCR) — si el
+    // OCR leía mal justo el NIF del propio lado del usuario, clasificaba la
+    // factura al revés, y la sustitución determinista de más abajo acababa
+    // pisando el dato de la CONTRAPARTE (correcto) con la identidad propia,
+    // dejando el lado propio con el dato corrupto del OCR sin corregir. La
+    // comparación OCR-vs-NIF se conserva solo como aviso en el log.
+    let invoiceType = invoiceTypeFromUser;
     if (userCompanyNif) {
       const provNif = finalNif ? finalNif.toUpperCase().replace(/[^A-Z0-9]/g, '') : null;
       const recpNif = campos.receptor_nif ? campos.receptor_nif.toUpperCase().replace(/[^A-Z0-9]/g, '') : null;
-      if (recpNif && userCompanyNif === recpNif) {
-        invoiceType = 'compra';  // nosotros somos el receptor (comprador)
-      } else if (provNif && userCompanyNif === provNif) {
-        invoiceType = 'venta';   // nosotros somos el emisor (vendedor)
-      } else {
-        invoiceType = 'compra';  // por defecto: la mayoría de usuarios suben facturas de compra
+      const ocrSugiere = (recpNif && userCompanyNif === recpNif) ? 'compra'
+        : (provNif && userCompanyNif === provNif) ? 'venta'
+        : null;
+      if (ocrSugiere && ocrSugiere !== invoiceType) {
+        logger.warn(`[InvoiceType] Discrepancia: usuario seleccionó "${invoiceType}" pero el NIF leído por OCR sugiere "${ocrSugiere}" — se respeta la selección del usuario`);
       }
     }
 
