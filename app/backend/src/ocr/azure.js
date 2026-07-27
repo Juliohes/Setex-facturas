@@ -31,6 +31,26 @@ function fieldValue(field, transform) {
   return val ?? null;
 }
 
+// 2026-07-27 (Fase 7 de PROMPT-PIPELINE-OCR-FACTURAS-V2.md, re-extracción
+// dirigida): Azure Document Intelligence YA devuelve `boundingRegions` por
+// campo (página + polígono de 4 puntos) — hasta ahora se descartaba al
+// mapear a `campos`. Aditivo puro: nuevo campo `bounding_boxes` en el
+// resultado, no cambia ni un valor de `campos`. Las coordenadas del
+// polígono están en el espacio de la imagen realmente enviada a Azure
+// (tras optimizeImage — ver `paginas` para las dimensiones de referencia
+// y escalar correctamente al recortar sobre otra resolución).
+function extraerBoundingBox(field) {
+  const region = field?.boundingRegions?.[0];
+  if (!region || !Array.isArray(region.polygon)) return null;
+  return { pagina: region.pageNumber || 1, poligono: region.polygon };
+}
+
+function extraerPaginasInfo(analyzeResult) {
+  return (analyzeResult?.pages || []).map((p) => ({
+    pagina: p.pageNumber || 1, ancho: p.width, alto: p.height, unidad: p.unit || 'pixel',
+  }));
+}
+
 function isoToSpanish(isoDate) {
   if (!isoDate) return null;
   const [y, m, d] = isoDate.split('-');
@@ -356,6 +376,22 @@ async function extractInvoice(filePath, mimeType, apiKey, endpoint, context = {}
     }
   }
 
+  // Fase 7 (2026-07-27): bounding boxes por campo, aditivo — ver
+  // extraerBoundingBox/extraerPaginasInfo arriba. `null` si el campo no se
+  // extrajo o Azure no devolvió boundingRegions para él (nunca lanza).
+  const bounding_boxes = {
+    paginas: extraerPaginasInfo(result.analyzeResult),
+    numero_factura: extraerBoundingBox(f.InvoiceId),
+    fecha_emision: extraerBoundingBox(f.InvoiceDate),
+    proveedor_nombre: extraerBoundingBox(f.VendorName),
+    proveedor_nif: extraerBoundingBox(f.VendorTaxId),
+    receptor_nombre: extraerBoundingBox(f.CustomerName),
+    receptor_nif: extraerBoundingBox(f.CustomerTaxId),
+    base_imponible: extraerBoundingBox(f.SubTotal),
+    cuota_iva: extraerBoundingBox(f.TotalTax),
+    total: extraerBoundingBox(f.InvoiceTotal ?? f.AmountDue),
+  };
+
   return {
     success: true,
     es_factura_valida: esValida,
@@ -363,10 +399,12 @@ async function extractInvoice(filePath, mimeType, apiKey, endpoint, context = {}
     confidence: docConfidence,
     processing_time_s: parseFloat(elapsed),
     ocr_engine: 'azure_document_intelligence',
-    tokens_used: 0
+    tokens_used: 0,
+    bounding_boxes,
   };
 }
 
-// extractLineasIvaAzure y normalizeRate se exportan para tests unitarios
-// (fixtures de TaxDetails sin red) — no forman parte del contrato público.
-module.exports = { extractInvoice, extractLineasIvaAzure, normalizeRate };
+// extractLineasIvaAzure, normalizeRate, extraerBoundingBox y
+// extraerPaginasInfo se exportan para tests unitarios (fixtures sin red) —
+// no forman parte del contrato público.
+module.exports = { extractInvoice, extractLineasIvaAzure, normalizeRate, extraerBoundingBox, extraerPaginasInfo };
