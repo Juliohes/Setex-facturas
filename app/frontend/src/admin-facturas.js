@@ -2278,7 +2278,13 @@ async function openOcrModal(facturaId) {
     if (imagenVariante) {
       const cargarImg = (url, imgId) => {
         const img = document.getElementById(imgId);
-        authFetch(url)
+        // cache: 'no-store' — un Ctrl+Shift+R en la página NO invalida la
+        // caché HTTP de un fetch() lanzado después al abrir el modal; sin
+        // esto, un 404 servido antes de que la variante existiera puede
+        // quedar cacheado indefinidamente para esta URL exacta (sin
+        // cache-buster) y el usuario no tiene forma de forzar una petición
+        // nueva desde la propia página.
+        authFetch(url, { cache: 'no-store' })
           .then((r) => {
             if (!r.ok) throw new Error(r.status === 404 ? 'no disponible' : `HTTP ${r.status}`);
             return r.blob();
