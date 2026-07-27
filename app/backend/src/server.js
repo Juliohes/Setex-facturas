@@ -486,6 +486,29 @@ async function initDB() {
     -- tramos IVA...), no solo el ratio agregado — permite el ranking por
     -- campo del panel sin volver a llamar a ninguna IA.
     ALTER TABLE ocr_benchmark_resultados ADD COLUMN IF NOT EXISTS detalle_campos JSONB NOT NULL DEFAULT '{}';
+
+    -- Fase 8 de PROMPT-PIPELINE-OCR-FACTURAS-V2.md (2026-07-27): resultado
+    -- completo del pipeline v2 (extracción + árbitro + confianza + estado)
+    -- para cada factura procesada por esa vía. Tabla nueva, aditiva —
+    -- ninguna tabla existente se modifica. Rollback: scripts/rollback/
+    -- 2026-07-27-extracciones-v2-down.sql (DROP TABLE IF EXISTS).
+    CREATE TABLE IF NOT EXISTS extracciones_v2 (
+      id SERIAL PRIMARY KEY,
+      upload_id INTEGER REFERENCES uploads(id) ON DELETE CASCADE,
+      campos_canonicos JSONB NOT NULL,
+      confianzas JSONB NOT NULL DEFAULT '{}',
+      disputas JSONB NOT NULL DEFAULT '[]',
+      score_global NUMERIC(4,3),
+      estado VARCHAR(20) NOT NULL,
+      version_pipeline VARCHAR(20) NOT NULL DEFAULT 'v2',
+      coste_estimado_usd NUMERIC(8,5),
+      latencia_ms INTEGER,
+      correccion_humana JSONB,
+      creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_extracciones_v2_upload ON extracciones_v2(upload_id);
+    CREATE INDEX IF NOT EXISTS idx_extracciones_v2_estado ON extracciones_v2(estado);
   `);
 
   // Backfill: uploads anteriores sin upload_status → 'active'
@@ -2812,6 +2835,68 @@ app.get('/api/facturas/:id/imagen', authenticateToken, requireActiveCompany, asy
   } catch (err) {
     logger.error('Error sirviendo imagen factura:', err);
     res.status(500).json({ error: 'Error al obtener la imagen' });
+  }
+});
+
+// ── Fase 8 pipeline v2 (2026-07-27): consulta y corrección de la extracción ──
+// Endpoints NUEVOS y versionados (/v2/, regla 4 del prompt de migración) —
+// no modifican ni sustituyen ningún endpoint existente. Todavía sin datos
+// reales: la tabla extracciones_v2 solo se rellenará cuando la Fase 10
+// conecte el pipeline completo al flujo real de subida.
+
+// GET /api/v2/facturas/:id/extraccion — resultado del pipeline v2 (solo el propietario)
+app.get('/api/v2/facturas/:id/extraccion', authenticateToken, requireActiveCompany, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT e.id, e.upload_id, e.campos_canonicos, e.confianzas, e.disputas,
+              e.score_global, e.estado, e.version_pipeline, e.coste_estimado_usd,
+              e.latencia_ms, e.correccion_humana, e.creado_en, e.actualizado_en
+       FROM extracciones_v2 e
+       JOIN uploads u ON u.id = e.upload_id
+       WHERE e.upload_id = $1 AND u.user_id = $2`,
+      [req.params.id, req.user.userId]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Sin extracción v2 para esta factura' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    logger.error('Error obteniendo extraccion_v2:', err);
+    res.status(500).json({ error: 'Error al obtener la extracción' });
+  }
+});
+
+// PATCH /api/v2/facturas/:id/extraccion — corrección humana de un campo
+// (guarda valor_original + valor_corregido juntos, Fase 8.4 del prompt:
+// "ese par corregido/original es oro para mejorar prompts después").
+app.patch('/api/v2/facturas/:id/extraccion', authenticateToken, requireActiveCompany, requireXHR, async (req, res) => {
+  try {
+    const { campo, valor_corregido } = req.body || {};
+    if (!campo || typeof campo !== 'string' || valor_corregido === undefined) {
+      return res.status(400).json({ error: 'Faltan campo/valor_corregido' });
+    }
+    const actual = await pool.query(
+      `SELECT e.id, e.campos_canonicos, e.correccion_humana
+       FROM extracciones_v2 e JOIN uploads u ON u.id = e.upload_id
+       WHERE e.upload_id = $1 AND u.user_id = $2`,
+      [req.params.id, req.user.userId]
+    );
+    if (actual.rows.length === 0) return res.status(404).json({ error: 'Sin extracción v2 para esta factura' });
+
+    const fila = actual.rows[0];
+    const valorOriginal = campo.split('.').reduce((o, k) => o?.[k], fila.campos_canonicos) ?? null;
+    const correcciones = fila.correccion_humana || {};
+    correcciones[campo] = {
+      valor_original: valorOriginal, valor_corregido, corregido_en: new Date().toISOString(), corregido_por: req.user.userId,
+    };
+
+    const updated = await pool.query(
+      `UPDATE extracciones_v2 SET correccion_humana = $1::jsonb, actualizado_en = NOW() WHERE id = $2 RETURNING *`,
+      [JSON.stringify(correcciones), fila.id]
+    );
+    auditLog('EXTRACCION_V2_CORREGIDA', { upload_id: req.params.id, campo }, req.user.userId, req.ip);
+    res.json(updated.rows[0]);
+  } catch (err) {
+    logger.error('Error corrigiendo extraccion_v2:', err);
+    res.status(500).json({ error: 'Error al guardar la corrección' });
   }
 });
 
