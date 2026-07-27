@@ -3488,3 +3488,16 @@ Julio pidió ejecutar `PROMPT-PIPELINE-OCR-FACTURAS-V2.md` (migración del pipel
 - Otros hallazgos con evidencia de código: cero reintentos/backoff en los 4 adaptadores OCR (causa confirmada de los 429 masivos de Azure DI en el benchmark de esta semana), PDFs enviados sin preprocesar a las 4 APIs (bug confirmado: OpenAI rechaza PDFs con HTTP 400), 5 bloques `catch` que tragan errores sin log, `sharp` con 2 CVEs "high" pendientes de actualizar, `CLAUDE.md` desactualizado sobre el estado real del pipeline OCR.
 - `npm audit --production`: 3 vulnerabilidades (1 low, 2 high). `npm test`: 145 tests, 144 OK (mismo fallo preexistente de siempre, no relacionado).
 - **Sin cambios de código** — auditoría de solo lectura. Pendiente aprobación explícita de Julio antes de la Fase 1.
+
+### 2026-07-27 — Migración pipeline OCR v2 completa (Fases 1-10) + modo sombra activo
+
+Ejecutadas las 10 fases de `PROMPT-PIPELINE-OCR-FACTURAS-V2.md` en la rama `feature/ocr-pipeline-v2` (commits `918dad8`…`8c9e8db`, `0f5497a`): red de seguridad + baseline real, clasificador PDF nativo, quality gate recalibrado + deskew/perspectiva (reutiliza jscanify del móvil), extractores con reintentos, árbitro por campo (sustituye la prioridad fija de `ocr/index.js`), bounding boxes de Azure + re-extracción dirigida, tabla `extracciones_v2` + endpoints `/api/v2/facturas/:id/extraccion`, observabilidad con PII truncada + `/api/v2/metricas`, orquestador completo conectado en modo sombra sobre `/api/upload-confirm`. `docs/ROLLBACK.md` nuevo. Desplegado; `ocr_extraccion_v2_shadow_mode` activado a petición de Julio — cada factura real ya dispara el pipeline v2 en segundo plano, sin afectar la respuesta real. `ocr_extraccion_v2_enabled` (activación real) sigue en `false`. Pendiente: dejar acumular datos varios días, comparar vs v1, informe, aprobación antes de activar de verdad.
+- Hallazgo operativo: editar `features.json` con la herramienta de Claude Code (rename atómico) rompe el bind-mount de un fichero individual ya montado en un contenedor en marcha — requiere `stop`+`up -d` (no rebuild) para reenganchar. Anotado en memoria para no repetir el diagnóstico.
+
+### 2026-07-27 — Botón de prueba de captura (tech-admin) + gráficos nuevos de Benchmark IA
+
+Rama `feature/prueba-captura-y-graficos-benchmark-2026-07-27` (commits `346bc04`, `5a37726`).
+- `server.js`: `GET /api/me/settings` expone `is_tech_admin` a la app de usuario (antes solo viajaba al panel admin). Nuevo `POST /api/test-captura`: ejecuta el OCR real (v1) sin persistir nada — ni fichero, ni fila en BD — pensado para verificar viabilidad del flujo cámara→OCR sin generar facturas de prueba reales.
+- `app.js`/`index.html`: botón "🧪 Probar flujo (sin guardar)" junto a Capturar Foto, visible solo si `is_tech_admin`.
+- `admin-facturas.js/.css/.html`: panel Benchmark IA con 3 vistas (Barras/Mapa de calor/Líneas) — mapa de calor motor×variante coloreado (vista "todo a la vez", ignora los filtros), gráfico de líneas SVG a mano (una línea por motor, 6 grupos de campo). Sin librerías nuevas. Verificado visualmente con Playwright antes de desplegar.
+- Pendiente desplegar (confirmación de Julio).
