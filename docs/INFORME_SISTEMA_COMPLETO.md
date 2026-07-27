@@ -3475,3 +3475,16 @@ El benchmark reveló que `gemini_flash` y `gemini_pro` fallaban en casi todos lo
 - `node --check` OK, suite completa 143/144 (el único fallo es preexistente y no relacionado: paridad v3).
 - Commit `d3fbd5b` en `feature/pipeline-facturas-v2-validacion-determinista-2026-07-21`. **Pendiente decisión de Julio sobre el despliegue** (solo cambia `ocr/gemini.js`, rebuild+deploy de backend únicamente).
 - **Modelos de IA en juego en el benchmark** (los 5 motores del fan-out real): OpenAI GPT-4.1 Vision · Azure Document Intelligence `prebuilt-invoice` · Google Gemini 3.5 Flash (`gemini-3.5-flash`) · Google Gemini 3.1 Pro preview (`gemini-3.1-pro-preview`) · Mistral OCR 4. Los IDs de modelo Gemini son configurables en caliente vía `features.json` (`ocr_gemini_flash_model`/`ocr_gemini_pro_model`).
+
+### 2026-07-27 — Auditoría Fase 0 (solo lectura) del pipeline OCR v2
+
+Julio pidió ejecutar `PROMPT-PIPELINE-OCR-FACTURAS-V2.md` (migración del pipeline de extracción a arquitectura por capas). Se ejecutó únicamente la Fase 0 (auditoría, sin tocar código) y se generó `docs/INFORME-AUDITORIA-OCR.md`, detenido a la espera de aprobación antes de crear la rama `feature/ocr-pipeline-v2`.
+
+- Hallazgo principal: la premisa del prompt ("OpenAI nunca se ejecuta, posible bug") es incorrecta — confirmado línea por línea en `ocr/index.js` que es una exclusión deliberada del modo `gemini_azure` (activo desde 2026-07-07), no un fallo silencioso.
+- Hallazgo de mayor impacto: la fusión multi-modelo actual (`compareOCRResults`) usa prioridad FIJA por fuente (p.ej. Azure siempre gana en importes), no valida contra checksum/aritmética antes de decidir — gap real que la Fase 5 del prompt (árbitro por campo) resolvería.
+- Confirmado que buena parte de las Fases 1/6/8/10 del prompt ya existen con otra arquitectura: validadores fiscales (`domain/validators/nif.js`, `iva.js`), routing determinista (`domain/routing.js`), shadow mode (`ocr_shadow_validaciones`) y el sistema de benchmark construido esta semana.
+- Riesgo señalado: existe una arquitectura "adapter" congelada en `src/adapters/ocr/*` + `src/ports/ocr.port.js`, fechada exactamente el día del incidente LL-002 (28-abr), sin ninguna referencia desde el runtime real — no debe confundirse ni reutilizarse sin aprobación explícita dado ese historial.
+- Riesgo señalado: colisión de nombres entre los flags `pipeline_v2_*` ya activos (routing/validación) y el "pipeline v2" que este prompt propone para la extracción — recomendado usar un prefijo distinto (`ocr_extraccion_v2_*`) si se avanza.
+- Otros hallazgos con evidencia de código: cero reintentos/backoff en los 4 adaptadores OCR (causa confirmada de los 429 masivos de Azure DI en el benchmark de esta semana), PDFs enviados sin preprocesar a las 4 APIs (bug confirmado: OpenAI rechaza PDFs con HTTP 400), 5 bloques `catch` que tragan errores sin log, `sharp` con 2 CVEs "high" pendientes de actualizar, `CLAUDE.md` desactualizado sobre el estado real del pipeline OCR.
+- `npm audit --production`: 3 vulnerabilidades (1 low, 2 high). `npm test`: 145 tests, 144 OK (mismo fallo preexistente de siempre, no relacionado).
+- **Sin cambios de código** — auditoría de solo lectura. Pendiente aprobación explícita de Julio antes de la Fase 1.
