@@ -6,7 +6,7 @@
   <title>SETEX — Panel de Administración</title>
   <link rel="icon" href="favicon-admin.svg" type="image/svg+xml">
   <link rel="stylesheet" href="tabulator.min.css">
-  <link rel="stylesheet" href="admin-facturas.css?v=20260724-001">
+  <link rel="stylesheet" href="admin-facturas.css?v=20260727-001">
 </head>
 <body>
 
@@ -316,14 +316,19 @@
         <div id="benchmark-view-ranking" class="benchmark-view">
           <div class="benchmark-chart-controls">
             <div class="benchmark-chip-group">
+              <span class="benchmark-chip-label">Vista:</span>
+              <div id="benchmark-chips-vista" class="benchmark-chips"></div>
+            </div>
+            <div class="benchmark-chip-group" id="benchmark-filtros-motor-variante">
               <span class="benchmark-chip-label">Motor:</span>
               <div id="benchmark-chips-motor" class="benchmark-chips"></div>
             </div>
-            <div class="benchmark-chip-group">
+            <div class="benchmark-chip-group" id="benchmark-filtros-variante">
               <span class="benchmark-chip-label">Variante:</span>
               <div id="benchmark-chips-variante" class="benchmark-chips"></div>
             </div>
           </div>
+          <p id="benchmark-vista-nota" class="benchmark-vista-nota" style="display:none;"></p>
           <div id="benchmark-chart" class="benchmark-chart"></div>
           <div id="benchmark-ranking-table"></div>
         </div>
@@ -337,6 +342,6 @@
 
   <script src="tabulator.min.js"></script>
   <script src="auth.js?v=20260414-003"></script>
-  <script src="admin-facturas.js?v=20260724-001"></script>
+  <script src="admin-facturas.js?v=20260727-001"></script>
 </body>
 </html>

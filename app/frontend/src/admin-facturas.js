@@ -2386,6 +2386,29 @@ let benchmarkRankingTable = null;
 let benchmarkFiltroMotor = '__todos';
 let benchmarkFiltroVariante = '__todas';
 
+// 2026-07-27: además de las barras (un solo grupo de campo agregado), dos
+// vistas nuevas pedidas por Julio — "quiero ver todo, cuando le doy a
+// todos, como un gráfico de colores en 2D" (mapa de calor motor×variante,
+// SIEMPRE con todos los combos, ignora los chips de motor/variante a
+// propósito) y "gráficos de líneas" (una línea por motor, comparando los
+// 6 grupos de campo a la vez — más fácil ver patrones que con barras
+// sueltas de un único motor). Todo vanilla JS/CSS, sin librerías nuevas.
+const BENCHMARK_VISTAS = [
+  { key: 'barras', label: '📊 Barras' },
+  { key: 'heatmap', label: '🔥 Mapa de calor' },
+  { key: 'lineas', label: '📈 Líneas' },
+];
+let benchmarkVistaActual = 'barras';
+const BENCHMARK_COLOR_ESCALA = [
+  { hasta: 40, color: '#e53e3e' }, { hasta: 60, color: '#ed8936' },
+  { hasta: 75, color: '#ecc94b' }, { hasta: 90, color: '#9ae6b4' },
+  { hasta: 101, color: '#48bb78' },
+];
+function benchmarkColorPorRatio(ratio) {
+  if (ratio == null) return '#e2e8f0';
+  return (BENCHMARK_COLOR_ESCALA.find((e) => ratio < e.hasta) || BENCHMARK_COLOR_ESCALA.at(-1)).color;
+}
+
 function initBenchmarkTabs() {
   const tabRanking = document.getElementById('tab-benchmark-ranking');
   const tabDetalle = document.getElementById('tab-benchmark-detalle');
@@ -2407,9 +2430,22 @@ function initBenchmarkTabs() {
 }
 
 function initBenchmarkChips() {
+  const contVista = document.getElementById('benchmark-chips-vista');
   const contMotor = document.getElementById('benchmark-chips-motor');
   const contVariante = document.getElementById('benchmark-chips-variante');
-  if (!contMotor || !contVariante) return;
+  if (!contVista || !contMotor || !contVariante) return;
+
+  contVista.innerHTML = BENCHMARK_VISTAS.map((v) =>
+    `<button class="benchmark-chip${v.key === benchmarkVistaActual ? ' is-active' : ''}" data-vista="${escHtml(v.key)}">${escHtml(v.label)}</button>`
+  ).join('');
+  contVista.querySelectorAll('.benchmark-chip').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      benchmarkVistaActual = btn.dataset.vista;
+      contVista.querySelectorAll('.benchmark-chip').forEach((b) => b.classList.toggle('is-active', b === btn));
+      actualizarVisibilidadFiltrosBenchmark();
+      renderBenchmarkRanking();
+    });
+  });
 
   const motores = [{ key: '__todos', label: 'Todos' }, ...BENCHMARK_MOTORES.map((m) => ({ key: m, label: BENCHMARK_MOTOR_LABELS[m] || m }))];
   const variantes = [{ key: '__todas', label: 'Todas' }, ...BENCHMARK_VARIANTES.map((v) => ({ key: v, label: benchmarkVarianteLabel(v) }))];
@@ -2435,6 +2471,24 @@ function initBenchmarkChips() {
       renderBenchmarkRanking();
     });
   });
+
+  actualizarVisibilidadFiltrosBenchmark();
+}
+
+/** El mapa de calor SIEMPRE muestra todos los combos a propósito ("quiero
+ *  ver todo, cuando le doy a todos") — los chips de motor/variante no
+ *  aplican ahí, se ocultan para no sugerir un filtrado que no hace nada. */
+function actualizarVisibilidadFiltrosBenchmark() {
+  const grupoMotor = document.getElementById('benchmark-filtros-motor-variante');
+  const grupoVariante = document.getElementById('benchmark-filtros-variante');
+  const nota = document.getElementById('benchmark-vista-nota');
+  const esHeatmap = benchmarkVistaActual === 'heatmap';
+  if (grupoMotor) grupoMotor.style.display = esHeatmap ? 'none' : '';
+  if (grupoVariante) grupoVariante.style.display = esHeatmap ? 'none' : '';
+  if (nota) {
+    nota.style.display = esHeatmap ? 'block' : 'none';
+    nota.textContent = esHeatmap ? 'El mapa de calor siempre muestra todos los motores y variantes a la vez.' : '';
+  }
 }
 
 function benchmarkCombosFiltrados() {
@@ -2475,7 +2529,7 @@ function renderBenchmarkChart(grupos) {
     cont.innerHTML = '<p style="color:#a0aec0;padding:20px;margin:0;">Sin datos todavía para esta combinación.</p>';
     return;
   }
-  cont.innerHTML = grupos.map((g) => {
+  const barras = grupos.map((g) => {
     const pct = g.ratio ?? 0;
     const nivel = pct >= 85 ? '' : pct >= 60 ? 'nivel-medio' : 'nivel-bajo';
     return `
@@ -2485,6 +2539,7 @@ function renderBenchmarkChart(grupos) {
         <span class="benchmark-bar-label">${escHtml(g.grupo)}<br>(${g.aciertos}/${g.comparables})</span>
       </div>`;
   }).join('');
+  cont.innerHTML = `<div class="benchmark-barras-wrap">${barras}</div>`;
 }
 
 function renderBenchmarkRankingTable() {
@@ -2536,8 +2591,109 @@ function renderBenchmarkRankingTable() {
   });
 }
 
+const BENCHMARK_COLOR_MOTOR = {
+  openai: '#3182ce', azure: '#805ad5', gemini_flash: '#38a169',
+  gemini_pro: '#d69e2e', mistral: '#e53e3e',
+};
+
+/** Mapa de calor motor×variante — SIEMPRE todos los combos, ignora los
+ *  chips de motor/variante a propósito (es la vista "quiero verlo todo"). */
+function renderBenchmarkHeatmap() {
+  const cont = document.getElementById('benchmark-chart');
+  if (!cont) return;
+  if (!benchmarkRankingData || !benchmarkRankingData.ranking.length) {
+    cont.innerHTML = '<p style="color:#a0aec0;padding:20px;margin:0;">Sin datos todavía.</p>';
+    return;
+  }
+  const mapa = {};
+  benchmarkRankingData.ranking.forEach((c) => { mapa[`${c.motor}__${c.variante}`] = c; });
+
+  let html = '<div class="benchmark-heatmap">';
+  html += '<div class="benchmark-heatmap-row benchmark-heatmap-header"><div class="benchmark-heatmap-celda benchmark-heatmap-esquina"></div>';
+  BENCHMARK_VARIANTES.forEach((v) => { html += `<div class="benchmark-heatmap-celda benchmark-heatmap-titulo">${escHtml(benchmarkVarianteLabel(v))}</div>`; });
+  html += '</div>';
+  BENCHMARK_MOTORES.forEach((motor) => {
+    html += `<div class="benchmark-heatmap-row"><div class="benchmark-heatmap-celda benchmark-heatmap-titulo">${escHtml(BENCHMARK_MOTOR_LABELS[motor] || motor)}</div>`;
+    BENCHMARK_VARIANTES.forEach((variante) => {
+      const c = mapa[`${motor}__${variante}`];
+      const ratio = c ? c.ratio_global : null;
+      const color = benchmarkColorPorRatio(ratio);
+      const texto = ratio != null ? `${ratio}%` : '—';
+      const titulo = c ? `${BENCHMARK_MOTOR_LABELS[motor] || motor} / ${benchmarkVarianteLabel(variante)}: ${texto} (${c.ejecuciones} ejecuciones, ${c.errores} errores)` : 'Sin datos';
+      html += `<div class="benchmark-heatmap-celda benchmark-heatmap-dato" style="background:${color};" title="${escHtml(titulo)}">${texto}</div>`;
+    });
+    html += '</div>';
+  });
+  html += '</div>';
+  cont.innerHTML = html;
+}
+
+/** Gráfico de líneas: una línea por motor, comparando los 6 grupos de campo
+ *  a la vez — mejor que barras sueltas para ver en qué falla cada motor
+ *  respecto a los demás. Respeta los chips de motor/variante (filtran qué
+ *  líneas/variantes se agregan), a diferencia del mapa de calor. */
+function renderBenchmarkLineas() {
+  const cont = document.getElementById('benchmark-chart');
+  if (!cont) return;
+  const motoresAIncluir = benchmarkFiltroMotor === '__todos' ? BENCHMARK_MOTORES : [benchmarkFiltroMotor];
+  const variantesAIncluir = benchmarkFiltroVariante === '__todas' ? BENCHMARK_VARIANTES : [benchmarkFiltroVariante];
+
+  const series = motoresAIncluir.map((motor) => {
+    const combos = (benchmarkRankingData?.ranking || []).filter((c) => c.motor === motor && variantesAIncluir.includes(c.variante));
+    return { motor, grupos: benchmarkAgregarGrupos(combos) };
+  }).filter((s) => s.grupos.length);
+
+  if (!series.length) {
+    cont.innerHTML = '<p style="color:#a0aec0;padding:20px;margin:0;">Sin datos todavía para esta combinación.</p>';
+    return;
+  }
+
+  const ancho = 640, alto = 200, padIzq = 34, padDer = 12, padSup = 12, padInf = 30;
+  const anchoUtil = ancho - padIzq - padDer, altoUtil = alto - padSup - padInf;
+  const categorias = BENCHMARK_ORDEN_GRUPOS;
+  const posX = (i) => padIzq + (categorias.length > 1 ? (i / (categorias.length - 1)) * anchoUtil : anchoUtil / 2);
+  const posY = (pct) => padSup + altoUtil - (Math.max(0, Math.min(100, pct ?? 0)) / 100) * altoUtil;
+
+  let svg = `<svg viewBox="0 0 ${ancho} ${alto}" class="benchmark-lineas-svg" preserveAspectRatio="xMidYMid meet">`;
+  [0, 25, 50, 75, 100].forEach((marca) => {
+    svg += `<line x1="${padIzq}" y1="${posY(marca)}" x2="${ancho - padDer}" y2="${posY(marca)}" stroke="#edf2f7" stroke-width="1"/>`;
+    svg += `<text x="${padIzq - 6}" y="${posY(marca) + 3}" font-size="9" fill="#a0aec0" text-anchor="end">${marca}</text>`;
+  });
+  categorias.forEach((cat, i) => {
+    const etiqueta = cat.length > 10 ? cat.substring(0, 9) + '…' : cat;
+    svg += `<text x="${posX(i)}" y="${alto - 8}" font-size="9" fill="#718096" text-anchor="middle">${escHtml(etiqueta)}</text>`;
+  });
+  series.forEach((s) => {
+    const color = BENCHMARK_COLOR_MOTOR[s.motor] || '#4a5568';
+    const puntos = categorias.map((cat, i) => {
+      const g = s.grupos.find((gr) => gr.grupo === cat);
+      return `${posX(i)},${posY(g ? g.ratio : null)}`;
+    }).join(' ');
+    svg += `<polyline points="${puntos}" fill="none" stroke="${color}" stroke-width="2.5"/>`;
+    categorias.forEach((cat, i) => {
+      const g = s.grupos.find((gr) => gr.grupo === cat);
+      if (g && g.ratio != null) {
+        svg += `<circle cx="${posX(i)}" cy="${posY(g.ratio)}" r="3.5" fill="${color}"><title>${escHtml(BENCHMARK_MOTOR_LABELS[s.motor] || s.motor)} · ${escHtml(cat)}: ${g.ratio}%</title></circle>`;
+      }
+    });
+  });
+  svg += '</svg>';
+
+  const leyenda = series.map((s) =>
+    `<span class="benchmark-leyenda-item"><span class="benchmark-leyenda-color" style="background:${BENCHMARK_COLOR_MOTOR[s.motor] || '#4a5568'}"></span>${escHtml(BENCHMARK_MOTOR_LABELS[s.motor] || s.motor)}</span>`
+  ).join('');
+
+  cont.innerHTML = `<div class="benchmark-lineas-wrap">${svg}<div class="benchmark-leyenda">${leyenda}</div></div>`;
+}
+
 function renderBenchmarkRanking() {
-  renderBenchmarkChart(benchmarkAgregarGrupos(benchmarkCombosFiltrados()));
+  if (benchmarkVistaActual === 'heatmap') {
+    renderBenchmarkHeatmap();
+  } else if (benchmarkVistaActual === 'lineas') {
+    renderBenchmarkLineas();
+  } else {
+    renderBenchmarkChart(benchmarkAgregarGrupos(benchmarkCombosFiltrados()));
+  }
   renderBenchmarkRankingTable();
 }
 
