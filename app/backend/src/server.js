@@ -2260,6 +2260,53 @@ app.post('/api/upload-preview', authenticateToken, requireActiveCompany, uploadL
   }
 });
 
+// ── POST /api/test-captura — "botón de prueba" (2026-07-27, petición de Julio) ──
+// Ejecuta el flujo real de captura+OCR (mismo motor que /api/upload-preview,
+// pipeline v1 en producción) pero NUNCA persiste nada — ni fichero, ni fila en
+// BD, ni preview en Redis. Solo para verificar que el flujo completo (cámara →
+// subida → OCR) funciona y es viable, sin dejar rastro. Restringido a
+// tech_admin (mismo criterio que el panel de Benchmark IA).
+app.post('/api/test-captura', authenticateToken, requireActiveCompany, uploadLimiter, upload.single('file'), async (req, res) => {
+  const filePath = req.file?.path;
+  try {
+    if (!isTechAdmin(req.user.email)) {
+      return res.status(403).json({ error: 'Función restringida a administradores técnicos.' });
+    }
+    if (!req.file) return res.status(400).json({ error: 'No se recibió archivo' });
+
+    const validMagic = await validateFileMagicBytes(filePath, req.file.mimetype);
+    if (!validMagic) {
+      return res.status(400).json({ error: 'El archivo no corresponde al tipo declarado. Sube una imagen JPEG, PNG o PDF válido.' });
+    }
+
+    const inicio = Date.now();
+    const [ocrData, cifFocused] = await Promise.all([
+      extractInvoiceOCR(filePath, req.file.mimetype, req.file.filename, logger, {}),
+      extractCIFOnlyOCR(filePath, req.file.mimetype),
+    ]);
+    const tiempoMs = Date.now() - inicio;
+
+    res.json({
+      success: true,
+      test_mode: true,
+      aviso: 'Modo prueba: nada de esto se ha guardado (ni fichero ni registro).',
+      tiempo_ms: tiempoMs,
+      ocr_engine: ocrData?.ocr_engine || null,
+      dual_confirmed: ocrData?.dual_confirmed ?? null,
+      es_factura_valida: ocrData?.es_factura_valida ?? null,
+      confidence: ocrData?.confidence ?? null,
+      campos: ocrData?.campos || null,
+      receptor_cif_enfocado: cifFocused || null,
+    });
+  } catch (err) {
+    logger.error('[TestCaptura] Error:', err.message);
+    res.status(500).json({ error: 'Error al procesar la prueba' });
+  } finally {
+    // Regla de esta función: NUNCA se persiste — se borra siempre, éxito o fallo.
+    if (filePath) fs.unlink(filePath).catch(() => {});
+  }
+});
+
 // ── POST /api/upload-confirm — confirmar preview y guardar en BD ─────────────
 app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirmLimiter, async (req, res) => {
   try {
@@ -3479,6 +3526,12 @@ app.get('/api/me/settings', authenticateToken, async (req, res) => {
       company_name: r.rows[0]?.company_name || null,
       company_nif_aeat_warning,
       is_admin: r.rows[0]?.is_admin === true,
+      // 2026-07-27: expone is_tech_admin también a la app de usuario normal
+      // (antes solo viajaba en /api/auth/login y solo si is_admin=true) —
+      // necesario para el botón de prueba de captura (solo tech-admin, ver
+      // /api/test-captura). isTechAdmin() lee tech_admin_emails de
+      // features.json — no es un dato de la tabla users.
+      is_tech_admin: isTechAdmin(req.user.email),
     });
   } catch (err) {
     logger.error('Get settings error:', err);

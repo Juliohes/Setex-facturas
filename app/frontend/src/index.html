@@ -117,6 +117,9 @@
                 <!-- ── Botones de acción ───────────────────────────────────── -->
                 <button id="btn-capture-photo" class="btn-primary">📷 Capturar Foto</button>
                 <button id="btn-select-file" class="btn-secondary">📄 Subir Archivo</button>
+                <!-- 2026-07-27: solo tech-admin (mostrado por JS tras cargar /api/me/settings).
+                     Ejecuta el flujo real de captura+OCR sin guardar nada — ver /api/test-captura. -->
+                <button id="btn-test-captura" class="btn-secondary" style="display:none;background:#fefcbf;border:1px solid #d69e2e;color:#744210;" title="Prueba el flujo completo de captura+OCR SIN guardar nada">🧪 Probar flujo (sin guardar)</button>
                 <input type="file" id="file-input" accept="image/*,application/pdf" style="display:none">
                 <input type="file" id="camera-input" accept="image/*" capture="environment" style="display:none">
                 <div id="preview"></div>
@@ -305,10 +308,22 @@
             </div>
             <canvas id="camera-canvas" style="display:none"></canvas>
         </div>
+
+        <!-- 2026-07-27: resultado del botón de prueba (solo tech-admin) — nunca
+             se guarda nada, es solo para ver el resultado del OCR real. -->
+        <div id="test-captura-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:1100;align-items:center;justify-content:center;">
+            <div style="background:#fff;border-radius:12px;width:min(520px,92vw);max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid #e2e8f0;">
+                    <h3 style="margin:0;font-size:15px;color:#744210;">🧪 Prueba de flujo (sin guardar)</h3>
+                    <button id="test-captura-modal-close" style="width:auto;background:none;border:none;font-size:22px;color:#718096;cursor:pointer;padding:0 4px;">&times;</button>
+                </div>
+                <div id="test-captura-resultado" style="padding:18px;"></div>
+            </div>
+        </div>
     </div>
     <script src="auth.js?v=20260414-004"></script>
     <script src="cif-validator.js?v=20260713-001"></script>
-    <script src="app.js?v=20260724-001"></script>
+    <script src="app.js?v=20260727-001"></script>
     <script>
         // ── Service Worker: registro + detección de actualizaciones ─────────
         if ('serviceWorker' in navigator) {

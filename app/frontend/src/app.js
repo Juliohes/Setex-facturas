@@ -8,6 +8,7 @@ let currentPreviewId = null;
 let userCompanyName = null;
 let userCompanyNif = null;
 let userIsAdmin = false;
+let userIsTechAdmin = false; // 2026-07-27: botón de prueba de captura (sin persistir)
 let historyAllFacturas = [];
 let historyShowAll = false;
 
@@ -272,7 +273,10 @@ async function loadUserSettings() {
         userCompanyNif  = data.company_nif  || null;
         userCompanyName = data.company_name || null;
         userIsAdmin     = data.is_admin === true;
+        userIsTechAdmin = data.is_tech_admin === true;
         showCompanyIdentity(data.company_name, data.is_admin === true, data.company_nif_aeat_warning === true);
+        const btnTest = document.getElementById('btn-test-captura');
+        if (btnTest) btnTest.style.display = userIsTechAdmin ? 'block' : 'none';
     } catch { /* no bloquear */ }
 }
 
@@ -785,11 +789,54 @@ function takePhoto() {
     }
     closeCamera();
     canvas.toBlob(function(blob) {
-        if (blob) {
-            const file = new File([blob], 'captura.jpg', { type: 'image/jpeg' });
-            processFile(file);
+        if (!blob) return;
+        if (modoPruebaCapturaActivo) {
+            modoPruebaCapturaActivo = false;
+            enviarCapturaDePrueba(blob);
+            return;
         }
+        const file = new File([blob], 'captura.jpg', { type: 'image/jpeg' });
+        processFile(file);
     }, 'image/jpeg', 0.92);
+}
+
+// ── Botón de prueba (solo tech-admin, 2026-07-27) ────────────────────────────
+// Ejecuta el flujo real de captura+OCR contra /api/test-captura — NUNCA se
+// guarda nada (ni fichero ni registro), solo para verificar viabilidad.
+let modoPruebaCapturaActivo = false;
+
+function iniciarCapturaPrueba() {
+    modoPruebaCapturaActivo = true;
+    doCapturePhoto();
+}
+
+async function enviarCapturaDePrueba(blob) {
+    const modal = document.getElementById('test-captura-modal');
+    const contenido = document.getElementById('test-captura-resultado');
+    if (!modal || !contenido) return;
+    modal.style.display = 'flex';
+    contenido.innerHTML = '<p>Procesando… (puede tardar unos segundos, es una llamada real a la IA)</p>';
+    try {
+        const formData = new FormData();
+        formData.append('file', blob, 'prueba.jpg');
+        const res = await Auth.apiFetch(`${API_URL}/test-captura`, { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        contenido.innerHTML = `
+            <p style="color:#276749;font-weight:700;margin:0 0 8px;">✓ Flujo viable — ${data.aviso || 'nada se ha guardado'}</p>
+            <p style="font-size:13px;color:#4a5568;margin:0 0 10px;">
+                Tiempo: ${(data.tiempo_ms/1000).toFixed(2)}s · Motor: ${data.ocr_engine || '—'} ·
+                Doble confirmado: ${data.dual_confirmed ? 'sí' : 'no'} · Confianza: ${data.confidence != null ? Math.round(data.confidence*100)+'%' : '—'}
+            </p>
+            <pre style="white-space:pre-wrap;font-size:12px;background:#f7fafc;padding:10px;border-radius:6px;max-height:300px;overflow:auto;">${JSON.stringify(data.campos, null, 2)}</pre>`;
+    } catch (err) {
+        contenido.innerHTML = `<p style="color:#c53030;font-weight:700;">✗ Error: ${err.message}</p>`;
+    }
+}
+
+function cerrarModalPrueba() {
+    const modal = document.getElementById('test-captura-modal');
+    if (modal) modal.style.display = 'none';
 }
 
 function handleFile(event) {
@@ -2079,6 +2126,8 @@ document.getElementById('btn-logout').addEventListener('click', logout);
 // Captura/selección — ahora pasan por el selector de tipo
 document.getElementById('btn-capture-photo').addEventListener('click', capturePhoto);
 document.getElementById('btn-select-file').addEventListener('click', selectFile);
+document.getElementById('btn-test-captura')?.addEventListener('click', iniciarCapturaPrueba);
+document.getElementById('test-captura-modal-close')?.addEventListener('click', cerrarModalPrueba);
 document.getElementById('file-input').addEventListener('change', handleFile);
 document.getElementById('camera-input').addEventListener('change', handleFile);
 document.getElementById('upload-btn').addEventListener('click', uploadFile);
