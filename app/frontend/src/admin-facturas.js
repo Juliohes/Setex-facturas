@@ -2027,6 +2027,8 @@ async function openOcrModal(facturaId) {
     const raw          = d.ocr_raw       || {};
     const meta         = d.meta          || {};
     const campoSources = d.campo_sources || null;
+    const motors       = d.motors        || {};
+    const motorEntries = Object.entries(motors);
 
     // Badge de color por motor que leyó el campo
     const MOTOR_COLOR = {
@@ -2062,16 +2064,47 @@ async function openOcrModal(facturaId) {
       { label: 'Cuota IRPF',       key: 'cuota_irpf',      fmt: fmtOcrImporte },
     ];
 
-    function fmtLineasIva(lineas) {
-      if (!Array.isArray(lineas) || lineas.length === 0) return '—';
-      return lineas.map((l, i) =>
-        `[${i+1}] ${escHtml(String(l.porcentaje || '?'))}% | base ${fmtOcrImporte(l.base)} | cuota ${fmtOcrImporte(l.cuota)}`
-      ).join('<br>');
-    }
     // Normaliza separador decimal: OCR usa "89,56", la BD devuelve "89.56" (VARCHAR con punto)
     function normCmp(v) {
       if (v == null) return null;
       return String(v).trim().replace(/^(-?\d+)[,.](\d+)$/, '$1.$2');
+    }
+    // Compara dos importes con tolerancia numérica (2%, igual que el backend en ocr/index.js)
+    function tramoNumMatch(a, b) {
+      if (a == null || b == null) return false;
+      const fa = parseFloat(String(a).replace(',', '.'));
+      const fb = parseFloat(String(b).replace(',', '.'));
+      if (isNaN(fa) || isNaN(fb)) return false;
+      const max = Math.max(Math.abs(fa), Math.abs(fb));
+      if (max === 0) return true;
+      return Math.abs(fa - fb) / max < 0.02;
+    }
+    function tramoMatches(t, motorTramo) {
+      if (!motorTramo) return false;
+      return normCmp(t.porcentaje) === normCmp(motorTramo.porcentaje)
+        && tramoNumMatch(t.base, motorTramo.base)
+        && tramoNumMatch(t.cuota, motorTramo.cuota);
+    }
+    // Badge de atribución por tramo — qué motor(es) reportaron ese tramo concreto,
+    // usando los datos crudos por motor (motors.<engine>.campos.lineas_iva) que ya
+    // viajan en /ocr-detail. Solo aplica a la columna "IA (OCR raw)".
+    function tramoBadge(tramo) {
+      if (!motorEntries.length) return '';
+      const matching = motorEntries.filter(([, m]) => {
+        const lineas = (m && m.campos && Array.isArray(m.campos.lineas_iva)) ? m.campos.lineas_iva : [];
+        return lineas.some((l) => tramoMatches(tramo, l));
+      });
+      if (matching.length === 0) return '';
+      const cfg = matching.length >= 2
+        ? MOTOR_COLOR.consensus
+        : (MOTOR_COLOR[(matching[0][1] && matching[0][1].engine) || matching[0][0]] || { bg: '#718096', label: matching[0][0] });
+      return ` <span style="display:inline-block;font-size:10px;padding:1px 5px;border-radius:3px;background:${cfg.bg};color:#fff;vertical-align:middle;font-family:sans-serif;">${cfg.label}</span>`;
+    }
+    function fmtLineasIva(lineas, conBadges) {
+      if (!Array.isArray(lineas) || lineas.length === 0) return '—';
+      return lineas.map((l, i) =>
+        `[${i+1}] ${escHtml(String(l.porcentaje || '?'))}% | base ${fmtOcrImporte(l.base)} | cuota ${fmtOcrImporte(l.cuota)}${conBadges ? tramoBadge(l) : ''}`
+      ).join('<br>');
     }
     // Comparación normalizada de lineas_iva: ignora 'productos' y normaliza decimales
     function normLineasCmp(lineas) {
@@ -2118,8 +2151,8 @@ async function openOcrModal(facturaId) {
     const lineasRowBg = (!lineasIgual && (rawLineas || confLineas)) ? 'background:#fff5f5;' : '';
     const rowLineas = `<tr style="${lineasRowBg}">
       <td style="padding:7px 10px;font-weight:600;color:#2d3748;white-space:nowrap;">Tramos IVA</td>
-      <td style="padding:7px 10px;font-family:monospace;font-size:12px;line-height:1.6;">${fmtLineasIva(rawLineas)}</td>
-      <td style="padding:7px 10px;font-family:monospace;font-size:12px;line-height:1.6;">${fmtLineasIva(confLineas)}</td>
+      <td style="padding:7px 10px;font-family:monospace;font-size:12px;line-height:1.6;">${fmtLineasIva(rawLineas, true)}</td>
+      <td style="padding:7px 10px;font-family:monospace;font-size:12px;line-height:1.6;">${fmtLineasIva(confLineas, false)}</td>
       <td style="padding:7px 10px;text-align:center;">${lineasBadge}</td>
     </tr>`;
 
@@ -2168,8 +2201,6 @@ async function openOcrModal(facturaId) {
     // Solo para tech_admin: ver campo a campo qué IA acierta más/menos en esta
     // factura concreta, sin depender de campo_sources (que solo dice quién
     // "ganó" el campo final, no qué leyeron los demás).
-    const motors = d.motors || {};
-    const motorEntries = Object.entries(motors);
     const motorRankingHtml = motorEntries.length === 0 ? '' : `
       <h4 style="margin:18px 0 8px;color:#2d3748;font-size:13px;">🏆 Ranking por motor — qué leyó cada IA</h4>
       <div style="overflow-x:auto;">
@@ -2231,14 +2262,23 @@ async function openOcrModal(facturaId) {
     // Cargar las imágenes autenticadas (blob) tras pintar el HTML — un <img
     // src="url"> normal no llevaría el header de autenticación.
     if (imagenVariante) {
-      authFetch(`${API_URL}/admin/facturas/${facturaId}/imagen`)
-        .then((r) => r.blob())
-        .then((b) => { document.getElementById('ocr-img-original').src = URL.createObjectURL(b); })
-        .catch(() => {});
-      authFetch(`${API_URL}/admin/facturas/${facturaId}/imagen-variante`)
-        .then((r) => r.blob())
-        .then((b) => { document.getElementById('ocr-img-variante').src = URL.createObjectURL(b); })
-        .catch(() => {});
+      const cargarImg = (url, imgId) => {
+        const img = document.getElementById(imgId);
+        authFetch(url)
+          .then((r) => {
+            if (!r.ok) throw new Error(r.status === 404 ? 'no disponible' : `HTTP ${r.status}`);
+            return r.blob();
+          })
+          .then((b) => { img.src = URL.createObjectURL(b); })
+          .catch((err) => {
+            img.replaceWith(Object.assign(document.createElement('div'), {
+              style: 'padding:20px;text-align:center;color:#a0aec0;font-size:11px;border:1px dashed #e2e8f0;border-radius:6px;',
+              textContent: `Imagen no disponible (${err.message})`,
+            }));
+          });
+      };
+      cargarImg(`${API_URL}/admin/facturas/${facturaId}/imagen`, 'ocr-img-original');
+      cargarImg(`${API_URL}/admin/facturas/${facturaId}/imagen-variante`, 'ocr-img-variante');
     }
   } catch (err) {
     body.innerHTML = `<p style="color:#9b2335;padding:20px 0;text-align:center;">Error al cargar datos OCR: ${escHtml(err.message)}</p>`;

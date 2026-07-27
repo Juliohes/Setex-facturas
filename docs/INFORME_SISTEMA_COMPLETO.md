@@ -3501,3 +3501,14 @@ Rama `feature/prueba-captura-y-graficos-benchmark-2026-07-27` (commits `346bc04`
 - `app.js`/`index.html`: botón "🧪 Probar flujo (sin guardar)" junto a Capturar Foto, visible solo si `is_tech_admin`.
 - `admin-facturas.js/.css/.html`: panel Benchmark IA con 3 vistas (Barras/Mapa de calor/Líneas) — mapa de calor motor×variante coloreado (vista "todo a la vez", ignora los filtros), gráfico de líneas SVG a mano (una línea por motor, 6 grupos de campo). Sin librerías nuevas. Verificado visualmente con Playwright antes de desplegar.
 - Pendiente desplegar (confirmación de Julio).
+
+### 2026-07-27 — Fix: atribución por motor en Tramos IVA + imagen CLAHE huérfana en Vista OCR
+
+Julio detectó dos problemas en el modal "Vista OCR" del panel admin (comparación IA vs humano por factura).
+
+- `admin-facturas.js`: la fila "Tramos IVA" no mostraba qué motor aportó cada tramo (a diferencia del resto de campos, que ya usan `motorBadge()`). Añadida atribución por tramo (`tramoBadge`/`tramoMatches`, tolerancia 2% igual que el backend) comparando cada tramo fusionado contra `motors.<engine>.campos.lineas_iva` (dato ya expuesto por `/ocr-detail`, sin cambios de backend para esta parte).
+- Causa raíz de la imagen CLAHE que nunca aparecía: `compararVarianteContraste` se lanza (fire-and-forget) en `/api/upload-preview` usando la ruta plana pre-confirmación del fichero; el original se mueve a su carpeta por NIF más tarde, en la petición separada `/api/upload-confirm`, y ese `rename` nunca movía el `.variante-contraste.jpg` hermano — confirmado en BD: 4/4 filas de `ocr_imagen_variante_comparativa` con `ruta_variante` apuntando a un fichero inexistente en disco.
+- `server.js` (`/api/upload-confirm`): tras mover el fichero original, se mueve también la variante de contraste si ya se generó, y se actualiza `ruta_variante` en BD (`UPDATE` acotado por `preview_id` + ruta antigua). Si la variante aún no existe (ENOENT — carrera con el fire-and-forget o flag desactivado) se ignora sin loguear error.
+- Bug adicional en frontend: `authFetch(...).then(r => r.blob())` no comprobaba `r.ok` — en un 404 convertía el JSON de error en "imagen" e intentaba pintarlo (icono roto sin pasar por el `catch`). Corregido: comprueba estado HTTP y sustituye la imagen por un mensaje visible si no está disponible.
+- Las 4 filas huérfanas ya existentes en BD no son recuperables (fichero físico inexistente en cualquier ruta) — coste hundido de pruebas de shadow-mode, sin impacto en facturas reales.
+- `node --check` OK en ambos ficheros. Suite completa: 239 tests, 238 OK (mismo fallo preexistente y no relacionado: paridad v3).

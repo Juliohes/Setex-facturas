@@ -2507,6 +2507,29 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
       const newPath = `${destDir}/${path.basename(filePath)}`;
       await fs.rename(filePath, newPath);
       finalFilePath = newPath;
+
+      // Bloque 5 (2026-07-22): si compararVarianteContraste ya generó la
+      // variante de contraste durante el preview, vive junto al fichero
+      // original bajo la ruta plana (pre-confirm). Al mover el original hay
+      // que mover también su hermano, o queda huérfano en disco y
+      // ruta_variante en BD apunta a un fichero que ya no existe.
+      const oldVariantPath = `${filePath}.variante-contraste.jpg`;
+      const newVariantPath = `${newPath}.variante-contraste.jpg`;
+      try {
+        await fs.rename(oldVariantPath, newVariantPath);
+        await pool.query(
+          `UPDATE ocr_imagen_variante_comparativa SET ruta_variante = $1
+             WHERE preview_id = $2 AND ruta_variante = $3`,
+          [newVariantPath, preview_id, oldVariantPath]
+        );
+      } catch (variantMoveErr) {
+        // ENOENT esperado si la variante aún no se generó (carrera con el
+        // fire-and-forget del preview) o si el flag está desactivado — no es
+        // un error real, no debe registrarse como tal.
+        if (variantMoveErr.code !== 'ENOENT') {
+          logger.warn(`[Upload] No se pudo mover variante de contraste: ${variantMoveErr.message}`);
+        }
+      }
     } catch (moveErr) {
       logger.warn(`[Upload] No se pudo mover archivo a ${destDir}: ${moveErr.message} — se mantiene en ubicación original`);
     }
