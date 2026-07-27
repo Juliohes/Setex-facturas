@@ -33,6 +33,7 @@
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.1.1",
     "nodemailer": "^9.0.3",
+    "pdfjs-dist": "^6.1.200",
     "pg": "^8.11.3",
     "sharp": "^0.33.2",
     "winston": "^3.11.0",
@@ -45,6 +46,7 @@
     "node": ">=20.0.0"
   },
   "devDependencies": {
-    "dependency-cruiser": "^16.10.4"
+    "dependency-cruiser": "^16.10.4",
+    "pdfkit": "^0.19.1"
   }
 }
