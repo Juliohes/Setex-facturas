@@ -18,6 +18,7 @@ const crypto = require('crypto');
 const sharp = require('sharp');
 const { extractInvoiceOCR, extractCIFOnlyOCR, compararVarianteContraste } = require('./ocr/index');
 const { ejecutarBenchmarkCompleto, GRUPOS_CAMPOS } = require('./ocr/benchmark');
+const { analizarCalidadImagen } = require('./pipeline/preprocess');
 
 // ── Módulos refactorizados (Strangler-Fig, pasos 1-20 completados) ────────────
 // Ubicación objetivo: domain/, services/, repositories/, middleware/, lib/, config/
@@ -669,6 +670,13 @@ async function authenticateToken(req, res, next) {
   }
 }
 
+// @deprecated 2026-07-27 — código muerto desde el commit inicial del
+// proyecto (nunca se llamó desde ningún sitio). Su umbral de nitidez (<2)
+// rechazaría más de la mitad de las facturas reales que sí se leyeron bien
+// (verificado contra 27 facturas reales, Fase 3 de la migración OCR v2).
+// Sustituido por src/pipeline/preprocess.js:analizarCalidadImagen(), con
+// umbrales recalibrados. No se borra (regla 6 del prompt de migración) —
+// eliminar en una limpieza futura una vez la migración esté consolidada.
 // Image quality analysis
 async function analyzeImageQuality(filePath) {
   const stats = await sharp(filePath)
@@ -1674,6 +1682,33 @@ app.post('/api/upload-preview', authenticateToken, requireActiveCompany, uploadL
       logger.warn('Magic bytes validation error — rejecting file as precaution', { error: magicErr.message });
       fs.unlink(filePath).catch(() => {});
       return res.status(400).json({ error: 'No se pudo verificar el tipo de archivo. Inténtalo de nuevo.' });
+    }
+
+    // ── Quality gate v2 (Fase 3, 2026-07-27) — SOLO SOMBRA, no bloquea ──────
+    // Fire-and-forget: nunca añade latencia ni puede afectar la respuesta
+    // real. Mientras ocr_extraccion_v2_quality_gate_blocking sea false (hoy),
+    // solo calcula y loguea nitidez/brillo/blanco con los umbrales
+    // recalibrados (pipeline/preprocess.js) — no rechaza ninguna factura.
+    try {
+      const qgCfg = JSON.parse(fsSync.readFileSync(FEATURES_PATH, 'utf8'));
+      if (qgCfg.ocr_extraccion_v2_enabled && fileInfo.mimetype.startsWith('image/')) {
+        analizarCalidadImagen(filePath)
+          .then((calidad) => {
+            logger.info('[QualityGate-v2]', {
+              document: fileInfo.filename,
+              passed: calidad.passed,
+              issues: calidad.issues,
+              metrics: calidad.metrics,
+              blocking_activo: qgCfg.ocr_extraccion_v2_quality_gate_blocking === true,
+            });
+            // NUNCA bloquea todavía, aunque !calidad.passed — el flag
+            // ocr_extraccion_v2_quality_gate_blocking queda listo para
+            // cuando Julio decida activarlo con datos reales de este log.
+          })
+          .catch((qgAnalyzeErr) => logger.warn('[QualityGate-v2] Error analizando calidad', { error: qgAnalyzeErr.message, document: fileInfo.filename }));
+      }
+    } catch (qgErr) {
+      logger.warn('[QualityGate-v2] Error leyendo configuración', { error: qgErr.message });
     }
 
     // ── FASE 1: OCR dual (OpenAI + Azure en paralelo) + enfocado CIF ───────────

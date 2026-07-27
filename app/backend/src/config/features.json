@@ -22,5 +22,7 @@
   "ocr_extraccion_v2_shadow_mode": false,
   "ocr_extraccion_v2_modelos": ["azure", "gemini_flash", "openai"],
   "ocr_extraccion_v2_umbral_auto": 0.9,
-  "ocr_extraccion_v2_umbral_revision": 0.6
+  "ocr_extraccion_v2_umbral_revision": 0.6,
+  "_QUALITY_GATE_V2": "Fase 3 (2026-07-27): analizarCalidadImagen() en pipeline/preprocess.js, umbrales recalibrados sobre 27 facturas reales (ver docs/INFORME-AUDITORIA-OCR.md). Solo corre si ocr_extraccion_v2_enabled=true; mientras ocr_extraccion_v2_quality_gate_blocking=false, SOLO calcula y loguea (línea '[QualityGate-v2]' en logs de backend) — nunca rechaza nada. Consultar distribución real: docker compose logs backend | grep QualityGate-v2. Cuando haya datos suficientes, Julio decide si pasar este flag a true para que empiece a rechazar de verdad.",
+  "ocr_extraccion_v2_quality_gate_blocking": false
 }
