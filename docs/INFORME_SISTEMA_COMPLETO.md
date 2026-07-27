@@ -3523,3 +3523,12 @@ Segunda ronda de correcciones en la Vista OCR, tras detectar que el fix anterior
 - Backfill puntual: regeneradas las 2 variantes CLAHE huérfanas de facturas ya confirmadas (jorale60, IDs 29 y 30) a partir del fichero original (aún en disco) y corregido `ruta_variante` en BD.
 - `admin-facturas.js`: los badges de "consenso" (campos simples y Tramos IVA) ahora listan los motores concretos que coincidieron (ej. "consenso: OpenAI + Azure DI") en vez de solo decir "consenso".
 - `node --check` OK, suite 239 tests (238 OK, mismo fallo preexistente no relacionado: paridad v3). Cache-buster `admin-facturas.js?v=20260727-005`. Desplegado (rebuild + stop + up -d backend/frontend), 4/4 healthy, HTTPS 200.
+
+### 2026-07-27 — Fix: caché de navegador servía 404 obsoleto en imagen-variante
+
+Tras el backfill de las 2 variantes CLAHE huérfanas, Julio seguía viendo "Imagen no disponible" en las facturas #29/#30. Verificado dos veces en servidor (consulta SQL reproducida literalmente con el ID como string + comprobación de fichero en disco) que tanto BD como el fichero físico eran correctos — el servidor ya respondía bien.
+
+- Causa: `/api/admin/facturas/:id/imagen-variante` no llevaba cabecera anti-caché en sus respuestas — a diferencia de los bundles JS (que sí tienen cache-buster `?v=`), la URL de este endpoint es fija por factura, así que un 404 servido antes del backfill podía quedar cacheado por el navegador y seguir mostrándose aunque el servidor ya tuviera la imagen disponible.
+- `server.js`: añadida cabecera `Cache-Control: no-store` a todas las respuestas de este endpoint (éxito y error).
+- Confirmado con Julio en ventana de incógnito: la imagen se ve correctamente — era caché, no un bug de backend.
+- `node --check` OK, suite 239 tests (238 OK, mismo fallo preexistente no relacionado). Desplegado (rebuild + stop + up -d solo backend), 4/4 healthy, HTTPS 200.
