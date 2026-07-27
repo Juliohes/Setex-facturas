@@ -19,6 +19,7 @@ const sharp = require('sharp');
 const { extractInvoiceOCR, extractCIFOnlyOCR, compararVarianteContraste } = require('./ocr/index');
 const { ejecutarBenchmarkCompleto, GRUPOS_CAMPOS } = require('./ocr/benchmark');
 const { analizarCalidadImagen } = require('./pipeline/preprocess');
+const { ejecutarPipelineV2Sombra } = require('./pipeline/orchestrator');
 
 // ── Módulos refactorizados (Strangler-Fig, pasos 1-20 completados) ────────────
 // Ubicación objetivo: domain/, services/, repositories/, middleware/, lib/, config/
@@ -2670,6 +2671,36 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
       }
     } catch (benchErr) {
       logger.error('[Benchmark] Error leyendo configuración', { error: benchErr.message });
+    }
+
+    // ── Pipeline v2 en modo SOMBRA (Fase 10, 2026-07-27) ───────────────────
+    // FIRE-AND-FORGET: nunca se espera (await) — no debe añadir latencia a la
+    // respuesta real ni afectar lo que ve el usuario NI el registro que ya se
+    // ha confirmado (ese ya está guardado arriba, esto es puramente
+    // observacional). Solo corre si ocr_extraccion_v2_shadow_mode está
+    // activo — APAGADO por defecto (coste real: hasta 2 llamadas OCR extra
+    // por factura, gemini_flash+azure — Julio debe activarlo explícitamente
+    // cuando quiera empezar a recoger datos comparativos v1 vs v2).
+    try {
+      const v2Cfg = JSON.parse(fsSync.readFileSync(FEATURES_PATH, 'utf8'));
+      if (v2Cfg.ocr_extraccion_v2_shadow_mode) {
+        ejecutarPipelineV2Sombra({
+          uploadId, filePath: finalFilePath, mimeType: fileInfo.mimetype,
+          context: { invoice_type: invoiceType, empresa_nif: userCompanyNif }, cfg: v2Cfg, logger,
+        }).then((registro) => {
+          if (!registro) return;
+          return pool.query(
+            `INSERT INTO extracciones_v2
+               (upload_id, campos_canonicos, confianzas, disputas, score_global, estado, version_pipeline, coste_estimado_usd, latencia_ms)
+             VALUES ($1,$2::jsonb,$3::jsonb,$4::jsonb,$5,$6,$7,$8,$9)`,
+            [registro.upload_id, JSON.stringify(registro.campos_canonicos), JSON.stringify(registro.confianzas),
+              JSON.stringify(registro.disputas), registro.score_global, registro.estado, registro.version_pipeline,
+              registro.coste_estimado_usd, registro.latencia_ms]
+          );
+        }).catch((err) => logger.error('[PipelineV2Sombra] Error', { error: err.message, upload_id: uploadId }));
+      }
+    } catch (v2Err) {
+      logger.error('[PipelineV2Sombra] Error leyendo configuración', { error: v2Err.message });
     }
 
     // Aprendizaje por usuario (privado): guarda nombre canónico confirmado y su CIF.
