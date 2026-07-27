@@ -9,13 +9,18 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const sharp = require('sharp');
+const fs = require('fs');
+const path = require('path');
 const {
   analizarCalidadImagen,
   UMBRAL_NITIDEZ_MINIMA,
   UMBRAL_BRILLO_MAXIMO,
   UMBRAL_BRILLO_MINIMO,
   UMBRAL_ENTROPIA_BLANCO,
+  corregirPerspectivaSiConfiable,
 } = require('../../src/pipeline/preprocess');
+
+const FIXTURES = path.join(__dirname, '..', 'fixtures');
 
 // Snapshot de las 27 facturas reales usadas para calibrar (2026-07-27, ver
 // docs/INFORME-AUDITORIA-OCR.md) — nitidez y brillo medidos con
@@ -90,5 +95,33 @@ describe('analizarCalidadImagen', () => {
 
   test('nunca lanza excepción por una imagen válida, solo por fichero inexistente', async () => {
     await assert.rejects(() => analizarCalidadImagen('/tmp/no-existe-de-verdad-12345.jpg'));
+  });
+});
+
+describe('corregirPerspectivaSiConfiable', () => {
+  test('documento inclinado con contorno claro → lo endereza', async () => {
+    const buffer = fs.readFileSync(path.join(FIXTURES, 'documento-inclinado.jpg'));
+    const r = await corregirPerspectivaSiConfiable(buffer);
+    assert.equal(r.corregido, true);
+    assert.equal(r.motivo, null);
+    assert.ok(r.buffer.length > 0);
+    // El resultado corregido debe seguir siendo un JPEG válido y decodificable.
+    const meta = await sharp(r.buffer).metadata();
+    assert.equal(meta.format, 'jpeg');
+    assert.ok(meta.width > 50 && meta.height > 50);
+  });
+
+  test('sin ningún documento detectable → deja la imagen intacta, no lanza', async () => {
+    const buffer = fs.readFileSync(path.join(FIXTURES, 'sin-documento.jpg'));
+    const r = await corregirPerspectivaSiConfiable(buffer);
+    assert.equal(r.corregido, false);
+    assert.equal(r.motivo, 'sin_contorno_detectado');
+    assert.equal(r.buffer, buffer, 'debe devolver el MISMO buffer original, sin tocarlo');
+  });
+
+  test('nunca lanza excepción, ni con un buffer que no es una imagen válida', async () => {
+    const r = await corregirPerspectivaSiConfiable(Buffer.from('esto no es una imagen'));
+    assert.equal(r.corregido, false);
+    assert.ok(r.motivo);
   });
 });
