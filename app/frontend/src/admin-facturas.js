@@ -2399,14 +2399,16 @@ const BENCHMARK_VISTAS = [
   { key: 'lineas', label: '📈 Líneas' },
 ];
 let benchmarkVistaActual = 'barras';
-const BENCHMARK_COLOR_ESCALA = [
-  { hasta: 40, color: '#e53e3e' }, { hasta: 60, color: '#ed8936' },
-  { hasta: 75, color: '#ecc94b' }, { hasta: 90, color: '#9ae6b4' },
-  { hasta: 101, color: '#48bb78' },
-];
-function benchmarkColorPorRatio(ratio) {
+// 2026-07-27: mapa de calor con selector de campo (Global + los 6 grupos) y
+// degradado de color CONTINUO (HSL, rojo→amarillo→verde) en vez de bandas
+// planas — pedido explícito de Julio ("más visual, más atractivo").
+let benchmarkHeatmapCampo = '__global';
+function benchmarkColorGradiente(ratio) {
   if (ratio == null) return '#e2e8f0';
-  return (BENCHMARK_COLOR_ESCALA.find((e) => ratio < e.hasta) || BENCHMARK_COLOR_ESCALA.at(-1)).color;
+  const clamped = Math.max(0, Math.min(100, ratio));
+  const hue = (clamped / 100) * 120; // 0=rojo, 60=amarillo, 120=verde
+  const luz = 42 + (clamped / 100) * 8; // ligeramente más claro cuanto mejor el resultado
+  return `hsl(${hue}, 68%, ${luz}%)`;
 }
 
 function initBenchmarkTabs() {
@@ -2433,7 +2435,20 @@ function initBenchmarkChips() {
   const contVista = document.getElementById('benchmark-chips-vista');
   const contMotor = document.getElementById('benchmark-chips-motor');
   const contVariante = document.getElementById('benchmark-chips-variante');
-  if (!contVista || !contMotor || !contVariante) return;
+  const contCampo = document.getElementById('benchmark-chips-campo');
+  if (!contVista || !contMotor || !contVariante || !contCampo) return;
+
+  const campos = [{ key: '__global', label: 'Global' }, ...BENCHMARK_ORDEN_GRUPOS.map((g) => ({ key: g, label: g }))];
+  contCampo.innerHTML = campos.map((c) =>
+    `<button class="benchmark-chip${c.key === benchmarkHeatmapCampo ? ' is-active' : ''}" data-campo="${escHtml(c.key)}">${escHtml(c.label)}</button>`
+  ).join('');
+  contCampo.querySelectorAll('.benchmark-chip').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      benchmarkHeatmapCampo = btn.dataset.campo;
+      contCampo.querySelectorAll('.benchmark-chip').forEach((b) => b.classList.toggle('is-active', b === btn));
+      renderBenchmarkRanking();
+    });
+  });
 
   contVista.innerHTML = BENCHMARK_VISTAS.map((v) =>
     `<button class="benchmark-chip${v.key === benchmarkVistaActual ? ' is-active' : ''}" data-vista="${escHtml(v.key)}">${escHtml(v.label)}</button>`
@@ -2481,13 +2496,15 @@ function initBenchmarkChips() {
 function actualizarVisibilidadFiltrosBenchmark() {
   const grupoMotor = document.getElementById('benchmark-filtros-motor-variante');
   const grupoVariante = document.getElementById('benchmark-filtros-variante');
+  const grupoCampo = document.getElementById('benchmark-filtros-campo');
   const nota = document.getElementById('benchmark-vista-nota');
   const esHeatmap = benchmarkVistaActual === 'heatmap';
   if (grupoMotor) grupoMotor.style.display = esHeatmap ? 'none' : '';
   if (grupoVariante) grupoVariante.style.display = esHeatmap ? 'none' : '';
+  if (grupoCampo) grupoCampo.style.display = esHeatmap ? '' : 'none';
   if (nota) {
     nota.style.display = esHeatmap ? 'block' : 'none';
-    nota.textContent = esHeatmap ? 'El mapa de calor siempre muestra todos los motores y variantes a la vez.' : '';
+    nota.textContent = esHeatmap ? 'El mapa de calor siempre muestra todos los motores y variantes a la vez — elige qué campo comparar.' : '';
   }
 }
 
@@ -2598,6 +2615,16 @@ const BENCHMARK_COLOR_MOTOR = {
 
 /** Mapa de calor motor×variante — SIEMPRE todos los combos, ignora los
  *  chips de motor/variante a propósito (es la vista "quiero verlo todo"). */
+/** Obtiene el ratio a colorear para una combinación motor×variante, según
+ *  el campo elegido en los chips (Global = ratio_global agregado, o el
+ *  ratio de ese grupo concreto dentro de por_grupo). */
+function benchmarkRatioParaCampo(combo, campo) {
+  if (!combo) return null;
+  if (campo === '__global') return combo.ratio_global;
+  const grupo = (combo.por_grupo || []).find((g) => g.grupo === campo);
+  return grupo ? grupo.ratio : null;
+}
+
 function renderBenchmarkHeatmap() {
   const cont = document.getElementById('benchmark-chart');
   if (!cont) return;
@@ -2607,8 +2634,11 @@ function renderBenchmarkHeatmap() {
   }
   const mapa = {};
   benchmarkRankingData.ranking.forEach((c) => { mapa[`${c.motor}__${c.variante}`] = c; });
+  const campo = benchmarkHeatmapCampo;
+  const tituloCampo = campo === '__global' ? 'ratio global' : campo;
 
-  let html = '<div class="benchmark-heatmap">';
+  let html = `<div class="benchmark-heatmap-titulo-vista">${escHtml(campo === '__global' ? 'Vista general (todos los campos)' : `Campo: ${campo}`)}</div>`;
+  html += '<div class="benchmark-heatmap">';
   html += '<div class="benchmark-heatmap-row benchmark-heatmap-header"><div class="benchmark-heatmap-celda benchmark-heatmap-esquina"></div>';
   BENCHMARK_VARIANTES.forEach((v) => { html += `<div class="benchmark-heatmap-celda benchmark-heatmap-titulo">${escHtml(benchmarkVarianteLabel(v))}</div>`; });
   html += '</div>';
@@ -2616,15 +2646,24 @@ function renderBenchmarkHeatmap() {
     html += `<div class="benchmark-heatmap-row"><div class="benchmark-heatmap-celda benchmark-heatmap-titulo">${escHtml(BENCHMARK_MOTOR_LABELS[motor] || motor)}</div>`;
     BENCHMARK_VARIANTES.forEach((variante) => {
       const c = mapa[`${motor}__${variante}`];
-      const ratio = c ? c.ratio_global : null;
-      const color = benchmarkColorPorRatio(ratio);
+      const ratio = benchmarkRatioParaCampo(c, campo);
+      const color = benchmarkColorGradiente(ratio);
       const texto = ratio != null ? `${ratio}%` : '—';
-      const titulo = c ? `${BENCHMARK_MOTOR_LABELS[motor] || motor} / ${benchmarkVarianteLabel(variante)}: ${texto} (${c.ejecuciones} ejecuciones, ${c.errores} errores)` : 'Sin datos';
-      html += `<div class="benchmark-heatmap-celda benchmark-heatmap-dato" style="background:${color};" title="${escHtml(titulo)}">${texto}</div>`;
+      const subtexto = c ? `${c.ejecuciones} facturas${c.errores ? ` · ${c.errores} err.` : ''}` : '';
+      const titulo = c ? `${BENCHMARK_MOTOR_LABELS[motor] || motor} / ${benchmarkVarianteLabel(variante)} — ${tituloCampo}: ${texto} (${c.ejecuciones} ejecuciones, ${c.errores} errores)` : 'Sin datos';
+      html += `<div class="benchmark-heatmap-celda benchmark-heatmap-dato" style="background:${color};" title="${escHtml(titulo)}">
+                 <span class="benchmark-heatmap-pct">${texto}</span>
+                 ${subtexto ? `<span class="benchmark-heatmap-sub">${escHtml(subtexto)}</span>` : ''}
+               </div>`;
     });
     html += '</div>';
   });
   html += '</div>';
+  html += `<div class="benchmark-heatmap-leyenda">
+             <span>0%</span>
+             <span class="benchmark-heatmap-leyenda-barra"></span>
+             <span>100%</span>
+           </div>`;
   cont.innerHTML = html;
 }
 

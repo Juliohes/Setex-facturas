@@ -630,7 +630,7 @@ body {
    .benchmark-barras-wrap para no romper las otras dos vistas (que no son
    una fila de columnas). */
 .benchmark-chart {
-  height: 220px; padding: 16px 12px 8px; margin-bottom: 18px; background: #fff;
+  height: 300px; padding: 16px 12px 8px; margin-bottom: 18px; background: #fff;
   border: 1px solid #e2e8f0; border-radius: 8px; overflow-x: auto; overflow-y: hidden;
 }
 .benchmark-vista-nota { font-size: 12px; color: #718096; margin: -6px 0 10px; font-style: italic; }
@@ -643,17 +643,33 @@ body {
 .benchmark-bar.nivel-medio { background: #ecc94b; }
 .benchmark-bar-label { font-size: 11px; color: #718096; margin-top: 6px; text-align: center; max-width: 76px; }
 
-/* Mapa de calor motor×variante ("quiero ver todo, cuando le doy a todos") */
-.benchmark-heatmap { display: inline-block; min-width: 100%; height: 100%; }
-.benchmark-heatmap-row { display: flex; height: calc(100% / 6); min-height: 32px; }
+/* Mapa de calor motor×variante ("quiero ver todo, cuando le doy a todos") —
+   2026-07-27: rediseño "más visual" pedido por Julio: degradado continuo
+   (ver benchmarkColorGradiente en JS), celdas redondeadas con sombra sutil
+   y efecto hover, título de la vista actual + leyenda de la escala de color. */
+.benchmark-heatmap-titulo-vista { font-size: 13px; font-weight: 700; color: #2d3748; margin-bottom: 8px; text-align: center; }
+.benchmark-heatmap { display: flex; flex-direction: column; min-width: 100%; height: calc(100% - 50px); gap: 5px; }
+.benchmark-heatmap-row { display: flex; flex: 1; gap: 5px; min-height: 34px; }
 .benchmark-heatmap-celda {
-  flex: 1; min-width: 90px; display: flex; align-items: center; justify-content: center;
-  text-align: center; font-size: 12px; border: 1px solid #fff;
+  flex: 1; min-width: 90px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center; font-size: 12px; border-radius: 8px;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 .benchmark-heatmap-titulo { flex: 0 0 130px; min-width: 130px; font-weight: 700; color: #2d3748; background: #f7fafc; }
 .benchmark-heatmap-header .benchmark-heatmap-titulo { background: #edf2f7; }
-.benchmark-heatmap-esquina { flex: 0 0 130px; min-width: 130px; background: #edf2f7; }
-.benchmark-heatmap-dato { font-weight: 700; color: #1a202c; cursor: default; }
+.benchmark-heatmap-esquina { flex: 0 0 130px; min-width: 130px; background: transparent; }
+.benchmark-heatmap-dato {
+  color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,0.4); cursor: default;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.25);
+}
+.benchmark-heatmap-dato:hover { transform: scale(1.07); box-shadow: 0 6px 16px rgba(0,0,0,0.22); z-index: 2; position: relative; }
+.benchmark-heatmap-pct { font-size: 15px; font-weight: 800; line-height: 1.15; }
+.benchmark-heatmap-sub { font-size: 9px; opacity: 0.9; margin-top: 2px; }
+.benchmark-heatmap-leyenda { display: flex; align-items: center; gap: 8px; font-size: 10px; color: #718096; margin-top: 8px; justify-content: center; }
+.benchmark-heatmap-leyenda-barra {
+  width: 180px; height: 10px; border-radius: 6px;
+  background: linear-gradient(90deg, hsl(0,68%,42%), hsl(60,68%,46%), hsl(120,68%,50%));
+}
 
 /* Gráfico de líneas (una línea por motor, 6 grupos de campo en el eje X) */
 .benchmark-lineas-wrap { display: flex; flex-direction: column; height: 100%; }
