@@ -3532,3 +3532,11 @@ Tras el backfill de las 2 variantes CLAHE huérfanas, Julio seguía viendo "Imag
 - `server.js`: añadida cabecera `Cache-Control: no-store` a todas las respuestas de este endpoint (éxito y error).
 - Confirmado con Julio en ventana de incógnito: la imagen se ve correctamente — era caché, no un bug de backend.
 - `node --check` OK, suite 239 tests (238 OK, mismo fallo preexistente no relacionado). Desplegado (rebuild + stop + up -d solo backend), 4/4 healthy, HTTPS 200.
+
+### 2026-07-27 — Fix definitivo: fetch sin caché para imagen/variante en Vista OCR
+
+Julio seguía sin ver el CLAHE de la factura #29 tras un `Ctrl+Shift+R`. Investigado con logs reales de nginx: `ocr-detail` se pedía repetidamente al servidor (304), pero `imagen-variante` no se pedía NUNCA para esa factura — confirmado que no era problema de servidor (probado con exactamente la misma consulta SQL que usa el endpoint: BD y fichero correctos para #29 igual que para #30).
+
+- Causa real: un recargado de página (`Ctrl+Shift+R`) no invalida la caché HTTP de un `fetch()` lanzado después, al abrir el modal (evento de clic, no de navegación) — el usuario no tenía forma de forzar una petición nueva desde la propia página para esa URL concreta (sin cache-buster).
+- `admin-facturas.js`: `cargarImg()` ahora pasa `{ cache: 'no-store' }` en el fetch de `/imagen` e `/imagen-variante` dentro del modal OCR — fuerza red real en cada apertura, nunca depende de que el usuario limpie caché o abra incógnito.
+- `node --check` OK. Cache-buster `admin-facturas.js?v=20260727-006`. Desplegado (rebuild + stop + up -d solo frontend), 4/4 healthy, HTTPS 200.
