@@ -76,6 +76,10 @@ async function ejecutarExtractor(nombreMotor, llamada, logger) {
       tiempo_ms: tiempoMs,
       tokens: resultado.tokens_used ?? null,
       coste_estimado_usd: COSTE_ESTIMADO_USD[nombreMotor] ?? null,
+      // 2026-07-27 (Fase 10): se conserva tal cual si el motor lo aporta
+      // (hoy solo azure.js, Fase 7) — el orquestador lo usa para la
+      // re-extracción dirigida cuando un campo queda en disputa.
+      bounding_boxes: resultado.bounding_boxes ?? null,
     };
   } catch (err) {
     return {
