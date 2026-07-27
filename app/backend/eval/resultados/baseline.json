@@ -1,0 +1,262 @@
+{
+  "generado_en": "2026-07-27T09:36:56.174Z",
+  "es_baseline": true,
+  "total_filas_agregadas": 435,
+  "resumen": [
+    {
+      "motor": "gemini_pro",
+      "variante": "actual",
+      "%_global": 75.3,
+      "ejecuciones": 29,
+      "errores": 0,
+      "tiempo_medio_s": 4.55,
+      "coste_estimado_usd": 0.01,
+      "por_grupo": {
+        "Importes": 95.3,
+        "CIF/NIF": 89.7,
+        "Fecha": 93.1,
+        "Nº factura": 86.2,
+        "Nombre": 43.1,
+        "Tramos IVA": 21.4
+      }
+    },
+    {
+      "motor": "gemini_pro",
+      "variante": "original",
+      "%_global": 74.3,
+      "ejecuciones": 29,
+      "errores": 0,
+      "tiempo_medio_s": 4.63,
+      "coste_estimado_usd": 0.01,
+      "por_grupo": {
+        "Importes": 95.3,
+        "CIF/NIF": 89.7,
+        "Fecha": 93.1,
+        "Tramos IVA": 21.4,
+        "Nº factura": 82.8,
+        "Nombre": 39.7
+      }
+    },
+    {
+      "motor": "gemini_pro",
+      "variante": "contraste",
+      "%_global": 74,
+      "ejecuciones": 29,
+      "errores": 0,
+      "tiempo_medio_s": 4.47,
+      "coste_estimado_usd": 0.01,
+      "por_grupo": {
+        "Importes": 95.3,
+        "CIF/NIF": 86.2,
+        "Fecha": 89.7,
+        "Nº factura": 82.8,
+        "Nombre": 39.7,
+        "Tramos IVA": 28.6
+      }
+    },
+    {
+      "motor": "gemini_flash",
+      "variante": "actual",
+      "%_global": 72.2,
+      "ejecuciones": 29,
+      "errores": 0,
+      "tiempo_medio_s": 3.73,
+      "coste_estimado_usd": 0.006,
+      "por_grupo": {
+        "Importes": 96.5,
+        "CIF/NIF": 89.7,
+        "Fecha": 93.1,
+        "Nº factura": 82.8,
+        "Nombre": 29.3,
+        "Tramos IVA": 17.9
+      }
+    },
+    {
+      "motor": "gemini_flash",
+      "variante": "original",
+      "%_global": 71.9,
+      "ejecuciones": 29,
+      "errores": 0,
+      "tiempo_medio_s": 3.96,
+      "coste_estimado_usd": 0.006,
+      "por_grupo": {
+        "Importes": 96.5,
+        "CIF/NIF": 86.2,
+        "Fecha": 96.6,
+        "Nº factura": 75.9,
+        "Nombre": 29.3,
+        "Tramos IVA": 25
+      }
+    },
+    {
+      "motor": "gemini_flash",
+      "variante": "contraste",
+      "%_global": 71.9,
+      "ejecuciones": 29,
+      "errores": 0,
+      "tiempo_medio_s": 3.88,
+      "coste_estimado_usd": 0.006,
+      "por_grupo": {
+        "Importes": 95.3,
+        "CIF/NIF": 86.2,
+        "Fecha": 96.6,
+        "Nº factura": 79.3,
+        "Nombre": 29.3,
+        "Tramos IVA": 25
+      }
+    },
+    {
+      "motor": "mistral",
+      "variante": "actual",
+      "%_global": 65.3,
+      "ejecuciones": 29,
+      "errores": 0,
+      "tiempo_medio_s": 5.69,
+      "coste_estimado_usd": 0.004,
+      "por_grupo": {
+        "Importes": 95.3,
+        "CIF/NIF": 65.5,
+        "Fecha": 89.7,
+        "Nº factura": 58.6,
+        "Nombre": 24.1,
+        "Tramos IVA": 39.3
+      }
+    },
+    {
+      "motor": "mistral",
+      "variante": "contraste",
+      "%_global": 64.9,
+      "ejecuciones": 29,
+      "errores": 0,
+      "tiempo_medio_s": 5.62,
+      "coste_estimado_usd": 0.004,
+      "por_grupo": {
+        "Importes": 94.2,
+        "CIF/NIF": 65.5,
+        "Fecha": 89.7,
+        "Tramos IVA": 39.3,
+        "Nº factura": 65.5,
+        "Nombre": 20.7
+      }
+    },
+    {
+      "motor": "mistral",
+      "variante": "original",
+      "%_global": 62.8,
+      "ejecuciones": 29,
+      "errores": 1,
+      "tiempo_medio_s": 5.64,
+      "coste_estimado_usd": 0.004,
+      "por_grupo": {
+        "Importes": 90.7,
+        "CIF/NIF": 63.8,
+        "Fecha": 89.7,
+        "Nº factura": 55.2,
+        "Nombre": 22.4,
+        "Tramos IVA": 39.3
+      }
+    },
+    {
+      "motor": "openai",
+      "variante": "contraste",
+      "%_global": 56.3,
+      "ejecuciones": 29,
+      "errores": 3,
+      "tiempo_medio_s": 5.22,
+      "coste_estimado_usd": 0.007,
+      "por_grupo": {
+        "Importes": 76.7,
+        "CIF/NIF": 39.7,
+        "Fecha": 75.9,
+        "Nº factura": 58.6,
+        "Nombre": 48.3,
+        "Tramos IVA": 21.4
+      }
+    },
+    {
+      "motor": "openai",
+      "variante": "actual",
+      "%_global": 55.6,
+      "ejecuciones": 29,
+      "errores": 3,
+      "tiempo_medio_s": 4.97,
+      "coste_estimado_usd": 0.007,
+      "por_grupo": {
+        "Importes": 76.7,
+        "CIF/NIF": 29.3,
+        "Fecha": 86.2,
+        "Nº factura": 62.1,
+        "Nombre": 44.8,
+        "Tramos IVA": 28.6
+      }
+    },
+    {
+      "motor": "openai",
+      "variante": "original",
+      "%_global": 53.8,
+      "ejecuciones": 29,
+      "errores": 3,
+      "tiempo_medio_s": 4.92,
+      "coste_estimado_usd": 0.007,
+      "por_grupo": {
+        "Importes": 76.7,
+        "CIF/NIF": 34.5,
+        "Fecha": 79.3,
+        "Tramos IVA": 17.9,
+        "Nº factura": 58.6,
+        "Nombre": 41.4
+      }
+    },
+    {
+      "motor": "azure",
+      "variante": "actual",
+      "%_global": 38.5,
+      "ejecuciones": 29,
+      "errores": 8,
+      "tiempo_medio_s": 4.96,
+      "coste_estimado_usd": 0.0015,
+      "por_grupo": {
+        "Importes": 51.2,
+        "CIF/NIF": 27.6,
+        "Fecha": 62.1,
+        "Nº factura": 55.2,
+        "Nombre": 12.1,
+        "Tramos IVA": 35.7
+      }
+    },
+    {
+      "motor": "azure",
+      "variante": "contraste",
+      "%_global": 34.7,
+      "ejecuciones": 29,
+      "errores": 11,
+      "tiempo_medio_s": 4.1,
+      "coste_estimado_usd": 0.0015,
+      "por_grupo": {
+        "Importes": 44.2,
+        "CIF/NIF": 27.6,
+        "Fecha": 55.2,
+        "Tramos IVA": 42.9,
+        "Nº factura": 44.8,
+        "Nombre": 8.6
+      }
+    },
+    {
+      "motor": "azure",
+      "variante": "original",
+      "%_global": 28.5,
+      "ejecuciones": 29,
+      "errores": 14,
+      "tiempo_medio_s": 3.45,
+      "coste_estimado_usd": 0.0015,
+      "por_grupo": {
+        "Importes": 36,
+        "CIF/NIF": 22.4,
+        "Fecha": 51.7,
+        "Nº factura": 41.4,
+        "Nombre": 6.9,
+        "Tramos IVA": 25
+      }
+    }
+  ]
+}

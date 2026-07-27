@@ -16,5 +16,11 @@
   "_IMAGEN_VARIANTE": "Bloque 5 (2026-07-22): compara el motor primario sobre la foto original vs una variante con contraste local CLAHE + brillo/saturación reducidos. Automático en cada factura si está activo (decisión de Julio) — coste real de UNA llamada extra al motor primario por factura. Nunca afecta la respuesta al usuario (fire-and-forget). Ver panel admin → ver facturas → OCR.",
   "pipeline_v2_imagen_variante_enabled": true,
   "_BENCHMARK": "Benchmark multi-imagen × multi-motor (2026-07-23, petición de Julio): 3 variantes de la foto (actual/original/contraste) × TODOS los motores OCR (openai, azure, gemini_flash, gemini_pro, mistral) = hasta 15 llamadas por factura. Coste real asumido explícitamente. Activo desde el principio para las primeras facturas que lleguen — también disparable a mano sobre las últimas facturas ya registradas desde el panel admin (botón 'Benchmark IA', solo tech_admin). Nunca afecta al pipeline real ni a lo que ve el usuario.",
-  "pipeline_v2_benchmark_enabled": true
+  "pipeline_v2_benchmark_enabled": true,
+  "_OCR_EXTRACCION_V2": "Migración a pipeline por capas (2026-07-27, PROMPT-PIPELINE-OCR-FACTURAS-V2.md, Fase 1). NOTA: prefijo 'ocr_extraccion_v2_' a propósito, NO 'pipeline_v2_' — ese nombre ya está en uso para el routing/validación de arriba (sistema distinto, activo desde 2026-07-22). Todo en false/vacío por defecto: el pipeline actual (ocr/index.js) sigue siendo la ruta real y el fallback automático ante cualquier excepción del nuevo. ocr_extraccion_v2_modelos: motores que participan en el nuevo árbitro por campo cuando se active. Umbrales de confianza global (0-1) para las 3 bandas de Fase 8: >=auto -> auto_aprobada; <revision -> ilegible/recaptura; en medio -> pendiente_revision.",
+  "ocr_extraccion_v2_enabled": false,
+  "ocr_extraccion_v2_shadow_mode": false,
+  "ocr_extraccion_v2_modelos": ["azure", "gemini_flash", "openai"],
+  "ocr_extraccion_v2_umbral_auto": 0.9,
+  "ocr_extraccion_v2_umbral_revision": 0.6
 }
