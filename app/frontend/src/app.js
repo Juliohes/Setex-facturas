@@ -606,35 +606,13 @@ function ensureDocScanLibs() {
     return docScanLibsPromise;
 }
 
-// Indicador visible de si el modo documento está activo (2026-07-23). Antes
-// fallaba en silencio: si opencv.js/jscanify no cargaban a tiempo, no había
-// forma de saberlo sin abrir la consola del navegador. Ahora se ve un texto
-// explícito en la barra superior de la cámara.
-function setDocScanStatus(state) {
-    const el = document.getElementById('docscan-status');
-    if (!el) return;
-    el.classList.remove('is-active', 'is-unavailable');
-    if (state === 'loading') {
-        el.textContent = 'Modo documento: cargando…';
-    } else if (state === 'active') {
-        el.textContent = 'Modo documento: ✓ activo';
-        el.classList.add('is-active');
-    } else {
-        el.textContent = 'Modo documento: no disponible';
-        el.classList.add('is-unavailable');
-    }
-}
-
 function startDocScanLoop() {
-    setDocScanStatus('loading');
     ensureDocScanLibs().then(() => {
         docScanActive = true;
-        setDocScanStatus('active');
         docScanLoopTick();
     }).catch(() => {
-        // Degradación silenciosa para la CAPTURA (sigue funcionando igual),
-        // pero ya no es silenciosa para el USUARIO: el indicador avisa.
-        setDocScanStatus('unavailable');
+        // Degradación silenciosa: el contorno guía no aparece, pero la
+        // captura estándar sigue funcionando igual.
     });
 }
 
@@ -693,17 +671,17 @@ function docScanLoopTick() {
     docScanLoopTimer = setTimeout(docScanLoopTick, 400);
 }
 
-// ── Flash / linterna (2026-07-23) ────────────────────────────────────────────
+// ── Flash / linterna (2026-07-23, por defecto ON desde 2026-07-24) ──────────
 // MediaStreamTrack.applyConstraints({torch}) — soportado en Chrome Android
 // (desde 2017) y en Safari iOS 17.4+ (desde 2024, pese al mito extendido de
 // que Apple nunca lo permite: solo la API ImageCapture completa está sin
 // soportar en WebKit, el control de torch vía applyConstraints es aparte).
 // Sin soporte en Firefox Android. El botón SOLO se muestra si el track
-// activo confirma la capacidad — nunca se ofrece un control que no vaya a
-// funcionar. Nunca se activa solo: siempre requiere pulsación explícita.
+// activo confirma la capacidad. Se enciende automáticamente al abrir la
+// cámara (si el dispositivo lo soporta); el usuario puede apagarlo a mano.
 let flashOn = false;
 
-function setupFlashButton(track) {
+async function setupFlashButton(track) {
     const btn = document.getElementById('btn-toggle-flash');
     if (!btn) return;
     flashOn = false;
@@ -726,6 +704,14 @@ function setupFlashButton(track) {
             console.warn('[Flash] No se pudo cambiar el estado de la linterna:', e.message);
         }
     };
+    try {
+        await track.applyConstraints({ advanced: [{ torch: true }] });
+        flashOn = true;
+        btn.classList.add('is-on');
+        btn.setAttribute('aria-label', 'Desactivar linterna');
+    } catch (e) {
+        console.warn('[Flash] No se pudo activar la linterna por defecto:', e.message);
+    }
 }
 
 function resetFlashButton() {
@@ -774,8 +760,6 @@ function closeCamera() {
         cameraStream = null;
     }
     resetFlashButton();
-    const statusEl = document.getElementById('docscan-status');
-    if (statusEl) { statusEl.textContent = ''; statusEl.classList.remove('is-active', 'is-unavailable'); }
     document.getElementById('camera-overlay').style.display = 'none';
 }
 

@@ -286,9 +286,7 @@
         <!-- Camera Overlay -->
         <div id="camera-overlay" style="display:none">
             <div class="camera-top-bar">
-                <span>Encuadra la factura en el marco</span>
-                <span id="docscan-status" class="docscan-status" aria-live="polite"></span>
-                <button id="btn-toggle-flash" class="camera-flash-btn" style="display:none;" aria-label="Activar linterna" title="Activar/desactivar flash">🔦</button>
+                <span class="camera-tip">⚠️ No debe salir sombras ni brillos.</span>
                 <button id="btn-close-camera" class="camera-close-btn">&times;</button>
             </div>
             <div class="camera-viewfinder">
@@ -301,13 +299,16 @@
                     <div class="guide-corner br"></div>
                 </div>
             </div>
-            <button id="btn-take-photo" class="btn-capture">Capturar</button>
+            <div class="camera-capture-row">
+                <button id="btn-take-photo" class="btn-capture">Capturar</button>
+                <button id="btn-toggle-flash" class="camera-flash-btn" style="display:none;" aria-label="Desactivar linterna" title="Activar/desactivar flash">🔦</button>
+            </div>
             <canvas id="camera-canvas" style="display:none"></canvas>
         </div>
     </div>
     <script src="auth.js?v=20260414-004"></script>
     <script src="cif-validator.js?v=20260713-001"></script>
-    <script src="app.js?v=20260723-001"></script>
+    <script src="app.js?v=20260724-001"></script>
     <script>
         // ── Service Worker: registro + detección de actualizaciones ─────────
         if ('serviceWorker' in navigator) {
