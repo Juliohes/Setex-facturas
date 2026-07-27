@@ -3512,3 +3512,14 @@ Julio detectó dos problemas en el modal "Vista OCR" del panel admin (comparaci�
 - Bug adicional en frontend: `authFetch(...).then(r => r.blob())` no comprobaba `r.ok` — en un 404 convertía el JSON de error en "imagen" e intentaba pintarlo (icono roto sin pasar por el `catch`). Corregido: comprueba estado HTTP y sustituye la imagen por un mensaje visible si no está disponible.
 - Las 4 filas huérfanas ya existentes en BD no son recuperables (fichero físico inexistente en cualquier ruta) — coste hundido de pruebas de shadow-mode, sin impacto en facturas reales.
 - `node --check` OK en ambos ficheros. Suite completa: 239 tests, 238 OK (mismo fallo preexistente y no relacionado: paridad v3).
+
+### 2026-07-27 — Fix: carrera auto-confirm en variante CLAHE, clasificación compra/venta y consenso por nombre
+
+Segunda ronda de correcciones en la Vista OCR, tras detectar que el fix anterior (mover el `.variante-contraste.jpg` en el rename de `upload-confirm`) no cubría el caso de auto-confirmación rápida.
+
+- `server.js` (bloque 5, `upload-preview`): la generación de la variante puede tardar más que un auto-confirm inmediato — si `upload-confirm` ya se ejecutó (y no encontró el fichero para moverlo) antes de que terminara la comparación, ahora esta comprueba al resolver si la factura ya se confirmó y reubica el fichero a su ruta final por sí misma.
+- `server.js` (`upload-preview`, detección de `invoiceType`): se re-derivaba comparando el NIF de la empresa del usuario contra campos leídos por OCR, en vez de usar `invoiceTypeFromUser` (selección explícita ya fiable, usada correctamente en `upload-confirm`). Si el OCR leía mal el NIF del propio lado del usuario, la factura se clasificaba al revés y la sustitución determinista de identidad pisaba el dato correcto de la contraparte en vez del propio. Ahora usa `invoiceTypeFromUser` como fuente de verdad; la comparación OCR-vs-NIF queda solo como aviso de discrepancia en el log.
+- Auditoría de solo lectura sobre las 29 facturas existentes con empresa de usuario conocida: 0 facturas tipo venta, 0 casos de ambos lados iguales, 0 casos de clasificación fallida — el bug era latente pero no había corrompido ningún dato ya persistido. Sin correcciones retroactivas necesarias.
+- Backfill puntual: regeneradas las 2 variantes CLAHE huérfanas de facturas ya confirmadas (jorale60, IDs 29 y 30) a partir del fichero original (aún en disco) y corregido `ruta_variante` en BD.
+- `admin-facturas.js`: los badges de "consenso" (campos simples y Tramos IVA) ahora listan los motores concretos que coincidieron (ej. "consenso: OpenAI + Azure DI") en vez de solo decir "consenso".
+- `node --check` OK, suite 239 tests (238 OK, mismo fallo preexistente no relacionado: paridad v3). Cache-buster `admin-facturas.js?v=20260727-005`. Desplegado (rebuild + stop + up -d backend/frontend), 4/4 healthy, HTTPS 200.
