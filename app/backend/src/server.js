@@ -3059,6 +3059,10 @@ app.get('/api/admin/facturas/:id/imagen', authenticateToken, requireAdmin, async
 // (bloque 5, 2026-07-22), solo tech_admin. No existe para facturas procesadas
 // sin el flag pipeline_v2_imagen_variante_enabled activo.
 app.get('/api/admin/facturas/:id/imagen-variante', authenticateToken, requireAdmin, async (req, res) => {
+  // Sin esto, un 404 (variante aún no generada) puede quedar cacheado por el
+  // navegador para esta URL exacta (sin cache-buster, a diferencia de los
+  // bundles JS) y seguir mostrándose aunque la variante ya esté disponible.
+  res.setHeader('Cache-Control', 'no-store');
   try {
     if (!isTechAdmin(req.user.email)) {
       return res.status(403).json({ error: 'Acceso restringido a administradores técnicos.' });
