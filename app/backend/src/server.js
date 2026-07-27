@@ -17,7 +17,7 @@ const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const sharp = require('sharp');
 const { extractInvoiceOCR, extractCIFOnlyOCR, compararVarianteContraste } = require('./ocr/index');
-const { ejecutarBenchmarkCompleto } = require('./ocr/benchmark');
+const { ejecutarBenchmarkCompleto, GRUPOS_CAMPOS } = require('./ocr/benchmark');
 
 // ── Módulos refactorizados (Strangler-Fig, pasos 1-20 completados) ────────────
 // Ubicación objetivo: domain/, services/, repositories/, middleware/, lib/, config/
@@ -481,6 +481,10 @@ async function initDB() {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_benchmark_unico ON ocr_benchmark_resultados(upload_id, variante, motor);
     CREATE INDEX IF NOT EXISTS idx_benchmark_upload ON ocr_benchmark_resultados(upload_id);
+    -- 2026-07-24: acierto/fallo por campo (CIF, nombre, fecha, importes,
+    -- tramos IVA...), no solo el ratio agregado — permite el ranking por
+    -- campo del panel sin volver a llamar a ninguna IA.
+    ALTER TABLE ocr_benchmark_resultados ADD COLUMN IF NOT EXISTS detalle_campos JSONB NOT NULL DEFAULT '{}';
   `);
 
   // Backfill: uploads anteriores sin upload_status → 'active'
@@ -2594,13 +2598,14 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
           benchCfg, confirmadoBench, logger
         ).then((resultados) => Promise.all(resultados.map((r) => pool.query(
           `INSERT INTO ocr_benchmark_resultados
-             (upload_id, variante, motor, campos, es_factura_valida, tiempo_ms, error, aciertos, comparables)
-           VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9)
+             (upload_id, variante, motor, campos, es_factura_valida, tiempo_ms, error, aciertos, comparables, detalle_campos)
+           VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9,$10::jsonb)
            ON CONFLICT (upload_id, variante, motor) DO UPDATE SET
              campos = EXCLUDED.campos, es_factura_valida = EXCLUDED.es_factura_valida,
              tiempo_ms = EXCLUDED.tiempo_ms, error = EXCLUDED.error,
-             aciertos = EXCLUDED.aciertos, comparables = EXCLUDED.comparables, creado_en = NOW()`,
-          [uploadId, r.variante, r.motor, JSON.stringify(r.campos), r.es_factura_valida, r.tiempo_ms, r.error, r.aciertos, r.comparables]
+             aciertos = EXCLUDED.aciertos, comparables = EXCLUDED.comparables,
+             detalle_campos = EXCLUDED.detalle_campos, creado_en = NOW()`,
+          [uploadId, r.variante, r.motor, JSON.stringify(r.campos), r.es_factura_valida, r.tiempo_ms, r.error, r.aciertos, r.comparables, JSON.stringify(r.detalle || {})]
         ))))
           .then(() => logger.info(`[Benchmark] Completado para upload ${uploadId}`))
           .catch((err) => logger.error('[Benchmark] Error ejecutando benchmark automático', { error: err.message, upload_id: uploadId }));
@@ -3052,13 +3057,14 @@ app.post('/api/admin/facturas/benchmark/ultimas', authenticateToken, requireAdmi
           for (const r of resultados) {
             await pool.query(
               `INSERT INTO ocr_benchmark_resultados
-                 (upload_id, variante, motor, campos, es_factura_valida, tiempo_ms, error, aciertos, comparables)
-               VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9)
+                 (upload_id, variante, motor, campos, es_factura_valida, tiempo_ms, error, aciertos, comparables, detalle_campos)
+               VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9,$10::jsonb)
                ON CONFLICT (upload_id, variante, motor) DO UPDATE SET
                  campos = EXCLUDED.campos, es_factura_valida = EXCLUDED.es_factura_valida,
                  tiempo_ms = EXCLUDED.tiempo_ms, error = EXCLUDED.error,
-                 aciertos = EXCLUDED.aciertos, comparables = EXCLUDED.comparables, creado_en = NOW()`,
-              [f.id, r.variante, r.motor, JSON.stringify(r.campos), r.es_factura_valida, r.tiempo_ms, r.error, r.aciertos, r.comparables]
+                 aciertos = EXCLUDED.aciertos, comparables = EXCLUDED.comparables,
+                 detalle_campos = EXCLUDED.detalle_campos, creado_en = NOW()`,
+              [f.id, r.variante, r.motor, JSON.stringify(r.campos), r.es_factura_valida, r.tiempo_ms, r.error, r.aciertos, r.comparables, JSON.stringify(r.detalle || {})]
             );
           }
           logger.info(`[Benchmark] Retroactivo completado para upload ${f.id}`);
@@ -3097,7 +3103,7 @@ app.get('/api/admin/facturas/benchmark', authenticateToken, requireAdmin, async 
     const result = await pool.query(
       `SELECT b.upload_id, u.proveedor_nombre, u.total_factura, u.fecha_emision, u.uploaded_at,
               b.variante, b.motor, b.campos, b.es_factura_valida, b.tiempo_ms, b.error,
-              b.aciertos, b.comparables, b.creado_en
+              b.aciertos, b.comparables, b.detalle_campos, b.creado_en
        FROM ocr_benchmark_resultados b
        JOIN uploads u ON u.id = b.upload_id
        ORDER BY u.uploaded_at DESC, b.upload_id DESC, b.variante, b.motor
@@ -3107,6 +3113,73 @@ app.get('/api/admin/facturas/benchmark', authenticateToken, requireAdmin, async 
   } catch (err) {
     logger.error('[benchmark] Error:', err.message);
     res.status(500).json({ error: 'Error al obtener resultados del benchmark' });
+  }
+});
+
+/** GET /api/admin/facturas/benchmark/ranking — ranking profesional agregado
+ * (2026-07-24, petición de Julio: "un único análisis fino, con todos los
+ * valores, incluso saber si uno falla más en unos campos u otros"). Agrega
+ * TODO lo ya almacenado en ocr_benchmark_resultados (sin volver a llamar a
+ * ninguna IA): % de acierto global y desglose por campo/grupo (CIF, nombre,
+ * fecha, importes, tramos IVA) para cada combinación motor×variante. */
+app.get('/api/admin/facturas/benchmark/ranking', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    if (!isTechAdmin(req.user.email)) {
+      return res.status(403).json({ error: 'Acceso restringido a administradores técnicos.' });
+    }
+    const result = await pool.query(
+      `SELECT motor, variante, aciertos, comparables, detalle_campos, tiempo_ms, error
+       FROM ocr_benchmark_resultados`
+    );
+
+    const claveCombo = (motor, variante) => `${motor}__${variante}`;
+    const combos = {};
+    for (const row of result.rows) {
+      const key = claveCombo(row.motor, row.variante);
+      if (!combos[key]) {
+        combos[key] = {
+          motor: row.motor, variante: row.variante,
+          ejecuciones: 0, errores: 0, tiempoTotalMs: 0, tiempoMuestras: 0,
+          aciertos: 0, comparables: 0,
+          grupos: {}, // grupo -> { aciertos, comparables }
+        };
+      }
+      const c = combos[key];
+      c.ejecuciones++;
+      if (row.error) c.errores++;
+      if (row.tiempo_ms != null) { c.tiempoTotalMs += row.tiempo_ms; c.tiempoMuestras++; }
+      c.aciertos += row.aciertos || 0;
+      c.comparables += row.comparables || 0;
+      const detalle = row.detalle_campos || {};
+      for (const [campo, acierto] of Object.entries(detalle)) {
+        const grupo = GRUPOS_CAMPOS[campo] || campo;
+        if (!c.grupos[grupo]) c.grupos[grupo] = { aciertos: 0, comparables: 0 };
+        c.grupos[grupo].comparables++;
+        if (acierto) c.grupos[grupo].aciertos++;
+      }
+    }
+
+    const ranking = Object.values(combos).map((c) => ({
+      motor: c.motor,
+      variante: c.variante,
+      ejecuciones: c.ejecuciones,
+      errores: c.errores,
+      tiempo_medio_s: c.tiempoMuestras ? +(c.tiempoTotalMs / c.tiempoMuestras / 1000).toFixed(2) : null,
+      ratio_global: c.comparables ? +((c.aciertos / c.comparables) * 100).toFixed(1) : null,
+      aciertos: c.aciertos,
+      comparables: c.comparables,
+      por_grupo: Object.entries(c.grupos).map(([grupo, g]) => ({
+        grupo,
+        ratio: g.comparables ? +((g.aciertos / g.comparables) * 100).toFixed(1) : null,
+        aciertos: g.aciertos,
+        comparables: g.comparables,
+      })).sort((a, b) => a.grupo.localeCompare(b.grupo)),
+    })).sort((a, b) => (b.ratio_global ?? -1) - (a.ratio_global ?? -1));
+
+    res.json({ ranking, total_filas: result.rows.length });
+  } catch (err) {
+    logger.error('[benchmark-ranking] Error:', err.message);
+    res.status(500).json({ error: 'Error al calcular el ranking del benchmark' });
   }
 });
 

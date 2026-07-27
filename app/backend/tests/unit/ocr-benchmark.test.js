@@ -51,6 +51,17 @@ describe('puntuarContraConfirmado', () => {
     assert.equal(r.comparables, 0);
     assert.equal(r.aciertos, 0);
   });
+
+  test('detalle por campo: acierto/fallo booleano solo de los comparables', () => {
+    const campos = { proveedor_nif: 'B72327008', proveedor_nombre: 'ACME SL', total: '121,00', iva_porcentaje: '21' };
+    const r = puntuarContraConfirmado(campos, confirmado);
+    assert.deepEqual(r.detalle, {
+      proveedor_nif: false,
+      proveedor_nombre: true,
+      total: true,
+      iva_porcentaje: true,
+    });
+  });
 });
 
 describe('normalizarParaComparar', () => {

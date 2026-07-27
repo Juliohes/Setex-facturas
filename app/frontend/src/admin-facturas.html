@@ -6,7 +6,7 @@
   <title>SETEX — Panel de Administración</title>
   <link rel="icon" href="favicon-admin.svg" type="image/svg+xml">
   <link rel="stylesheet" href="tabulator.min.css">
-  <link rel="stylesheet" href="admin-facturas.css?v=20260411-001">
+  <link rel="stylesheet" href="admin-facturas.css?v=20260724-001">
 </head>
 <body>
 
@@ -286,35 +286,57 @@
   </div>
 
   <div id="benchmark-modal" class="modal-overlay" style="display:none;">
-    <div class="modal-card" style="width:min(1300px,97vw);max-height:92vh;overflow-y:auto;">
+    <div class="modal-card benchmark-modal-card">
       <div class="modal-header">
         <h3>🧪 Benchmark IA — 3 imágenes × todos los motores</h3>
         <button id="benchmark-modal-close" class="modal-close">&times;</button>
       </div>
-      <div class="modal-body" style="padding:16px 20px;">
-        <p style="color:#718096;font-size:13px;margin:0 0 12px;">
+      <div class="modal-body benchmark-modal-body">
+        <p class="benchmark-intro">
           Cada factura se prueba con 3 versiones de la foto (<strong>actual</strong> = la que ya se
           optimiza hoy · <strong>original</strong> = sin reducir píxeles · <strong>contraste</strong> =
           contraste local + brillo/saturación mínimos, sobre la original) contra
-          <strong>todos</strong> los motores OCR disponibles. La puntuación (aciertos/comparables)
-          compara cada combinación contra lo que confirmaste tú — verde = mejor resultado de esa factura.
-          Coste real: hasta 15 llamadas por factura.
+          <strong>todos</strong> los motores OCR disponibles, puntuado campo a campo contra lo que
+          confirmaste tú. Coste real: hasta 15 llamadas por factura.
         </p>
-        <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:14px;padding:10px 12px;background:#f7fafc;border:1px solid #e2e8f0;border-radius:6px;">
-          <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:#2d3748;cursor:pointer;">
-            <input type="checkbox" id="benchmark-toggle" style="width:16px;height:16px;cursor:pointer;">
+        <div class="benchmark-controls">
+          <label class="benchmark-toggle-label">
+            <input type="checkbox" id="benchmark-toggle">
             Automático en facturas nuevas
           </label>
           <button id="btn-benchmark-ultimas" class="btn-primary" style="width:auto;">▶ Ejecutar sobre las últimas 10 facturas</button>
           <span id="benchmark-status" style="font-size:12px;color:#718096;"></span>
         </div>
-        <div id="benchmark-table"></div>
+
+        <div class="benchmark-tabs">
+          <button id="tab-benchmark-ranking" class="benchmark-tab is-active">📊 Ranking profesional</button>
+          <button id="tab-benchmark-detalle" class="benchmark-tab">📋 Detalle por factura</button>
+        </div>
+
+        <div id="benchmark-view-ranking" class="benchmark-view">
+          <div class="benchmark-chart-controls">
+            <div class="benchmark-chip-group">
+              <span class="benchmark-chip-label">Motor:</span>
+              <div id="benchmark-chips-motor" class="benchmark-chips"></div>
+            </div>
+            <div class="benchmark-chip-group">
+              <span class="benchmark-chip-label">Variante:</span>
+              <div id="benchmark-chips-variante" class="benchmark-chips"></div>
+            </div>
+          </div>
+          <div id="benchmark-chart" class="benchmark-chart"></div>
+          <div id="benchmark-ranking-table"></div>
+        </div>
+
+        <div id="benchmark-view-detalle" class="benchmark-view" style="display:none;">
+          <div id="benchmark-table"></div>
+        </div>
       </div>
     </div>
   </div>
 
   <script src="tabulator.min.js"></script>
   <script src="auth.js?v=20260414-003"></script>
-  <script src="admin-facturas.js?v=20260723-006"></script>
+  <script src="admin-facturas.js?v=20260724-001"></script>
 </body>
 </html>

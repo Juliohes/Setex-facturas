@@ -48,6 +48,22 @@ const CAMPOS_PUNTUABLES = [
   'iva_porcentaje', 'cuota_iva',
 ];
 
+// 2026-07-24: agrupación de CAMPOS_PUNTUABLES para el ranking por campo del
+// panel (Julio pidió saber si un motor falla más en CIF, nombre, fecha,
+// importes o tramos de IVA — no solo un ratio agregado).
+const GRUPOS_CAMPOS = {
+  proveedor_nif:   'CIF/NIF',
+  receptor_nif:    'CIF/NIF',
+  proveedor_nombre:'Nombre',
+  receptor_nombre: 'Nombre',
+  numero_factura:  'Nº factura',
+  fecha_emision:   'Fecha',
+  total:           'Importes',
+  base_imponible:  'Importes',
+  cuota_iva:       'Importes',
+  iva_porcentaje:  'Tramos IVA',
+};
+
 function normalizarParaComparar(v) {
   if (v == null) return null;
   return String(v).trim().toUpperCase().replace(/^(-?\d+)[,.](\d+)$/, '$1.$2');
@@ -118,18 +134,26 @@ async function ejecutarMotor(motor, imagen, filePath, mimeType, context, cfg) {
  * Puntúa un resultado (campos extraídos) contra los valores confirmados por
  * el humano — nº de campos clave que coinciden. Sirve para declarar "quién
  * ganó" en cada factura sin depender de opinión subjetiva.
+ *
+ * `detalle` (2026-07-24): además del ratio agregado, guarda acierto/fallo
+ * POR CAMPO (solo de los campos con valor confirmado, es decir comparables)
+ * para poder construir después un ranking por campo (¿qué motor falla más
+ * en CIF? ¿en fecha? ¿en tramos de IVA?) sin volver a llamar a ninguna IA.
  */
 function puntuarContraConfirmado(campos, confirmado) {
   let aciertos = 0;
   let comparables = 0;
+  const detalle = {};
   for (const campo of CAMPOS_PUNTUABLES) {
     const vConfirmado = confirmado[campo];
     if (vConfirmado == null || vConfirmado === '') continue; // sin referencia, no puntúa
     comparables++;
     const vExtraido = campo === 'total' ? (campos.total_factura ?? campos.total) : campos[campo];
-    if (normalizarParaComparar(vExtraido) === normalizarParaComparar(vConfirmado)) aciertos++;
+    const acierto = normalizarParaComparar(vExtraido) === normalizarParaComparar(vConfirmado);
+    if (acierto) aciertos++;
+    detalle[campo] = acierto;
   }
-  return { aciertos, comparables };
+  return { aciertos, comparables, detalle };
 }
 
 /**
@@ -178,4 +202,5 @@ module.exports = {
   VARIANTES,
   MOTORES,
   CAMPOS_PUNTUABLES,
+  GRUPOS_CAMPOS,
 };

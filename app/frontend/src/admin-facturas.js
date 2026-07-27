@@ -2367,6 +2367,180 @@ async function openShadowModal() {
 // asumido explícitamente — solo tech_admin, "activable" desde el propio panel.
 let benchmarkTable = null;
 
+// ── Ranking profesional + gráfico interactivo (2026-07-24) ──────────────────
+// Petición de Julio: un único análisis fino, con desglose POR CAMPO (no solo
+// el ratio agregado) — ¿un motor falla más en CIF? ¿en fecha? ¿en tramos de
+// IVA? Los datos vienen ya agregados del backend (GET .../benchmark/ranking),
+// sin volver a llamar a ninguna IA. El gráfico es vanilla JS/CSS (barras) —
+// sin vendorizar ninguna librería nueva, coherente con el resto del stack.
+const BENCHMARK_MOTORES = ['openai', 'azure', 'gemini_flash', 'gemini_pro', 'mistral'];
+const BENCHMARK_VARIANTES = ['actual', 'original', 'contraste'];
+const BENCHMARK_MOTOR_LABELS = {
+  openai: 'OpenAI', azure: 'Azure DI', gemini_flash: 'Gemini Flash',
+  gemini_pro: 'Gemini Pro', mistral: 'Mistral',
+};
+const BENCHMARK_ORDEN_GRUPOS = ['CIF/NIF', 'Nombre', 'Fecha', 'Nº factura', 'Importes', 'Tramos IVA'];
+
+let benchmarkRankingData = null;
+let benchmarkRankingTable = null;
+let benchmarkFiltroMotor = '__todos';
+let benchmarkFiltroVariante = '__todas';
+
+function initBenchmarkTabs() {
+  const tabRanking = document.getElementById('tab-benchmark-ranking');
+  const tabDetalle = document.getElementById('tab-benchmark-detalle');
+  const viewRanking = document.getElementById('benchmark-view-ranking');
+  const viewDetalle = document.getElementById('benchmark-view-detalle');
+  if (!tabRanking || !tabDetalle || !viewRanking || !viewDetalle) return;
+  tabRanking.addEventListener('click', () => {
+    tabRanking.classList.add('is-active');
+    tabDetalle.classList.remove('is-active');
+    viewRanking.style.display = '';
+    viewDetalle.style.display = 'none';
+  });
+  tabDetalle.addEventListener('click', () => {
+    tabDetalle.classList.add('is-active');
+    tabRanking.classList.remove('is-active');
+    viewDetalle.style.display = '';
+    viewRanking.style.display = 'none';
+  });
+}
+
+function initBenchmarkChips() {
+  const contMotor = document.getElementById('benchmark-chips-motor');
+  const contVariante = document.getElementById('benchmark-chips-variante');
+  if (!contMotor || !contVariante) return;
+
+  const motores = [{ key: '__todos', label: 'Todos' }, ...BENCHMARK_MOTORES.map((m) => ({ key: m, label: BENCHMARK_MOTOR_LABELS[m] || m }))];
+  const variantes = [{ key: '__todas', label: 'Todas' }, ...BENCHMARK_VARIANTES.map((v) => ({ key: v, label: benchmarkVarianteLabel(v) }))];
+
+  contMotor.innerHTML = motores.map((m) =>
+    `<button class="benchmark-chip${m.key === benchmarkFiltroMotor ? ' is-active' : ''}" data-motor="${escHtml(m.key)}">${escHtml(m.label)}</button>`
+  ).join('');
+  contVariante.innerHTML = variantes.map((v) =>
+    `<button class="benchmark-chip${v.key === benchmarkFiltroVariante ? ' is-active' : ''}" data-variante="${escHtml(v.key)}">${escHtml(v.label)}</button>`
+  ).join('');
+
+  contMotor.querySelectorAll('.benchmark-chip').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      benchmarkFiltroMotor = btn.dataset.motor;
+      contMotor.querySelectorAll('.benchmark-chip').forEach((b) => b.classList.toggle('is-active', b === btn));
+      renderBenchmarkRanking();
+    });
+  });
+  contVariante.querySelectorAll('.benchmark-chip').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      benchmarkFiltroVariante = btn.dataset.variante;
+      contVariante.querySelectorAll('.benchmark-chip').forEach((b) => b.classList.toggle('is-active', b === btn));
+      renderBenchmarkRanking();
+    });
+  });
+}
+
+function benchmarkCombosFiltrados() {
+  if (!benchmarkRankingData) return [];
+  return benchmarkRankingData.ranking.filter((c) =>
+    (benchmarkFiltroMotor === '__todos' || c.motor === benchmarkFiltroMotor) &&
+    (benchmarkFiltroVariante === '__todas' || c.variante === benchmarkFiltroVariante)
+  );
+}
+
+/** Suma aciertos/comparables por grupo de campo a través de varios combos
+ *  motor×variante (p.ej. "todos los motores" = agregado de las 5 filas). */
+function benchmarkAgregarGrupos(combos) {
+  const acc = {};
+  combos.forEach((c) => {
+    (c.por_grupo || []).forEach((g) => {
+      if (!acc[g.grupo]) acc[g.grupo] = { aciertos: 0, comparables: 0 };
+      acc[g.grupo].aciertos += g.aciertos;
+      acc[g.grupo].comparables += g.comparables;
+    });
+  });
+  const grupos = Object.entries(acc).map(([grupo, v]) => ({
+    grupo,
+    ratio: v.comparables ? Math.round((v.aciertos / v.comparables) * 100) : null,
+    aciertos: v.aciertos,
+    comparables: v.comparables,
+  }));
+  return BENCHMARK_ORDEN_GRUPOS
+    .map((nombre) => grupos.find((g) => g.grupo === nombre))
+    .filter(Boolean)
+    .concat(grupos.filter((g) => !BENCHMARK_ORDEN_GRUPOS.includes(g.grupo)));
+}
+
+function renderBenchmarkChart(grupos) {
+  const cont = document.getElementById('benchmark-chart');
+  if (!cont) return;
+  if (!grupos.length) {
+    cont.innerHTML = '<p style="color:#a0aec0;padding:20px;margin:0;">Sin datos todavía para esta combinación.</p>';
+    return;
+  }
+  cont.innerHTML = grupos.map((g) => {
+    const pct = g.ratio ?? 0;
+    const nivel = pct >= 85 ? '' : pct >= 60 ? 'nivel-medio' : 'nivel-bajo';
+    return `
+      <div class="benchmark-bar-col">
+        <span class="benchmark-bar-pct">${g.ratio != null ? g.ratio + '%' : '—'}</span>
+        <div class="benchmark-bar ${nivel}" style="height:${Math.max(pct, 2)}%"></div>
+        <span class="benchmark-bar-label">${escHtml(g.grupo)}<br>(${g.aciertos}/${g.comparables})</span>
+      </div>`;
+  }).join('');
+}
+
+function renderBenchmarkRankingTable() {
+  if (!benchmarkRankingData) return;
+  const rows = benchmarkRankingData.ranking.map((c, i) => {
+    const fila = {
+      _id: `${c.motor}-${c.variante}`,
+      posicion: i + 1,
+      motor: BENCHMARK_MOTOR_LABELS[c.motor] || c.motor,
+      variante: benchmarkVarianteLabel(c.variante),
+      ratio_global: c.ratio_global,
+      ejecuciones: c.ejecuciones,
+      errores: c.errores,
+      tiempo_medio_s: c.tiempo_medio_s,
+    };
+    (c.por_grupo || []).forEach((g) => { fila[`grupo_${g.grupo}`] = g.ratio; });
+    return fila;
+  });
+
+  if (benchmarkRankingTable) {
+    benchmarkRankingTable.replaceData(rows);
+    return;
+  }
+
+  const gruposColumnas = BENCHMARK_ORDEN_GRUPOS.map((g) => ({
+    title: g, field: `grupo_${g}`, width: 100, hozAlign: 'center', sorter: 'number',
+    formatter: (cell) => cell.getValue() != null ? `${cell.getValue()}%` : '<span style="color:#a0aec0;">—</span>',
+  }));
+
+  benchmarkRankingTable = new Tabulator('#benchmark-ranking-table', {
+    data: rows,
+    index: '_id',
+    layout: 'fitDataFill',
+    height: '360px',
+    placeholder: 'Sin datos todavía — activa el benchmark o pulsa "Ejecutar sobre las últimas 10 facturas".',
+    columns: [
+      { title: '#', field: 'posicion', width: 46, hozAlign: 'center' },
+      { title: 'Motor', field: 'motor', width: 130, sorter: 'string' },
+      { title: 'Variante', field: 'variante', width: 170, sorter: 'string' },
+      { title: '% global', field: 'ratio_global', width: 100, hozAlign: 'center', sorter: 'number',
+        formatter: (cell) => cell.getValue() != null ? `${cell.getValue()}%` : '<span style="color:#a0aec0;">—</span>' },
+      ...gruposColumnas,
+      { title: 'Ejecuciones', field: 'ejecuciones', width: 100, hozAlign: 'center', sorter: 'number' },
+      { title: 'Errores', field: 'errores', width: 90, hozAlign: 'center', sorter: 'number' },
+      { title: 'Tiempo medio', field: 'tiempo_medio_s', width: 110, hozAlign: 'right', sorter: 'number',
+        formatter: (cell) => cell.getValue() != null ? `${cell.getValue()}s` : '—' },
+    ],
+    rowFormatter: (row) => { if (row.getData().posicion === 1) row.getElement().style.background = '#f0fff4'; },
+  });
+}
+
+function renderBenchmarkRanking() {
+  renderBenchmarkChart(benchmarkAgregarGrupos(benchmarkCombosFiltrados()));
+  renderBenchmarkRankingTable();
+}
+
 function closeBenchmarkModal() {
   const m = document.getElementById('benchmark-modal');
   if (m) m.style.display = 'none';
@@ -2382,6 +2556,8 @@ function initBenchmarkModal() {
   closeBtn.addEventListener('click', closeBenchmarkModal);
   modal.addEventListener('click', (e) => { if (e.target === modal) closeBenchmarkModal(); });
   openBtn.addEventListener('click', openBenchmarkModal);
+  initBenchmarkTabs();
+  initBenchmarkChips();
 
   toggle.addEventListener('change', async () => {
     const statusEl = document.getElementById('benchmark-status');
@@ -2493,6 +2669,17 @@ async function openBenchmarkModal() {
   } catch { /* no-op: el toggle se queda como estaba si falla la lectura */ }
 
   try {
+    const rankRes = await authFetch(`${API_URL}/admin/facturas/benchmark/ranking`);
+    if (rankRes.ok) {
+      benchmarkRankingData = await rankRes.json();
+      renderBenchmarkRanking();
+    }
+  } catch (err) {
+    document.getElementById('benchmark-chart').innerHTML =
+      `<p style="color:#9b2335;padding:20px;margin:0;">Error al cargar el ranking: ${escHtml(err.message)}</p>`;
+  }
+
+  try {
     const res = await authFetch(`${API_URL}/admin/facturas/benchmark`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
@@ -2529,7 +2716,7 @@ async function openBenchmarkModal() {
     benchmarkTable = new Tabulator('#benchmark-table', {
       data: rows,
       index: '_rowId',
-      height: 'calc(80vh - 240px)',
+      height: '100%',
       layout: 'fitDataFill',
       groupBy: 'upload_id',
       groupHeader: (value, count, data0) => {
