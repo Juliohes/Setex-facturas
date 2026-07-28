@@ -44,6 +44,11 @@ services:
       - ${SETEX_DATA_DIR}/uploads:/app/uploads
       - ${SETEX_LOGS_DIR}/backend:/app/logs
       - ${SETEX_BASE_DIR}/app/backend/src/config/features.json:/app/src/config/features.json
+      # 2026-07-28 (gap 3 del cierre de pipeline v2): dataset de verdad
+      # verificado por humano (eval/prepare_dataset.js). Sin esto, la
+      # verificación manual de Julio sobre ground_truth.json se perdería en
+      # cada rebuild — /app/eval viaja horneado en la imagen salvo esta ruta.
+      - ${SETEX_BASE_DIR}/app/backend/eval/facturas:/app/eval/facturas
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       PORT: ${PORT:-3000}
