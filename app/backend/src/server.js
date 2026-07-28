@@ -3076,6 +3076,68 @@ app.get('/api/admin/facturas/:id/imagen', authenticateToken, requireAdmin, async
   }
 });
 
+// ── Herramienta TEMPORAL de verificación del dataset de verdad (2026-07-28) ──
+// Solo tech_admin. Sirve para que Julio compare eval/facturas/{id}/documento.*
+// contra su ground_truth.json y marque verificado:true campo a campo desde
+// el panel, en vez de editar JSON a mano. Se borrará junto con eval/facturas/
+// al terminar la verificación — no es una feature permanente del producto.
+const EVAL_FACTURAS_DIR = '/app/eval/facturas';
+
+app.get('/api/admin/eval-facturas', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    if (!isTechAdmin(req.user.email)) return res.status(403).json({ error: 'Acceso restringido a administradores técnicos.' });
+    const ids = fsSync.readdirSync(EVAL_FACTURAS_DIR).filter((d) => d !== 'sintetica-ejemplo');
+    const facturas = ids.map((id) => {
+      const dir = path.join(EVAL_FACTURAS_DIR, id);
+      const ground_truth = JSON.parse(fsSync.readFileSync(path.join(dir, 'ground_truth.json'), 'utf8'));
+      const documento = fsSync.readdirSync(dir).find((f) => f.startsWith('documento.'));
+      return { id, ground_truth, documento };
+    }).sort((a, b) => parseInt(a.id, 10) - parseInt(b.id, 10));
+    res.json({ facturas });
+  } catch (err) {
+    logger.error('[EvalFacturas] Error listando dataset:', err);
+    res.status(500).json({ error: 'Error al listar el dataset' });
+  }
+});
+
+app.get('/api/admin/eval-facturas/:id/documento', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    if (!isTechAdmin(req.user.email)) return res.status(403).json({ error: 'Acceso restringido a administradores técnicos.' });
+    const id = req.params.id.replace(/[^0-9]/g, '');
+    const dir = path.join(EVAL_FACTURAS_DIR, id);
+    const documento = fsSync.existsSync(dir) ? fsSync.readdirSync(dir).find((f) => f.startsWith('documento.')) : null;
+    if (!documento) return res.status(404).json({ error: 'Documento no encontrado' });
+    const safePath = path.resolve(path.join(dir, documento));
+    if (!safePath.startsWith(path.resolve(EVAL_FACTURAS_DIR) + path.sep)) return res.status(403).json({ error: 'Acceso denegado' });
+    res.removeHeader('X-Frame-Options');
+    res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
+    res.setHeader('Cache-Control', 'no-store');
+    res.sendFile(safePath);
+  } catch (err) {
+    logger.error('[EvalFacturas] Error sirviendo documento:', err);
+    res.status(500).json({ error: 'Error al obtener el documento' });
+  }
+});
+
+app.put('/api/admin/eval-facturas/:id/ground-truth', authenticateToken, requireAdmin, requireXHR, async (req, res) => {
+  try {
+    if (!isTechAdmin(req.user.email)) return res.status(403).json({ error: 'Acceso restringido a administradores técnicos.' });
+    const id = req.params.id.replace(/[^0-9]/g, '');
+    const rutaGT = path.join(EVAL_FACTURAS_DIR, id, 'ground_truth.json');
+    if (!fsSync.existsSync(rutaGT)) return res.status(404).json({ error: 'Factura no encontrada en el dataset' });
+    const { campos } = req.body || {};
+    if (!campos || typeof campos !== 'object') return res.status(400).json({ error: 'Falta "campos"' });
+    const gt = JSON.parse(fsSync.readFileSync(rutaGT, 'utf8'));
+    gt.campos = campos;
+    fsSync.writeFileSync(rutaGT, JSON.stringify(gt, null, 2));
+    auditLog('EVAL_GROUND_TRUTH_VERIFICADO', { factura_id: id }, req.user.userId, req.ip);
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error('[EvalFacturas] Error guardando ground truth:', err);
+    res.status(500).json({ error: 'Error al guardar' });
+  }
+});
+
 // GET /api/admin/facturas/:id/imagen-variante — sirve la variante de contraste
 // (bloque 5, 2026-07-22), solo tech_admin. No existe para facturas procesadas
 // sin el flag pipeline_v2_imagen_variante_enabled activo.

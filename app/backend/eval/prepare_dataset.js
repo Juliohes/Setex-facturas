@@ -48,6 +48,27 @@ function extensionPorMimetype(mimetype) {
   return 'bin';
 }
 
+// BUG DE DATOS CONFIRMADO (2026-07-28, verificación manual de las 3 primeras
+// facturas): `uploads.total_factura` normaliza con `.toFixed(2)` en
+// server.js:normalizeTotal (usado para el índice de duplicados) — eso
+// devuelve SIEMPRE punto decimal ("44.08"), mientras el resto de importes
+// conservan coma española ("36,43"). Además, no todas las filas tienen
+// punto: alguna edición posterior desde el panel admin parece escribir el
+// valor sin pasar por normalizeTotal. Para el dataset de verdad, el humano
+// verifica contra lo impreso en la factura española (coma) — normalizamos
+// aquí SOLO la vista de ground_truth.json, sin tocar la tabla `uploads` en
+// producción (ese es un cambio aparte, más delicado, con normalizeTotal).
+function comaEspañola(valor) {
+  if (valor == null) return valor;
+  const s = String(valor);
+  // Punto decimal inglés inequívoco: exactamente un punto, ≤2 dígitos tras él,
+  // sin coma ya presente (si ya tiene coma, el string ya está en formato español).
+  if (/^-?\d+\.\d{1,2}$/.test(s) && !s.includes(',')) {
+    return s.replace('.', ',');
+  }
+  return s;
+}
+
 // v1 guarda importes con coma decimal española ("100,00") — el esquema
 // canónico del pipeline v2 (pipeline/schema.js) también usa string, misma
 // convención, sin reformatear.
@@ -88,7 +109,7 @@ function construirGroundTruth(upload) {
         cuota: campoDesdeV1(l.cuota),
       })),
       retencion_irpf: campoDesdeV1(upload.cuota_irpf),
-      total: campoDesdeV1(upload.total_factura, { critico: true }),
+      total: campoDesdeV1(comaEspañola(upload.total_factura), { critico: true }),
     },
   };
 }

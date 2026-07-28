@@ -1364,6 +1364,9 @@ function launchApp(authData) {
   // Botón "Benchmark IA" (3 imágenes × todos los motores) — solo tech_admin
   const btnBenchmark = document.getElementById('btn-benchmark');
   if (btnBenchmark) btnBenchmark.style.display = window._isTechAdmin ? 'inline-block' : 'none';
+  // Botón "Verificar ground truth" (herramienta temporal, 2026-07-28) — solo tech_admin
+  const btnEvalVerificacion = document.getElementById('btn-eval-verificacion');
+  if (btnEvalVerificacion) btnEvalVerificacion.style.display = window._isTechAdmin ? 'inline-block' : 'none';
 
   const select = document.getElementById('f-usuario');
   (authData.usuarios || []).forEach(u => {
@@ -1382,6 +1385,7 @@ function launchApp(authData) {
   initOcrModal();
   initShadowModal();
   initBenchmarkModal();
+  initEvalVerificacionModal();
   loadData();
 
   document.getElementById('btn-filtrar').addEventListener('click', () => { currentFilters = getFilters(); loadData(currentFilters); });
@@ -3051,6 +3055,149 @@ async function openBenchmarkModal() {
     document.getElementById('benchmark-table').innerHTML =
       `<p style="color:#9b2335;padding:20px 0;text-align:center;">Error al cargar el benchmark: ${escHtml(err.message)}</p>`;
   }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// Herramienta TEMPORAL de verificación del dataset de verdad OCR v2
+// (2026-07-28). Borrar este bloque completo + el botón/modal en el HTML +
+// los 3 endpoints /api/admin/eval-facturas* en server.js cuando termine la
+// verificación manual — no es una feature permanente del producto.
+// ══════════════════════════════════════════════════════════════════════════
+
+const EVAL_CAMPOS_ESCALARES = [
+  ['emisor.nombre', 'Nombre emisor'], ['emisor.nif', 'NIF emisor'],
+  ['receptor.nombre', 'Nombre receptor'], ['receptor.nif', 'NIF receptor'],
+  ['numero_factura', 'Nº factura'], ['fecha_emision', 'Fecha emisión'],
+  ['retencion_irpf', 'Retención IRPF'], ['total', 'Total'],
+];
+const EVAL_ESTADOS = ['legible', 'ambiguo', 'ilegible', 'ausente'];
+
+function evalCampoHtml(path, etiqueta, campo) {
+  const v = campo || { valor: null, estado: 'ausente', verificado: false };
+  return `
+    <div class="eval-campo" data-campo="${escHtml(path)}">
+      <label>${escHtml(etiqueta)}</label>
+      <input type="text" class="eval-valor" value="${escHtml(v.valor ?? '')}" placeholder="—">
+      <select class="eval-estado">
+        ${EVAL_ESTADOS.map((e) => `<option value="${e}" ${e === v.estado ? 'selected' : ''}>${e}</option>`).join('')}
+      </select>
+      <label class="eval-verificado-label">
+        <input type="checkbox" class="eval-verificado" ${v.verificado ? 'checked' : ''}> verificado
+      </label>
+    </div>`;
+}
+
+function evalFacturaHtml(f) {
+  const c = f.ground_truth.campos || {};
+  const lineas = Array.isArray(c.desglose_iva) ? c.desglose_iva : [];
+  const esImagen = /\.(jpg|jpeg|png)$/i.test(f.documento || '');
+  return `
+    <div class="eval-factura" data-id="${f.id}" style="border:1px solid #e2e8f0;border-radius:8px;margin-bottom:18px;padding:14px 16px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <strong>Factura #${f.id}</strong>
+        <span class="eval-guardado" style="font-size:12px;color:#276749;"></span>
+      </div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;">
+        <div style="flex:0 0 260px;">
+          ${esImagen
+            ? `<img class="eval-doc-img" data-id="${f.id}" style="width:100%;border:1px solid #e2e8f0;border-radius:6px;" alt="Documento factura ${f.id}">`
+            : `<iframe class="eval-doc-pdf" data-id="${f.id}" style="width:100%;height:340px;border:1px solid #e2e8f0;border-radius:6px;"></iframe>`}
+        </div>
+        <div style="flex:1;min-width:320px;">
+          <div class="eval-campos-escalares">
+            ${EVAL_CAMPOS_ESCALARES.map(([path, etiqueta]) => evalCampoHtml(path, etiqueta, c[path])).join('')}
+          </div>
+          <div style="margin-top:8px;font-size:12px;font-weight:600;color:#4a5568;">Tramos de IVA</div>
+          <div class="eval-desglose-iva">
+            ${lineas.map((l, i) => `
+              <div style="display:flex;gap:8px;margin:4px 0;flex-wrap:wrap;" data-linea="${i}">
+                ${evalCampoHtml(`desglose_iva.${i}.base`, 'Base', l.base)}
+                ${evalCampoHtml(`desglose_iva.${i}.tipo`, '% IVA', l.tipo)}
+                ${evalCampoHtml(`desglose_iva.${i}.cuota`, 'Cuota', l.cuota)}
+              </div>`).join('')}
+          </div>
+          <button class="btn-primary btn-compacto eval-btn-guardar" data-id="${f.id}" style="width:auto;margin-top:10px;">💾 Guardar factura #${f.id}</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function evalLeerCamposDelDom(card) {
+  const campos = {};
+  card.querySelectorAll('.eval-campo').forEach((el) => {
+    const path = el.dataset.campo;
+    const valor = el.querySelector('.eval-valor').value.trim() || null;
+    const estado = el.querySelector('.eval-estado').value;
+    const verificado = el.querySelector('.eval-verificado').checked;
+    const partes = path.split('.');
+    if (partes[0] === 'desglose_iva') {
+      campos.desglose_iva = campos.desglose_iva || [];
+      const idx = parseInt(partes[1], 10);
+      campos.desglose_iva[idx] = campos.desglose_iva[idx] || {};
+      campos.desglose_iva[idx][partes[2]] = { valor, estado, verificado };
+    } else {
+      campos[path] = { valor, estado, verificado };
+    }
+  });
+  return campos;
+}
+
+async function evalGuardarFactura(id, card) {
+  const campos = evalLeerCamposDelDom(card);
+  const span = card.querySelector('.eval-guardado');
+  try {
+    const res = await authFetch(`${API_URL}/admin/eval-facturas/${id}/ground-truth`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ campos }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    span.textContent = '✓ guardado';
+    setTimeout(() => { span.textContent = ''; }, 2500);
+  } catch (err) {
+    span.style.color = '#9b2335';
+    span.textContent = `Error: ${err.message}`;
+  }
+}
+
+async function abrirEvalVerificacionModal() {
+  const modal = document.getElementById('eval-verificacion-modal');
+  const cont = document.getElementById('eval-verificacion-lista');
+  modal.style.display = 'flex';
+  cont.innerHTML = 'Cargando dataset...';
+  try {
+    const res = await authFetch(`${API_URL}/admin/eval-facturas`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const { facturas } = await res.json();
+    cont.innerHTML = facturas.map(evalFacturaHtml).join('');
+
+    cont.querySelectorAll('.eval-doc-img').forEach((img) => {
+      authFetch(`${API_URL}/admin/eval-facturas/${img.dataset.id}/documento`)
+        .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(`HTTP ${r.status}`))))
+        .then((b) => { img.src = URL.createObjectURL(b); })
+        .catch(() => { img.replaceWith(Object.assign(document.createElement('div'), { textContent: 'Imagen no disponible' })); });
+    });
+    cont.querySelectorAll('.eval-doc-pdf').forEach((iframe) => {
+      authFetch(`${API_URL}/admin/eval-facturas/${iframe.dataset.id}/documento`)
+        .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(`HTTP ${r.status}`))))
+        .then((b) => { iframe.src = URL.createObjectURL(b); })
+        .catch(() => {});
+    });
+    cont.querySelectorAll('.eval-btn-guardar').forEach((btn) => {
+      btn.addEventListener('click', () => evalGuardarFactura(btn.dataset.id, btn.closest('.eval-factura')));
+    });
+  } catch (err) {
+    cont.innerHTML = `<p style="color:#9b2335;">Error al cargar el dataset: ${escHtml(err.message)}</p>`;
+  }
+}
+
+function initEvalVerificacionModal() {
+  const btn = document.getElementById('btn-eval-verificacion');
+  const modal = document.getElementById('eval-verificacion-modal');
+  const closeBtn = document.getElementById('eval-verificacion-modal-close');
+  if (btn) btn.addEventListener('click', abrirEvalVerificacionModal);
+  if (closeBtn) closeBtn.addEventListener('click', () => { modal.style.display = 'none'; });
+  if (modal) modal.addEventListener('click', (e) => { if (e.target === modal) modal.style.display = 'none'; });
 }
 
 document.addEventListener('DOMContentLoaded', init);
