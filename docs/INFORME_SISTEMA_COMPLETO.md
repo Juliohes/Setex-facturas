@@ -3561,3 +3561,10 @@ Julio trajo un plan nuevo (`03-PLAN-MAESTRO.md` + `.claude/01-CLAUDE.md`/`02-cla
 - **Hallazgo operativo importante durante el Gap 3**: `/app/eval` no está montado como volumen en `docker-compose.yml` (solo `uploads/logs/features.json` lo están) — el dataset recién generado se perdió de la capa efímera del contenedor y hubo que rescatarlo a mano con `docker cp` al host. Pendiente decisión de Julio sobre añadir un volumen dedicado (documentado en `docs/ocr-v2/DESPLIEGUE-Y-ACTIVACION.md`, requiere su confirmación explícita por la regla 1 de no tocar `docker-compose.yml` sin ella).
 - **Gap 4** (`docs/ocr-v2/DESPLIEGUE-Y-ACTIVACION.md`): documento nuevo con los 3 criterios objetivos de activación (cero excepciones en el replay, v2 iguala/mejora críticos y alucina ≤ v1 sobre facturas verificadas, coste/latencia dentro de lo estimado).
 - Suite completa: 250 tests, 249 OK (mismo fallo preexistente y no relacionado: paridad v3). Pendiente desplegar (confirmación de Julio) — no toca `ocr_extraccion_v2_enabled`, sigue en `false`.
+
+### 2026-07-28 — Despliegue: volumen persistente para eval/facturas + gaps del pipeline v2
+
+- `docker-compose.yml`: añadido volumen `${SETEX_BASE_DIR}/app/backend/eval/facturas:/app/eval/facturas` (confirmación explícita de Julio, regla 1) — el dataset de verdad verificado por humano ya no se pierde en cada rebuild.
+- Desplegados los 4 gaps del pipeline OCR v2 (columna `modo`, PATCH endurecido, replay, dataset de verdad, documento de activación) — rebuild + stop + up -d backend, 4/4 healthy, HTTPS 200.
+- Verificado tras el despliegue: columna `modo` con su índice aplicada en `extracciones_v2`; las 30 carpetas de `eval/facturas/` (29 reales + sintetica-ejemplo) visibles dentro del contenedor vía el volumen nuevo.
+- `ocr_extraccion_v2_enabled` sigue en `false` — sin cambios en el comportamiento real de usuario. Pendiente: que Julio verifique el ground truth y lance el replay siguiendo `docs/ocr-v2/DESPLIEGUE-Y-ACTIVACION.md`.
