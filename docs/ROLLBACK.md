@@ -71,6 +71,7 @@ toca.
 | 8 | Tabla + endpoints `/api/v2/facturas/:id/extraccion` | Endpoints nuevos, no interceptan nada — dejar de llamarlos basta; tabla con rollback SQL arriba |
 | 9 | Logs + `/api/v2/metricas` | Mismo caso — endpoint nuevo, sin efecto en v1 |
 | 10 | Orquestador + conexión en `upload-confirm` | `ocr_extraccion_v2_shadow_mode: false` — rollback instantáneo, es el ÚNICO punto de conexión real con el tráfico de facturas |
+| Gaps 2026-07-28 | Columna `extracciones_v2.modo` + PATCH endurecido + replay | Columna: `scripts/rollback/2026-07-28-extracciones-v2-modo-down.sql`. PATCH/replay son código nuevo aislado, sin flag propio — ver `docs/ocr-v2/DESPLIEGUE-Y-ACTIVACION.md` |
 
 ## Qué NO requiere rollback nunca
 
