@@ -3540,3 +3540,13 @@ Julio seguía sin ver el CLAHE de la factura #29 tras un `Ctrl+Shift+R`. Investi
 - Causa real: un recargado de página (`Ctrl+Shift+R`) no invalida la caché HTTP de un `fetch()` lanzado después, al abrir el modal (evento de clic, no de navegación) — el usuario no tenía forma de forzar una petición nueva desde la propia página para esa URL concreta (sin cache-buster).
 - `admin-facturas.js`: `cargarImg()` ahora pasa `{ cache: 'no-store' }` en el fetch de `/imagen` e `/imagen-variante` dentro del modal OCR — fuerza red real en cada apertura, nunca depende de que el usuario limpie caché o abra incógnito.
 - `node --check` OK. Cache-buster `admin-facturas.js?v=20260727-006`. Desplegado (rebuild + stop + up -d solo frontend), 4/4 healthy, HTTPS 200.
+
+### 2026-07-28 — Exportación completa para migración a nueva aplicación (FastAPI/Argon2id)
+
+Julio solicitó exportar todos los datos (usuarios/empresas con credenciales, registro completo de facturas, imágenes) para migrar a una nueva aplicación que sustituye a SETEX como sistema de login/registro.
+
+- Generado en `/opt/setex/shared/export-migracion/2026-07-28/` (fuera del repo, permisos 640 deploy:deploy, sin acceso de "otros" — contiene hash de contraseñas): 9 usuarios reales, 52 empresas del catálogo, 29 facturas con datos ya confirmados/corregidos (no el OCR crudo), 29 imágenes originales de factura (sin variantes CLAHE).
+- Primer intento de compatibilidad de contraseñas: la nueva app usa Argon2id, SETEX usa bcrypt — conversión directa de hash **imposible** (limitación criptográfica, no de formato). Señalado explícitamente a Julio.
+- Solución implementada: **migración perezosa** (patrón estándar de la industria) — en `codigo-migracion-fastapi/` se entregó el paquete completo para el stack real de la nueva app (Python/FastAPI/SQLAlchemy async/Alembic/argon2-cffi): modelo con columna `legacy_bcrypt_hash`, migración Alembic, función `verificar_password()` que verifica Argon2id o bcrypt heredado y migra sola en el primer login del usuario, endpoint de login adaptado, y guía de monitorización/retirada del bcrypt tras completar la migración.
+- El hash bcrypt solo se incluyó en el export (`usuarios_migracion_lazy.json`) tras confirmación explícita de Julio para este propósito puntual — una primera versión del export lo omitía deliberadamente.
+- Sin cambios de código en el repo de SETEX — toda la exportación y el código de migración viven fuera del repo, en `/opt/setex/shared/`.
