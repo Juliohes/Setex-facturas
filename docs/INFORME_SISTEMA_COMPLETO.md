@@ -3576,3 +3576,15 @@ Verificando a mano las 3 primeras facturas del dataset de verdad (factura #2: em
 - `eval/prepare_dataset.js`: nueva normalización `comaEspañola()` — solo corrige la VISTA de `ground_truth.json`, no toca `uploads` en producción (cambio aparte, más delicado). Aplicado con parche quirúrgico que respeta cualquier campo ya verificado (no había ninguno).
 - Nueva herramienta TEMPORAL en el panel admin (botón "🔍 Verificar ground truth", solo tech_admin): lista las 29 facturas de golpe con su documento + campos editables + checkbox verificado, guardando directamente en su `ground_truth.json`. 3 endpoints nuevos en `server.js` (`GET /api/admin/eval-facturas`, `GET .../:id/documento`, `PUT .../:id/ground-truth`). Se borrará junto con `eval/facturas/` al terminar la verificación manual.
 - Desplegado: rebuild + stop + up -d backend/frontend, 4/4 healthy, volumen de `eval/facturas` verificado intacto tras el rebuild (30 carpetas).
+
+### 2026-07-28 — Pipeline OCR v2: variantes CLAHE, Tesseract anti-alucinación y aprendizaje continuo
+
+A petición de Julio: añadir la variante de contraste al pipeline v2 real, activar reconocimiento OCR tradicional (Tesseract/PaddleOCR) y hacer que la IA aprenda de sus correcciones.
+
+- **Investigación previa (antes de implementar)**: PaddleOCR resultó ser un adapter stub sin infraestructura real — su propio código lanza "integración pendiente" y el servicio systemd antiguo apunta a una carpeta borrada en la migración de abril. Se decidió con Julio usar `tesseract.js` (Apache-2.0, WASM, sin Python) en su lugar, como verificador anti-alucinación (no como 5º extractor de campos — evita una llamada de IA extra para mapear texto→campos).
+- Variantes de imagen conectadas al pipeline v2 real (antes solo vivían en el panel Benchmark IA): compara imagen estándar vs CLAHE, gana la de menos disputas, registrado en `extracciones_v2.variante`.
+- Tesseract bundleado en el Dockerfile en build time (probado con build real: worker arranca en 0,6s sin red) — comprueba si cada valor crítico aparece en el texto bruto reconocido; si no, se marca en `alucinaciones_sospechosas`.
+- Aprendizaje continuo: extiende a v2 el mecanismo ya existente de v1 (`known_cifs`/`company_relationships`) para preferir el nombre de proveedor ya confirmado; base de few-shot desde el dataset de verdad verificado (`eval/facturas/`) para futuras re-extracciones.
+- 3 flags nuevos en `features.json`, todos `false` por defecto: `ocr_extraccion_v2_variantes_enabled` (duplica coste de extracción), `_tesseract_enabled` (gratis, coste de CPU), `_aprendizaje_enabled` (gratis, fail-safe).
+- Descartado deliberadamente: detección de estructura del documento (layout) — los motores ya en uso entienden el layout de fábrica.
+- Migración aditiva (`variante`, `alucinaciones_sospechosas`, `aprendizaje_aplicado` en `extracciones_v2`) con rollback. Suite completa: 286 tests, 285 OK (mismo fallo preexistente no relacionado).
