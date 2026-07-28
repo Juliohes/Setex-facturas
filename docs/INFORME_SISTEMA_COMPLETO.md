@@ -3592,3 +3592,7 @@ A petición de Julio: añadir la variante de contraste al pipeline v2 real, acti
 ### 2026-07-28 — Despliegue: variantes CLAHE, Tesseract y aprendizaje continuo en v2
 
 Desplegado (rebuild + stop + up -d backend), 4/4 healthy, HTTPS 200. Verificado dentro del contenedor real: columna `variante`/`alucinaciones_sospechosas`/`aprendizaje_aplicado` aplicadas en `extracciones_v2` con sus defaults; los 3 flags nuevos presentes en `false`; `spa.traineddata` de Tesseract bundleado correctamente (sin descarga en caliente). `ocr_extraccion_v2_enabled` sigue en `false` — sin cambios en el comportamiento real de usuario.
+
+### 2026-07-28 — Activados los 3 flags de aprendizaje continuo en v2 (sombra)
+
+A petición de Julio: `ocr_extraccion_v2_aprendizaje_enabled`, `ocr_extraccion_v2_variantes_enabled` y `ocr_extraccion_v2_tesseract_enabled` activados en producción (`features.json`, en caliente). Reenganchado el bind-mount con `stop`+`up -d` tras cada edición (gotcha ya documentado: Edit rompe el mount al viejo inodo). Verificado dentro del contenedor real que los 3 quedaron en `true`. 4/4 healthy, HTTPS 200, logs limpios. `ocr_extraccion_v2_enabled` sigue en `false` — sigue sin afectar a ningún usuario real, solo se acumulan datos en `extracciones_v2` (columnas `variante`, `alucinaciones_sospechosas`, `aprendizaje_aplicado`) para decidir con datos más adelante.
