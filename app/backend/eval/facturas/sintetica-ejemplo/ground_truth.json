@@ -1,0 +1,66 @@
+{
+  "origen": "sintetica",
+  "tipo_documento": "foto_buena",
+  "nota": "Ejemplo de formato — NO representa ninguna factura ni cliente real. Generado por scripts/generate-synthetic-example.js.",
+  "campos": {
+    "emisor.nombre": {
+      "valor": "ACME DISTRIBUCIONES SL",
+      "estado": "legible",
+      "verificado": true
+    },
+    "emisor.nif": {
+      "valor": "B72327000",
+      "estado": "legible",
+      "verificado": true
+    },
+    "receptor.nombre": {
+      "valor": "CLIENTE DE PRUEBA SL",
+      "estado": "legible",
+      "verificado": true
+    },
+    "receptor.nif": {
+      "valor": "B87654321",
+      "estado": "legible",
+      "verificado": true
+    },
+    "numero_factura": {
+      "valor": "EJEMPLO-0001",
+      "estado": "legible",
+      "verificado": true
+    },
+    "fecha_emision": {
+      "valor": "01/01/2026",
+      "estado": "legible",
+      "verificado": true
+    },
+    "desglose_iva": [
+      {
+        "base": {
+          "valor": "100,00",
+          "estado": "legible",
+          "verificado": true
+        },
+        "tipo": {
+          "valor": "21,0",
+          "estado": "legible",
+          "verificado": true
+        },
+        "cuota": {
+          "valor": "21,00",
+          "estado": "legible",
+          "verificado": true
+        }
+      }
+    ],
+    "retencion_irpf": {
+      "valor": null,
+      "estado": "ausente",
+      "verificado": true
+    },
+    "total": {
+      "valor": "121,00",
+      "estado": "legible",
+      "verificado": true
+    }
+  }
+}

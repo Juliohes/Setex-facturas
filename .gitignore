@@ -108,3 +108,11 @@ ehthumbs.db
 tests/e2e/node_modules/
 tests/e2e/playwright-report/
 tests/e2e/test-results/
+
+# ── Dataset de verdad del pipeline OCR v2 (gap 3, 2026-07-28) ────────────────
+# Facturas reales de clientes (imagen + datos fiscales) — RGPD: nunca a git.
+# Excepción: UNA factura sintética de ejemplo, generada por código
+# (scripts/generate-synthetic-example.js), sin datos de ningún cliente real.
+app/backend/eval/facturas/*
+!app/backend/eval/facturas/sintetica-ejemplo/
+!app/backend/eval/facturas/sintetica-ejemplo/**
