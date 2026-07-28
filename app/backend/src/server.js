@@ -20,6 +20,7 @@ const { extractInvoiceOCR, extractCIFOnlyOCR, compararVarianteContraste } = requ
 const { ejecutarBenchmarkCompleto, GRUPOS_CAMPOS } = require('./ocr/benchmark');
 const { analizarCalidadImagen } = require('./pipeline/preprocess');
 const { ejecutarPipelineV2Sombra } = require('./pipeline/orchestrator');
+const { aplanarCanonico, validarCorreccionHumana } = require('./pipeline/arbiter');
 
 // ── Módulos refactorizados (Strangler-Fig, pasos 1-20 completados) ────────────
 // Ubicación objetivo: domain/, services/, repositories/, middleware/, lib/, config/
@@ -510,6 +511,15 @@ async function initDB() {
     );
     CREATE INDEX IF NOT EXISTS idx_extracciones_v2_upload ON extracciones_v2(upload_id);
     CREATE INDEX IF NOT EXISTS idx_extracciones_v2_estado ON extracciones_v2(estado);
+
+    -- 2026-07-28 (gap 1 del plan de cierre): distingue de dónde viene cada
+    -- fila. 'shadow' = las que ya se generaban automáticamente en cada
+    -- confirmación real; 'replay' = generadas por el comando de replay sobre
+    -- facturas ya confirmadas, sin afectar a v1; 'activo' reservado para
+    -- cuando v2 decida de verdad. Aditiva, con default para no romper filas
+    -- ya existentes. Rollback: scripts/rollback/2026-07-28-extracciones-v2-modo-down.sql
+    ALTER TABLE extracciones_v2 ADD COLUMN IF NOT EXISTS modo VARCHAR(20) NOT NULL DEFAULT 'shadow';
+    CREATE INDEX IF NOT EXISTS idx_extracciones_v2_modo ON extracciones_v2(modo);
   `);
 
   // Backfill: uploads anteriores sin upload_status → 'active'
@@ -3012,7 +3022,18 @@ app.patch('/api/v2/facturas/:id/extraccion', authenticateToken, requireActiveCom
     if (actual.rows.length === 0) return res.status(404).json({ error: 'Sin extracción v2 para esta factura' });
 
     const fila = actual.rows[0];
-    const valorOriginal = campo.split('.').reduce((o, k) => o?.[k], fila.campos_canonicos) ?? null;
+
+    // ── Validación previa a aceptar la corrección (gap 1 del plan de cierre,
+    // 2026-07-28): antes se guardaba cualquier valor a ciegas. Un NIF/CIF con
+    // dígito de control inválido, o una corrección financiera que rompe la
+    // aritmética (base×tipo≠cuota, base+cuota−irpf≠total), se rechaza con 422
+    // y el motivo — igual que ya hace el árbitro internamente al fusionar.
+    const validacion = validarCorreccionHumana(campo, valor_corregido, fila.campos_canonicos);
+    if (!validacion.ok) {
+      return res.status(422).json({ error: 'Corrección rechazada', motivo: validacion.motivo });
+    }
+
+    const valorOriginal = aplanarCanonico(fila.campos_canonicos)[campo] ?? null;
     const correcciones = fila.correccion_humana || {};
     correcciones[campo] = {
       valor_original: valorOriginal, valor_corregido, corregido_en: new Date().toISOString(), corregido_por: req.user.userId,

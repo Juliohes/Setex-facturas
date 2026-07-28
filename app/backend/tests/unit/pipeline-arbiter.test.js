@@ -12,6 +12,7 @@ const {
   resolverIdentificador,
   resolverCampoSimple,
   coinciden,
+  validarCorreccionHumana,
 } = require('../../src/pipeline/arbiter');
 
 // NIF/CIF reales válidos (checksum correcto) usados en los tests existentes
@@ -183,5 +184,48 @@ describe('arbitrarFactura — casos completos', () => {
     );
     assert.equal(r.sin_resultado, true);
     assert.equal(r.campos, null);
+  });
+});
+
+// Gap 1 del plan de cierre sobre el pipeline v2 existente (2026-07-28):
+// el PATCH de corrección humana aceptaba cualquier valor a ciegas. Estas
+// pruebas cubren la misma validación determinista que ya usa el árbitro,
+// reutilizada aquí — nunca una segunda regla distinta.
+describe('validarCorreccionHumana', () => {
+  test('NIF/CIF con dígito de control inválido → rechazado', () => {
+    const r = validarCorreccionHumana('emisor.nif', CIF_INVALIDO, candidato());
+    assert.equal(r.ok, false);
+    assert.match(r.motivo, /control/i);
+  });
+
+  test('NIF/CIF con dígito de control válido → aceptado', () => {
+    const r = validarCorreccionHumana('emisor.nif', CIF_VALIDO, candidato());
+    assert.equal(r.ok, true);
+  });
+
+  test('NIF/CIF con formato imposible (ni NIF, ni NIE, ni CIF) → rechazado', () => {
+    const r = validarCorreccionHumana('receptor.nif', '1234', candidato());
+    assert.equal(r.ok, false);
+    assert.match(r.motivo, /formato/i);
+  });
+
+  test('corrección financiera que rompe base×tipo=cuota → rechazada', () => {
+    // base 100€ al 21% debería dar 21,00€ de cuota, no 50,00€
+    const r = validarCorreccionHumana('cuota_iva', '50,00', candidato());
+    assert.equal(r.ok, false);
+  });
+
+  test('corrección financiera coherente con el resto → aceptada', () => {
+    // base 100 + cuota 21 - retención 5 = 116 — con IRPF del 5%, el total
+    // coherente es 116,00, no los 121,00 por defecto de candidato()
+    const base = candidato();
+    base.retencion_irpf = '5,00';
+    const r = validarCorreccionHumana('total', '116,00', base);
+    assert.equal(r.ok, true);
+  });
+
+  test('campo sin validación propia (numero_factura, fecha_emision, nombres) → siempre aceptado', () => {
+    const r = validarCorreccionHumana('numero_factura', 'CUALQUIERA-123', candidato());
+    assert.equal(r.ok, true);
   });
 });

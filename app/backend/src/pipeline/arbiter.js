@@ -237,6 +237,46 @@ function reconstruirCanonico(decisiones, A, B) {
   };
 }
 
+// Campos de identificación fiscal corregibles por un humano vía PATCH.
+const CAMPOS_NIF_CORREGIBLES = ['emisor.nif', 'receptor.nif'];
+
+/**
+ * Valida una corrección humana ANTES de aceptarla (gap 1 del plan de cierre
+ * sobre el pipeline v2 existente, 2026-07-28). Hasta ahora el PATCH de
+ * corrección guardaba cualquier valor a ciegas. Reutiliza EXACTAMENTE la
+ * misma validación determinista que ya usa el árbitro al fusionar
+ * (checksum NIF/CIF, cuadre aritmético) — nunca inventa una segunda regla.
+ *
+ * @param {string} campo - clave aplanada (ver aplanarCanonico), p.ej. 'emisor.nif' o 'total'
+ * @param {*} valorCorregido
+ * @param {object} canonico - campos_canonicos actuales de la extracción
+ * @returns {{ok: true} | {ok: false, motivo: string}}
+ */
+function validarCorreccionHumana(campo, valorCorregido, canonico) {
+  if (CAMPOS_NIF_CORREGIBLES.includes(campo)) {
+    const formato = validateSpanishTaxId(String(valorCorregido));
+    if (!formato.valid) {
+      return { ok: false, motivo: formato.reason || 'Formato de NIF/CIF no válido' };
+    }
+    if (formato.type === 'CIF' && checkDigitCIF(valorCorregido) === false) {
+      return { ok: false, motivo: 'Dígito de control del CIF incorrecto' };
+    }
+    return { ok: true };
+  }
+
+  if (CAMPOS_FINANCIEROS.includes(campo)) {
+    const planoActual = aplanarCanonico(canonico);
+    const planoPropuesto = { ...planoActual, [campo]: valorCorregido };
+    const { errors } = validateIVACoherencia(aPlanoParaValidar(planoPropuesto));
+    if (errors.length > 0) {
+      return { ok: false, motivo: errors[0] };
+    }
+    return { ok: true };
+  }
+
+  return { ok: true };
+}
+
 module.exports = {
   arbitrarFactura,
   resolverIdentificador,
@@ -245,4 +285,10 @@ module.exports = {
   coinciden,
   CAMPOS_SIMPLES,
   CAMPOS_FINANCIEROS,
+  // 2026-07-28 (gap 1 del plan de cierre): reutilizadas por el PATCH de
+  // corrección humana en server.js para validar contra la misma vista
+  // aplanada que ya usa el árbitro, sin duplicar la lógica de aplanado.
+  aplanarCanonico,
+  aPlanoParaValidar,
+  validarCorreccionHumana,
 };
