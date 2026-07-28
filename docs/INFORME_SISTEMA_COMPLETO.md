@@ -3588,3 +3588,7 @@ A petición de Julio: añadir la variante de contraste al pipeline v2 real, acti
 - 3 flags nuevos en `features.json`, todos `false` por defecto: `ocr_extraccion_v2_variantes_enabled` (duplica coste de extracción), `_tesseract_enabled` (gratis, coste de CPU), `_aprendizaje_enabled` (gratis, fail-safe).
 - Descartado deliberadamente: detección de estructura del documento (layout) — los motores ya en uso entienden el layout de fábrica.
 - Migración aditiva (`variante`, `alucinaciones_sospechosas`, `aprendizaje_aplicado` en `extracciones_v2`) con rollback. Suite completa: 286 tests, 285 OK (mismo fallo preexistente no relacionado).
+
+### 2026-07-28 — Despliegue: variantes CLAHE, Tesseract y aprendizaje continuo en v2
+
+Desplegado (rebuild + stop + up -d backend), 4/4 healthy, HTTPS 200. Verificado dentro del contenedor real: columna `variante`/`alucinaciones_sospechosas`/`aprendizaje_aplicado` aplicadas en `extracciones_v2` con sus defaults; los 3 flags nuevos presentes en `false`; `spa.traineddata` de Tesseract bundleado correctamente (sin descarga en caliente). `ocr_extraccion_v2_enabled` sigue en `false` — sin cambios en el comportamiento real de usuario.
