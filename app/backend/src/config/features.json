@@ -23,6 +23,10 @@
   "ocr_extraccion_v2_modelos": ["azure", "gemini_flash", "openai"],
   "ocr_extraccion_v2_umbral_auto": 0.9,
   "ocr_extraccion_v2_umbral_revision": 0.6,
+  "_GAPS_APRENDIZAJE_2026_07_28": "3 flags nuevos del cierre de gaps del 2026-07-28 (variantes de imagen + Tesseract anti-alucinación + aprendizaje de proveedor conocido), todos false por defecto — cada uno tiene coste/riesgo propio, ver docs/ocr-v2/DESPLIEGUE-Y-ACTIVACION.md antes de activar. ocr_extraccion_v2_variantes_enabled: DUPLICA el nº de llamadas de extracción por factura (original + variante CLAHE) — coste real x2, decisión explícita. ocr_extraccion_v2_tesseract_enabled: coste 0 USD (motor local), pero consume CPU del contenedor (límite 0.5 vCPU) — siempre en modo sombra, nunca bloquea al usuario. ocr_extraccion_v2_aprendizaje_enabled: requiere pool de BD, sin coste de API, fail-safe si known_cifs/company_relationships no responden.",
+  "ocr_extraccion_v2_variantes_enabled": false,
+  "ocr_extraccion_v2_tesseract_enabled": false,
+  "ocr_extraccion_v2_aprendizaje_enabled": false,
   "_QUALITY_GATE_V2": "Fase 3 (2026-07-27): analizarCalidadImagen() en pipeline/preprocess.js, umbrales recalibrados sobre 27 facturas reales (ver docs/INFORME-AUDITORIA-OCR.md). Solo corre si ocr_extraccion_v2_enabled=true; mientras ocr_extraccion_v2_quality_gate_blocking=false, SOLO calcula y loguea (línea '[QualityGate-v2]' en logs de backend) — nunca rechaza nada. Consultar distribución real: docker compose logs backend | grep QualityGate-v2. Cuando haya datos suficientes, Julio decide si pasar este flag a true para que empiece a rechazar de verdad.",
   "ocr_extraccion_v2_quality_gate_blocking": false
 }

@@ -18,6 +18,7 @@ const {
   UMBRAL_BRILLO_MINIMO,
   UMBRAL_ENTROPIA_BLANCO,
   corregirPerspectivaSiConfiable,
+  generarVarianteContrasteParaExtraccion,
 } = require('../../src/pipeline/preprocess');
 
 const FIXTURES = path.join(__dirname, '..', 'fixtures');
@@ -123,5 +124,33 @@ describe('corregirPerspectivaSiConfiable', () => {
     const r = await corregirPerspectivaSiConfiable(Buffer.from('esto no es una imagen'));
     assert.equal(r.corregido, false);
     assert.ok(r.motivo);
+  });
+});
+
+// Gap "variantes de imagen en v2" (2026-07-28): conecta el CLAHE ya existente
+// (ocr/image-variants.js, usado hoy por el panel Benchmark IA) al pipeline v2.
+describe('generarVarianteContrasteParaExtraccion', () => {
+  let tmpPath;
+  test('devuelve un JPEG distinto del original, a partir de un fichero real', async () => {
+    tmpPath = path.join(require('os').tmpdir(), `clahe-test-${Date.now()}.jpg`);
+    await sharp({
+      create: { width: 300, height: 300, channels: 3, background: { r: 120, g: 120, b: 120 } },
+    }).jpeg().toFile(tmpPath);
+
+    const bufferOriginal = fs.readFileSync(tmpPath);
+    const bufferVariante = await generarVarianteContrasteParaExtraccion(tmpPath);
+
+    assert.ok(Buffer.isBuffer(bufferVariante));
+    assert.ok(bufferVariante.length > 0);
+    // Firma JPEG (FF D8 FF) — sigue siendo una imagen válida, no basura.
+    assert.equal(bufferVariante[0], 0xff);
+    assert.equal(bufferVariante[1], 0xd8);
+    assert.notDeepEqual(bufferVariante, bufferOriginal, 'CLAHE debe transformar los píxeles, no devolver el original tal cual');
+
+    fs.unlinkSync(tmpPath);
+  });
+
+  test('fichero inexistente → lanza (el orquestador debe capturarlo, no aquí)', async () => {
+    await assert.rejects(() => generarVarianteContrasteParaExtraccion('/tmp/no-existe-jamas-98765.jpg'));
   });
 });

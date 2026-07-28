@@ -105,9 +105,45 @@ No cumplidos los tres → el flag queda como está (`false`), reporta en
 `INFORME-REPLAY.md` qué diff concreto falló y decide con esa evidencia si
 hace falta un ajuste antes de reintentar.
 
+## Paso 6 (opcional, experimental) — variantes de imagen + Tesseract + aprendizaje
+
+Añadido el mismo día a petición de Julio: 3 capacidades nuevas, cada una
+tras su propio flag en `features.json`, **las tres en `false` por
+defecto** — activarlas es una decisión aparte, no forma parte de los 3
+criterios de activación del Paso 5.
+
+| Flag | Qué hace | Coste real |
+|---|---|---|
+| `ocr_extraccion_v2_variantes_enabled` | Genera una 2ª imagen con contraste local (CLAHE, la misma función que ya usa el panel Benchmark IA) y compara el resultado contra la imagen estándar — gana la que tenga menos disputas. Queda registrado en la columna `variante` (`estandar`/`contraste`) de cada fila de `extracciones_v2`. | **Duplica** el nº de llamadas de extracción por factura (se intentan las dos, se guarda el coste de ambas aunque se descarte una). |
+| `ocr_extraccion_v2_tesseract_enabled` | Reconoce el texto bruto de la imagen con Tesseract (motor local, sin API) y comprueba si cada valor crítico (NIF, nº factura, total, base) aparece literalmente en ese texto. Si NO aparece, se anota en `alucinaciones_sospechosas` — señal de posible invención. | 0 USD (motor local). Consume CPU del contenedor (límite real: 0.5 vCPU) — siempre en modo sombra, nunca bloquea al usuario. |
+| `ocr_extraccion_v2_aprendizaje_enabled` | Si el NIF de la contraparte ya es un proveedor/cliente conocido (`known_cifs`/`company_relationships`, tablas de v1 sin tocar), sustituye el nombre leído por el ya confirmado. Queda registrado en `aprendizaje_aplicado`. | Sin coste de API — una consulta extra a Postgres por factura. Fail-safe: si la BD no responde, sigue sin aprendizaje. |
+
+**Cómo usarlas para decidir** (el objetivo que pidió Julio: "ir evaluando
+cuál funciona mejor"): actívalas una temporada sobre tráfico real (o vía
+`eval/replay.js` sobre las facturas ya confirmadas), y consulta:
+
+```sql
+-- ¿Gana casi siempre la misma variante? Si sí, se puede desactivar la
+-- comparación y quedarse solo con la ganadora (ahorra el coste x2).
+SELECT variante, COUNT(*), AVG(score_global) FROM extracciones_v2 GROUP BY variante;
+
+-- ¿Cuántas alucinaciones sospechosas detecta Tesseract, y en qué campos?
+SELECT jsonb_array_elements_text(alucinaciones_sospechosas) AS campo, COUNT(*)
+FROM extracciones_v2 WHERE alucinaciones_sospechosas != '[]' GROUP BY campo;
+
+-- ¿Cuántas veces ha aplicado el aprendizaje de proveedor conocido?
+SELECT COUNT(*) FILTER (WHERE aprendizaje_aplicado IS NOT NULL) AS con_aprendizaje, COUNT(*) FROM extracciones_v2;
+```
+
+No hay un plazo fijo — es exactamente el experimento que pidió Julio: dejarlo
+correr, mirar los números, y quedarse con lo que de verdad funcione mejor.
+
 ## Rollback
 
 Ver `docs/ROLLBACK.md` (ya cubre `extracciones_v2` completa) +
 `scripts/rollback/2026-07-28-extracciones-v2-modo-down.sql` (solo la
-columna `modo` añadida en esta fase). Apagar cualquier cosa de esta fase es
-siempre instantáneo vía `features.json`, sin rebuild.
+columna `modo` añadida en esta fase) +
+`scripts/rollback/2026-07-28-extracciones-v2-aprendizaje-down.sql` (columnas
+`variante`/`alucinaciones_sospechosas`/`aprendizaje_aplicado`). Apagar
+cualquier cosa de esta fase es siempre instantáneo vía `features.json`, sin
+rebuild.

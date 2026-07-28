@@ -31,9 +31,10 @@ async function replayFactura(upload, { pool, logger, cfg }) {
       uploadId: upload.id,
       filePath: upload.file_path,
       mimeType: upload.mimetype,
-      context: { invoice_type: upload.invoice_type, empresa_nif: upload.empresa_nif || null },
+      context: { invoice_type: upload.invoice_type, empresa_nif: upload.empresa_nif || null, userId: upload.user_id || null },
       cfg,
       logger,
+      pool,
     });
 
     if (!registro) {
@@ -42,11 +43,13 @@ async function replayFactura(upload, { pool, logger, cfg }) {
 
     await pool.query(
       `INSERT INTO extracciones_v2
-         (upload_id, campos_canonicos, confianzas, disputas, score_global, estado, version_pipeline, coste_estimado_usd, latencia_ms, modo)
-       VALUES ($1,$2::jsonb,$3::jsonb,$4::jsonb,$5,$6,$7,$8,$9,'replay')`,
+         (upload_id, campos_canonicos, confianzas, disputas, score_global, estado, version_pipeline, coste_estimado_usd, latencia_ms, modo, variante, alucinaciones_sospechosas, aprendizaje_aplicado)
+       VALUES ($1,$2::jsonb,$3::jsonb,$4::jsonb,$5,$6,$7,$8,$9,'replay',$10,$11::jsonb,$12::jsonb)`,
       [registro.upload_id, JSON.stringify(registro.campos_canonicos), JSON.stringify(registro.confianzas),
         JSON.stringify(registro.disputas), registro.score_global, registro.estado, registro.version_pipeline,
-        registro.coste_estimado_usd, registro.latencia_ms]
+        registro.coste_estimado_usd, registro.latencia_ms, registro.variante || 'estandar',
+        JSON.stringify(registro.alucinaciones_sospechosas || []),
+        registro.aprendizaje_aplicado ? JSON.stringify(registro.aprendizaje_aplicado) : null]
     );
 
     return { ok: true, registro };

@@ -9,7 +9,14 @@ RUN addgroup -g 1001 -S appgroup && adduser -u 1001 -S appuser -G appgroup
 COPY --from=builder --chown=appuser:appgroup /app/node_modules ./node_modules
 COPY --chown=appuser:appgroup src/ ./src/
 COPY --chown=appuser:appgroup eval/ ./eval/
-RUN mkdir -p /app/uploads /app/logs /app/eval/resultados && chown -R appuser:appgroup /app/uploads /app/logs /app/eval
+RUN mkdir -p /app/uploads /app/logs /app/eval/resultados /app/tesseract-data
+# Gap "aprendizaje continuo" (2026-07-28): descarga el paquete de idioma
+# español de Tesseract UNA VEZ en build time. Nunca en producción — evita
+# depender de red en tiempo de ejecución y evita re-descargarlo en cada
+# arranque del contenedor (TESSERACT_CACHE_PATH en src/ocr/tesseract.js
+# apunta a esta misma ruta).
+RUN node -e "const T=require('tesseract.js'); (async()=>{const w=await T.createWorker('spa',1,{cachePath:'/app/tesseract-data'}); await w.terminate();})()"
+RUN chown -R appuser:appgroup /app/uploads /app/logs /app/eval /app/tesseract-data
 USER appuser
 EXPOSE 3000
 # Healthcheck endurecido (FASE 1B Etapa 3) — apunta a /api/internal/check-access

@@ -15,6 +15,9 @@
 'use strict';
 
 const fs = require('fs');
+const fsp = require('fs').promises;
+const os = require('os');
+const path = require('path');
 // Sin desestructurar (propiedad accedida en cada llamada, no capturada al
 // cargar el módulo) — necesario para que los tests puedan mockear cada
 // pieza con mock.method(), mismo patrón que ocr/index.js.
@@ -25,6 +28,22 @@ const arbiter = require('./arbiter');
 const reextraction = require('./reextraction');
 const confidence = require('./confidence');
 const observabilidad = require('./observabilidad');
+const aprendizaje = require('./aprendizaje');
+const tesseractAdapter = require('../ocr/tesseract');
+
+// Campos críticos que se comprueban contra Tesseract para detectar
+// alucinaciones (gap "aprendizaje continuo", 2026-07-28) — los mismos que
+// el resto del proyecto ya considera "críticos" (ver docs/ocr-v2/*.md).
+function extraerValoresCriticos(canonico) {
+  const primeraLinea = (canonico.lineas_iva || [])[0] || {};
+  return {
+    'emisor.nif': canonico.emisor?.nif,
+    'receptor.nif': canonico.receptor?.nif,
+    numero_factura: canonico.numero_factura,
+    total: canonico.total,
+    'desglose_iva.base': primeraLinea.base,
+  };
+}
 
 // Traduce el nombre de campo del árbitro a la ruta dentro del canónico,
 // para poder aplicar el valor resuelto por re-extracción dirigida de vuelta.
@@ -52,12 +71,13 @@ function aplicarValorEnCanonico(canonico, campoArbitro, valor) {
  * @param {number} datos.uploadId
  * @param {string} datos.filePath
  * @param {string} datos.mimeType
- * @param {object} datos.context   - { invoice_type, empresa_nif, empresa_nombre }
+ * @param {object} datos.context   - { invoice_type, empresa_nif, empresa_nombre, userId }
  * @param {object} datos.cfg       - features.json ya parseado
  * @param {object} datos.logger
+ * @param {import('pg').Pool} [datos.pool] - requerido solo si ocr_extraccion_v2_aprendizaje_enabled
  * @returns {Promise<object|null>} el registro listo para insertar en extracciones_v2, o null si no se pudo completar
  */
-async function ejecutarPipelineV2Sombra({ uploadId, filePath, mimeType, context, cfg, logger }) {
+async function ejecutarPipelineV2Sombra({ uploadId, filePath, mimeType, context, cfg, logger, pool }) {
   const documentId = `upload-${uploadId}`;
   const inicio = Date.now();
 
@@ -92,11 +112,51 @@ async function ejecutarPipelineV2Sombra({ uploadId, filePath, mimeType, context,
 
     if (arbitraje.sin_resultado) return null;
 
+    // ── Gap "variantes de imagen en v2" (2026-07-28): comparar el resultado
+    // sobre la imagen ESTÁNDAR contra el mismo flujo sobre una variante con
+    // contraste local (CLAHE, ya usada en el panel Benchmark IA — Fase 5.4
+    // de PROMPT-PIPELINE-OCR-FACTURAS-V2.md la conecta aquí). Gana la que
+    // tenga MENOS disputas (empate → mayor confianza media). Solo tras
+    // ocr_extraccion_v2_variantes_enabled (default false): duplica el nº de
+    // llamadas de extracción — coste real, decisión explícita de Julio.
+    let variante = 'estandar';
+    let arbitrajeGanador = arbitraje;
+    let resAzureGanador = resAzure;
+    let resGeminiGanador = resGemini;
+    if (cfg.ocr_extraccion_v2_variantes_enabled && mimeType.startsWith('image/')) {
+      let rutaVariante = null;
+      try {
+        const bufferContraste = await preprocess.generarVarianteContrasteParaExtraccion(filePath);
+        rutaVariante = path.join(os.tmpdir(), `v2-contraste-${documentId}-${Date.now()}.jpg`);
+        await fsp.writeFile(rutaVariante, bufferContraste);
+
+        const { azure: resAzureV, gemini_flash: resGeminiV } = await extractors.ejecutarExtraccionV2Paralelo(rutaVariante, mimeType, context, cfg, logger);
+        if (resAzureV.ok || resGeminiV.ok) {
+          const arbitrajeV = await arbiter.arbitrarFactura(resAzureV, resGeminiV);
+          observabilidad.logEtapaV2(logger, 'info', 'variante_contraste', documentId, { disputas: arbitrajeV.disputas.length, disputas_estandar: disputasIniciales });
+
+          if (!arbitrajeV.sin_resultado && arbitrajeV.disputas.length < arbitrajeGanador.disputas.length) {
+            variante = 'contraste';
+            arbitrajeGanador = arbitrajeV;
+            resAzureGanador = resAzureV;
+            resGeminiGanador = resGeminiV;
+          }
+        }
+      } catch (err) {
+        observabilidad.logEtapaV2(logger, 'warn', 'variante_contraste', documentId, { error: err.message });
+      } finally {
+        if (rutaVariante) await fsp.unlink(rutaVariante).catch(() => {});
+      }
+    }
+
     // ── Fase 7: re-extracción dirigida SOLO de lo que siga en disputa ────
-    let camposFinales = arbitraje.campos;
-    let camposEnDisputaFinal = arbitraje.disputas.map((d) => d.campo);
-    if (disputasIniciales > 0 && resAzure.ok && resAzure.bounding_boxes) {
-      const resultadosReextraccion = await reextraction.reextraerCamposDirigidos(arbitraje.disputas, filePath, resAzure.bounding_boxes, cfg, logger);
+    // (sobre la variante GANADORA de arriba — nunca sobre las dos, para no
+    // duplicar también el coste de la re-extracción).
+    const disputasInicialesGanador = arbitrajeGanador.disputas.length;
+    let camposFinales = arbitrajeGanador.campos;
+    let camposEnDisputaFinal = arbitrajeGanador.disputas.map((d) => d.campo);
+    if (disputasInicialesGanador > 0 && resAzureGanador.ok && resAzureGanador.bounding_boxes) {
+      const resultadosReextraccion = await reextraction.reextraerCamposDirigidos(arbitrajeGanador.disputas, filePath, resAzureGanador.bounding_boxes, cfg, logger);
       const resueltos = new Set();
       for (const r of resultadosReextraccion) {
         if (r.resuelto) {
@@ -109,25 +169,83 @@ async function ejecutarPipelineV2Sombra({ uploadId, filePath, mimeType, context,
     }
     const disputasFinales = camposEnDisputaFinal.length;
 
+    // ── Gap "aprendizaje continuo" (2026-07-28): si el NIF de la contraparte
+    // ya es un proveedor/cliente conocido (known_cifs / company_relationships,
+    // tablas de v1 sin cambios), preferir su nombre YA CONFIRMADO sobre lo
+    // que haya leído la IA esta vez. Solo tras
+    // ocr_extraccion_v2_aprendizaje_enabled (default false). Fail-safe: un
+    // fallo de BD deja camposFinales tal cual, nunca rompe el pipeline.
+    let aprendizajeAplicado = null;
+    if (cfg.ocr_extraccion_v2_aprendizaje_enabled && pool) {
+      try {
+        const esCompra = context?.invoice_type !== 'venta';
+        const nifContraparte = esCompra ? camposFinales.emisor?.nif : camposFinales.receptor?.nif;
+        const conocido = await aprendizaje.buscarProveedorConocido(pool, nifContraparte, {
+          userId: context?.userId, empresaNif: context?.empresa_nif,
+        });
+        if (conocido) {
+          camposFinales = JSON.parse(JSON.stringify(camposFinales));
+          if (esCompra) camposFinales.emisor.nombre = conocido.nombre;
+          else camposFinales.receptor.nombre = conocido.nombre;
+          aprendizajeAplicado = { fuente: conocido.fuente, confirmaciones: conocido.confirmaciones };
+          observabilidad.logEtapaV2(logger, 'info', 'aprendizaje', documentId, aprendizajeAplicado);
+        }
+      } catch (err) {
+        observabilidad.logEtapaV2(logger, 'warn', 'aprendizaje', documentId, { error: err.message });
+      }
+    }
+
+    // ── Gap "aprendizaje continuo" (2026-07-28): verificación cruzada
+    // anti-alucinación con Tesseract (motor local, coste 0 USD). Si un valor
+    // crítico no aparece en NINGÚN sitio del texto bruto reconocido, se
+    // marca como sospechoso — la señal más importante del proyecto (regla 8
+    // de CLAUDE.md). Solo tras ocr_extraccion_v2_tesseract_enabled (default
+    // false). Fail-safe: un fallo de Tesseract no afecta al resto.
+    let alucinacionesSospechosas = [];
+    if (cfg.ocr_extraccion_v2_tesseract_enabled && mimeType.startsWith('image/')) {
+      const resultadoTesseract = await tesseractAdapter.reconocerTextoBruto(filePath);
+      if (resultadoTesseract.ok) {
+        const criticos = extraerValoresCriticos(camposFinales);
+        for (const [campo, valor] of Object.entries(criticos)) {
+          if (!valor) continue;
+          const aparece = tesseractAdapter.apareceEnTexto(valor, resultadoTesseract.textoBruto);
+          if (aparece === false) alucinacionesSospechosas.push(campo);
+        }
+        if (alucinacionesSospechosas.length > 0) {
+          observabilidad.logEtapaV2(logger, 'warn', 'alucinacion_sospechosa', documentId, { campos: alucinacionesSospechosas });
+        }
+      } else {
+        observabilidad.logEtapaV2(logger, 'warn', 'tesseract', documentId, { error: resultadoTesseract.error });
+      }
+    }
+
     // ── Fase 8: score + estado ────────────────────────────────────────────
-    const totalCampos = Object.keys(arbitraje.decisiones || {}).length || 1;
+    const totalCampos = Object.keys(arbitrajeGanador.decisiones || {}).length || 1;
     const scoreGlobal = confidence.calcularScoreGlobal({
-      confianzaA: resAzure.ok ? resAzure.campos._confianza : null,
-      confianzaB: resGemini.ok ? resGemini.campos._confianza : null,
-      totalCampos, disputasIniciales, disputasFinales,
+      confianzaA: resAzureGanador.ok ? resAzureGanador.campos._confianza : null,
+      confianzaB: resGeminiGanador.ok ? resGeminiGanador.campos._confianza : null,
+      totalCampos, disputasIniciales: disputasInicialesGanador, disputasFinales,
     });
     const { estado, motivo: motivoEstado } = confidence.decidirEstadoV2({ scoreGlobal, disputasFinales, esFacturaValida: camposFinales.es_factura_valida }, cfg);
-    observabilidad.logEtapaV2(logger, 'info', 'confianza', documentId, { score_global: scoreGlobal, estado, motivo: motivoEstado });
+    observabilidad.logEtapaV2(logger, 'info', 'confianza', documentId, { score_global: scoreGlobal, estado, motivo: motivoEstado, variante });
 
-    const costeTotal = (resAzure.coste_estimado_usd || 0) + (resGemini.coste_estimado_usd || 0);
+    // Coste real de TODAS las llamadas hechas (si hubo comparación de
+    // variantes, incluye las dos, no solo la ganadora — el coste ya se
+    // incurrió aunque se descarte el resultado).
+    const costeTotal = (resAzure.coste_estimado_usd || 0) + (resGemini.coste_estimado_usd || 0)
+      + (resAzureGanador !== resAzure ? (resAzureGanador.coste_estimado_usd || 0) : 0)
+      + (resGeminiGanador !== resGemini ? (resGeminiGanador.coste_estimado_usd || 0) : 0);
 
     return {
       upload_id: uploadId,
       campos_canonicos: camposFinales,
-      confianzas: { azure: resAzure.campos?._confianza ?? null, gemini_flash: resGemini.campos?._confianza ?? null },
+      confianzas: { azure: resAzureGanador.campos?._confianza ?? null, gemini_flash: resGeminiGanador.campos?._confianza ?? null },
       disputas: camposEnDisputaFinal,
       score_global: scoreGlobal,
       estado,
+      variante,
+      alucinaciones_sospechosas: alucinacionesSospechosas,
+      aprendizaje_aplicado: aprendizajeAplicado,
       version_pipeline: 'v2',
       coste_estimado_usd: costeTotal,
       latencia_ms: Date.now() - inicio,

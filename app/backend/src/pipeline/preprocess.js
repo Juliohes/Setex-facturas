@@ -19,6 +19,9 @@
 'use strict';
 
 const sharp = require('sharp');
+const fs = require('fs').promises;
+// Acceso por propiedad (no desestructurado): permite mockear en tests.
+const imageVariants = require('../ocr/image-variants');
 
 // ── Fase 3.2/3.3: deskew + corrección de perspectiva ────────────────────────
 // Reutiliza el MISMO algoritmo de detección de contorno de papel que ya usa
@@ -231,8 +234,20 @@ async function analizarCalidadImagen(filePath) {
   };
 }
 
+// Gap "variantes de imagen en v2" (2026-07-28): reutiliza EXACTAMENTE la
+// misma función CLAHE que ya usa el panel Benchmark IA (ocr/image-variants.js)
+// — no se reimplementa contraste local, se conecta la ya existente al
+// pipeline v2 real. Solo activo tras ocr_extraccion_v2_variantes_enabled
+// (features.json, default false): duplica el nº de llamadas de extracción
+// por factura (una por variante), coste real a decidir explícitamente.
+async function generarVarianteContrasteParaExtraccion(filePath) {
+  const bufferOriginal = await fs.readFile(filePath);
+  return imageVariants.generarVarianteContraste(bufferOriginal);
+}
+
 module.exports = {
   analizarCalidadImagen,
+  generarVarianteContrasteParaExtraccion,
   UMBRAL_NITIDEZ_MINIMA,
   UMBRAL_BRILLO_MAXIMO,
   UMBRAL_BRILLO_MINIMO,

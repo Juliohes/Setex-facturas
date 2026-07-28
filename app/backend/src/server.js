@@ -520,6 +520,20 @@ async function initDB() {
     -- ya existentes. Rollback: scripts/rollback/2026-07-28-extracciones-v2-modo-down.sql
     ALTER TABLE extracciones_v2 ADD COLUMN IF NOT EXISTS modo VARCHAR(20) NOT NULL DEFAULT 'shadow';
     CREATE INDEX IF NOT EXISTS idx_extracciones_v2_modo ON extracciones_v2(modo);
+
+    -- 2026-07-28 (gap "variantes + aprendizaje continuo"): aditivas, con
+    -- default para no romper filas ya existentes. Rollback: scripts/rollback/
+    -- 2026-07-28-extracciones-v2-aprendizaje-down.sql
+    --   variante: qué imagen ganó la comparación ('estandar'|'contraste'),
+    --     solo relevante si ocr_extraccion_v2_variantes_enabled estaba activo.
+    --   alucinaciones_sospechosas: campos críticos cuyo valor NO aparece en
+    --     el texto bruto de Tesseract — señal de posible invención, no de
+    --     certeza (Tesseract también falla en fotos malas).
+    --   aprendizaje_aplicado: si se sustituyó el nombre de la contraparte por
+    --     uno ya conocido (known_cifs/company_relationships), y de dónde.
+    ALTER TABLE extracciones_v2 ADD COLUMN IF NOT EXISTS variante VARCHAR(20) NOT NULL DEFAULT 'estandar';
+    ALTER TABLE extracciones_v2 ADD COLUMN IF NOT EXISTS alucinaciones_sospechosas JSONB NOT NULL DEFAULT '[]';
+    ALTER TABLE extracciones_v2 ADD COLUMN IF NOT EXISTS aprendizaje_aplicado JSONB;
   `);
 
   // Backfill: uploads anteriores sin upload_status → 'active'
@@ -2795,16 +2809,19 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
       if (v2Cfg.ocr_extraccion_v2_shadow_mode) {
         ejecutarPipelineV2Sombra({
           uploadId, filePath: finalFilePath, mimeType: fileInfo.mimetype,
-          context: { invoice_type: invoiceType, empresa_nif: userCompanyNif }, cfg: v2Cfg, logger,
+          context: { invoice_type: invoiceType, empresa_nif: userCompanyNif, userId: userInfo.userId },
+          cfg: v2Cfg, logger, pool,
         }).then((registro) => {
           if (!registro) return;
           return pool.query(
             `INSERT INTO extracciones_v2
-               (upload_id, campos_canonicos, confianzas, disputas, score_global, estado, version_pipeline, coste_estimado_usd, latencia_ms)
-             VALUES ($1,$2::jsonb,$3::jsonb,$4::jsonb,$5,$6,$7,$8,$9)`,
+               (upload_id, campos_canonicos, confianzas, disputas, score_global, estado, version_pipeline, coste_estimado_usd, latencia_ms, variante, alucinaciones_sospechosas, aprendizaje_aplicado)
+             VALUES ($1,$2::jsonb,$3::jsonb,$4::jsonb,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb)`,
             [registro.upload_id, JSON.stringify(registro.campos_canonicos), JSON.stringify(registro.confianzas),
               JSON.stringify(registro.disputas), registro.score_global, registro.estado, registro.version_pipeline,
-              registro.coste_estimado_usd, registro.latencia_ms]
+              registro.coste_estimado_usd, registro.latencia_ms, registro.variante || 'estandar',
+              JSON.stringify(registro.alucinaciones_sospechosas || []),
+              registro.aprendizaje_aplicado ? JSON.stringify(registro.aprendizaje_aplicado) : null]
           );
         }).catch((err) => logger.error('[PipelineV2Sombra] Error', { error: err.message, upload_id: uploadId }));
       }

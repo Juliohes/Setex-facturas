@@ -81,7 +81,7 @@ async function run() {
   const params = idsFiltro ? [idsFiltro] : [];
 
   const { rows: uploads } = await pool.query(
-    `SELECT u.id, u.file_path, u.mimetype, u.invoice_type,
+    `SELECT u.id, u.file_path, u.mimetype, u.invoice_type, u.user_id,
             u.proveedor_nif, u.proveedor_nombre, u.receptor_nif, u.receptor_nombre,
             u.numero_factura, u.fecha_emision, u.total_factura, u.base_imponible,
             u.iva_porcentaje, u.cuota_iva, u.irpf_porcentaje, u.cuota_irpf, u.lineas_iva
