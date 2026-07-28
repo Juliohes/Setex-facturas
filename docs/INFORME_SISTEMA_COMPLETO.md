@@ -3568,3 +3568,11 @@ Julio trajo un plan nuevo (`03-PLAN-MAESTRO.md` + `.claude/01-CLAUDE.md`/`02-cla
 - Desplegados los 4 gaps del pipeline OCR v2 (columna `modo`, PATCH endurecido, replay, dataset de verdad, documento de activación) — rebuild + stop + up -d backend, 4/4 healthy, HTTPS 200.
 - Verificado tras el despliegue: columna `modo` con su índice aplicada en `extracciones_v2`; las 30 carpetas de `eval/facturas/` (29 reales + sintetica-ejemplo) visibles dentro del contenedor vía el volumen nuevo.
 - `ocr_extraccion_v2_enabled` sigue en `false` — sin cambios en el comportamiento real de usuario. Pendiente: que Julio verifique el ground truth y lance el replay siguiendo `docs/ocr-v2/DESPLIEGUE-Y-ACTIVACION.md`.
+
+### 2026-07-28 — Verificación manual del ground truth: bug de formato + herramienta temporal
+
+Verificando a mano las 3 primeras facturas del dataset de verdad (factura #2: emisor/receptor invertidos por v1; #3: perfecta; #4: número de factura mal leído), se detectó un patrón sistemático: `uploads.total_factura` usa punto decimal (`.toFixed(2)` en `normalizeTotal`, necesario para el índice de duplicados) mientras el resto de importes usan coma española — 20 de las 29 facturas reales afectadas.
+
+- `eval/prepare_dataset.js`: nueva normalización `comaEspañola()` — solo corrige la VISTA de `ground_truth.json`, no toca `uploads` en producción (cambio aparte, más delicado). Aplicado con parche quirúrgico que respeta cualquier campo ya verificado (no había ninguno).
+- Nueva herramienta TEMPORAL en el panel admin (botón "🔍 Verificar ground truth", solo tech_admin): lista las 29 facturas de golpe con su documento + campos editables + checkbox verificado, guardando directamente en su `ground_truth.json`. 3 endpoints nuevos en `server.js` (`GET /api/admin/eval-facturas`, `GET .../:id/documento`, `PUT .../:id/ground-truth`). Se borrará junto con `eval/facturas/` al terminar la verificación manual.
+- Desplegado: rebuild + stop + up -d backend/frontend, 4/4 healthy, volumen de `eval/facturas` verificado intacto tras el rebuild (30 carpetas).
