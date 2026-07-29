@@ -282,6 +282,15 @@ body {
 #facturas-table .tabulator-row.tabulator-row-even:hover {
   background: #ebf8ff !important;
 }
+/* Posible factura duplicada (numero_factura+fecha+total coinciden con otra) —
+   debe ganar al zebra-striping y al hover de arriba, de ahí el orden y el
+   !important en los 3 selectores. */
+#facturas-table .tabulator-row.row-duplicado {
+  background: #f6a8a8 !important;
+}
+#facturas-table .tabulator-row.row-duplicado:hover {
+  background: #f18e8e !important;
+}
 .badge-ok {
   display: inline-block;
   background: #c6f6d5;

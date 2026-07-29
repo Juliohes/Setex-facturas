@@ -440,7 +440,9 @@ function initTable() {
     persistence: { sort: true, columns: ['width'] },
     persistenceID: 'setex-admin-facturas-v9',
     columns: [
-      { title: 'ID',               field: 'codigo_cliente',  width: 90,  sorter: 'string', hozAlign: 'center', frozen: true,
+      { title: 'ID',               field: 'id',              width: 65,  sorter: 'number', hozAlign: 'center', frozen: true,
+        formatter: (cell) => `<code style="font-size:12px;font-weight:700;">#${cell.getValue()}</code>` },
+      { title: 'Código cliente',   field: 'codigo_cliente',  width: 110, sorter: 'string', hozAlign: 'center', frozen: true,
         formatter: (cell) => { const v = cell.getValue(); return v ? `<code style="font-size:12px;font-weight:700;">${escHtml(v)}</code>` : '<span style="color:#a0aec0;">—</span>'; } },
       // ── Empresa y contraparte: campos computados por el backend via matching CIF/nombre/tipo ──
       { title: 'Empresa',          field: 'display_empresa',      minWidth: 160, sorter: 'string',
@@ -492,9 +494,9 @@ function initTable() {
     ],
     initialSort: [{ column: 'uploaded_at', dir: 'desc' }],
     rowFormatter: (row) => {
-      if (row.getData().posible_duplicado) {
-        row.getElement().style.background = '#fff5f5';
-      }
+      // Clase CSS (no estilo inline): #facturas-table tiene reglas !important
+      // de zebra-striping y :hover que taparían un background puesto por JS.
+      row.getElement().classList.toggle('row-duplicado', !!row.getData().posible_duplicado);
     },
   });
 
