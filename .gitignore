@@ -116,3 +116,8 @@ tests/e2e/test-results/
 app/backend/eval/facturas/*
 !app/backend/eval/facturas/sintetica-ejemplo/
 !app/backend/eval/facturas/sintetica-ejemplo/**
+
+# Informe generado por eval/replay.js sobre las facturas reales de arriba —
+# contiene NIFs y números de factura reales en las tablas de diffs. Regenerable
+# en cualquier momento con el propio replay; nunca a git (mismo motivo RGPD).
+docs/ocr-v2/INFORME-REPLAY.md

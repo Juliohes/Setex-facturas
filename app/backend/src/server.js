@@ -35,6 +35,7 @@ const { connection: redisClient } = require('./queue/index');
 const { validateVIES } = require('./services/viesValidator');
 const { validateInvoiceCifs } = require('./lib/invoice-cif-validator');
 const { normalizeToFloat } = require('./lib/normalize-amount');
+const { detectarGruposDuplicados, encontrarDuplicadoPorNumero } = require('./lib/duplicate-detector');
 
 // Rate limiters centralizados (middleware/rate-limit.js)
 const {
@@ -534,6 +535,13 @@ async function initDB() {
     ALTER TABLE extracciones_v2 ADD COLUMN IF NOT EXISTS variante VARCHAR(20) NOT NULL DEFAULT 'estandar';
     ALTER TABLE extracciones_v2 ADD COLUMN IF NOT EXISTS alucinaciones_sospechosas JSONB NOT NULL DEFAULT '[]';
     ALTER TABLE extracciones_v2 ADD COLUMN IF NOT EXISTS aprendizaje_aplicado JSONB;
+
+    -- 2026-07-29 (revision ground truth): admin marca a mano campos de una
+    -- factura como no fiables (ej. CIF ilegible incluso a simple vista) para
+    -- que el panel los pinte en rojo y quede visible que ese dato requiere
+    -- revision antes de usarse en contabilidad. Aditiva, default '[]'.
+    -- Rollback: scripts/rollback/2026-07-29-uploads-campos-no-fiables-down.sql
+    ALTER TABLE uploads ADD COLUMN IF NOT EXISTS campos_no_fiables JSONB NOT NULL DEFAULT '[]';
   `);
 
   // Backfill: uploads anteriores sin upload_status → 'active'
@@ -2530,7 +2538,7 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
     const normTotal = normalizeTotal(finalTotal);
     const normFecha = normalizeDate(finalFecha);
 
-    // Detección de duplicados
+    // Detección de duplicados — señal 1: NIF+fecha+total
     const dupCheck = await pool.query(
       `SELECT id, filename FROM uploads
        WHERE user_id = $1 AND proveedor_nif = $2 AND fecha_emision = $3 AND total_factura = $4`,
@@ -2545,6 +2553,29 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
         duplicate: true,
         error: `Factura duplicada. Ya existe una del ${finalFecha} con total ${finalTotal}\u20AC.`
       });
+    }
+
+    // Deteccion de duplicados, senal 2: numero_factura+fecha+total, ignorando el NIF.
+    // Necesaria porque un CIF ilegible puede generar lecturas OCR distintas del NIF
+    // entre dos subidas del mismo documento fisico, colando el duplicado por la senal 1
+    // (incidente real: facturas #4/#15, mismo numero_factura, NIF leido de forma distinta).
+    const numeroFacturaParaDup = (confirmed_numero_factura || campos.numero_factura || preview.ocr_result_full?.numero_factura || '').trim();
+    if (numeroFacturaParaDup) {
+      const dupPorNumero = await pool.query(
+        `SELECT id, filename FROM uploads
+         WHERE user_id = $1 AND fecha_emision = $2 AND total_factura = $3
+           AND UPPER(REPLACE(numero_factura, ' ', '')) = UPPER(REPLACE($4, ' ', ''))`,
+        [userInfo.userId, normFecha, normTotal, numeroFacturaParaDup]
+      );
+      if (dupPorNumero.rows.length > 0) {
+        await fs.unlink(filePath).catch(() => {});
+        await redisClient.del(`preview:${preview_id}`);
+        return res.json({
+          success: false,
+          duplicate: true,
+          error: `Factura duplicada. Ya existe una con el mismo numero de factura (${numeroFacturaParaDup}), fecha y total.`
+        });
+      }
     }
 
     // Organizar archivo en carpeta usuario/proveedor (estructura: uploads/{user}/{nif}/{file})
@@ -4393,7 +4424,7 @@ app.get('/api/admin/facturas', authenticateToken, requireAdmin, async (req, res)
 
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
-    const [result, countResult, ccResult] = await Promise.all([
+    const [result, countResult, ccResult, dupResult] = await Promise.all([
       pool.query(
         `SELECT u.id, us.email AS usuario_email,
                 COALESCE(us.company_name, us.email) AS empresa_nombre,
@@ -4407,6 +4438,7 @@ app.get('/api/admin/facturas', authenticateToken, requireAdmin, async (req, res)
                 u.irpf_porcentaje, u.cuota_irpf,
                 u.lineas_iva,
                 u.invoice_type,
+                u.campos_no_fiables,
                 u.uploaded_at, u.procesado_en,
                 u.file_path
          FROM uploads u
@@ -4422,7 +4454,12 @@ app.get('/api/admin/facturas', authenticateToken, requireAdmin, async (req, res)
         params
       ),
       pool.query('SELECT cif, codigo_cliente FROM client_companies WHERE codigo_cliente IS NOT NULL'),
+      pool.query(
+        `SELECT id, user_id, numero_factura, fecha_emision, total_factura
+         FROM uploads WHERE upload_status = 'active'`
+      ),
     ]);
+    const gruposDuplicados = detectarGruposDuplicados(dupResult.rows);
 
     // Mapa CIF → codigo_cliente para fallback cuando el usuario subidor no tiene empresa registrada
     const ccMap = new Map();
@@ -4440,7 +4477,8 @@ app.get('/api/admin/facturas', authenticateToken, requireAdmin, async (req, res)
         const cleanNif = display.display_empresa_nif.toUpperCase().replace(/[^A-Z0-9]/g, '');
         codigo_cliente = ccMap.get(cleanNif) || null;
       }
-      return { ...row, ...display, codigo_cliente };
+      const duplicado_grupo = gruposDuplicados.get(row.id) || null;
+      return { ...row, ...display, codigo_cliente, posible_duplicado: !!duplicado_grupo, duplicado_grupo };
     });
 
     res.json({ facturas, total: parseInt(countResult.rows[0].count, 10) });
@@ -4749,6 +4787,28 @@ app.put('/api/admin/facturas/:id', authenticateToken, requireAdmin, requireXHR, 
     if (req.body[field] !== undefined) updates[field] = req.body[field] || null;
   }
 
+  // Solo 'compra' o 'venta' -- evita que un valor mal formado rompa
+  // computeDisplayCompanies() o el badge del frontend.
+  if (updates.invoice_type && !['compra', 'venta'].includes(updates.invoice_type)) {
+    return res.status(400).json({ error: "invoice_type debe ser 'compra' o 'venta'" });
+  }
+
+  // 2026-07-29: admin marca campos concretos como no fiables (ej. CIF ilegible)
+  // para que el panel los resalte en rojo. Solo se aceptan nombres de campo
+  // conocidos, para evitar que un valor arbitrario llegue a la columna JSONB.
+  const CAMPOS_FLAGEABLES = ['proveedor_nombre', 'proveedor_nif', 'receptor_nombre', 'receptor_nif',
+    'numero_factura', 'fecha_emision', 'total_factura', 'base_imponible', 'cuota_iva', 'cuota_irpf'];
+  if (req.body.campos_no_fiables !== undefined) {
+    if (!Array.isArray(req.body.campos_no_fiables)) {
+      return res.status(400).json({ error: 'campos_no_fiables debe ser un array' });
+    }
+    const invalidos = req.body.campos_no_fiables.filter((c) => !CAMPOS_FLAGEABLES.includes(c));
+    if (invalidos.length > 0) {
+      return res.status(400).json({ error: `campos_no_fiables contiene campos no reconocidos: ${invalidos.join(', ')}` });
+    }
+    updates.campos_no_fiables = JSON.stringify([...new Set(req.body.campos_no_fiables)]);
+  }
+
   // Multi-IVA 2026-04-21 parte 4/7: admin puede editar lineas_iva (JSONB).
   // Si llega array válido, helper recalcula base/cuota/porcentaje como suma y
   // estos sobreescriben cualquier valor manual enviado en updates.
@@ -4791,7 +4851,7 @@ app.put('/api/admin/facturas/:id', authenticateToken, requireAdmin, requireXHR, 
        RETURNING id, proveedor_nombre, proveedor_nif, receptor_nombre, receptor_nif,
                  numero_factura, fecha_emision, total_factura, base_imponible,
                  iva_porcentaje, cuota_iva, irpf_porcentaje, cuota_irpf, lineas_iva,
-                 moneda, invoice_type`,
+                 moneda, invoice_type, campos_no_fiables`,
       values
     );
     if (r.rows.length === 0) return res.status(404).json({ error: 'Factura no encontrada' });

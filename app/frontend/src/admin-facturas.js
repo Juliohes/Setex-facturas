@@ -166,10 +166,28 @@ async function saveEdit() {
   }
 }
 
+// Campos "hoja" que se pueden marcar como no fiables desde el panel (ej. CIF
+// ilegible incluso a simple vista) — debe coincidir con CAMPOS_FLAGEABLES del
+// backend (PUT /api/admin/facturas/:id). Antes solo existía para el CIF de
+// Coca-Cola vía la herramienta temporal de ground truth; ahora es permanente
+// y aplica a cualquier factura, presente o futura.
+const CAMPOS_FLAGEABLES = ['proveedor_nombre', 'proveedor_nif', 'receptor_nombre', 'receptor_nif',
+  'numero_factura', 'fecha_emision', 'total_factura', 'base_imponible', 'cuota_iva', 'cuota_irpf'];
+
 function makeEditableFormatter(field, innerFormatter) {
   return (cell) => {
     const val = innerFormatter ? innerFormatter(cell) : (cell.getValue() ?? '<span style="color:#a0aec0">—</span>');
-    return `<span class="cell-val">${val}</span><button class="edit-cell-btn" title="Editar ${EDITABLE_FIELDS[field] || field}">✏️</button>`;
+    const rowData = cell.getRow().getData();
+    const actualField = getActualField(field, rowData);
+    const flagueable = CAMPOS_FLAGEABLES.includes(actualField);
+    const flagueado = flagueable && Array.isArray(rowData.campos_no_fiables) && rowData.campos_no_fiables.includes(actualField);
+    const valSpan = flagueado
+      ? `<span class="cell-val" style="background:#fed7d7;border-radius:3px;padding:1px 4px;" title="Marcado como no fiable">${val}</span>`
+      : `<span class="cell-val">${val}</span>`;
+    const flagBtn = flagueable
+      ? `<button class="flag-cell-btn" title="${flagueado ? 'Quitar marca de no fiable' : 'Marcar como no fiable (requiere revisión)'}">🚩</button>`
+      : '';
+    return `${valSpan}<button class="edit-cell-btn" title="Editar ${EDITABLE_FIELDS[field] || field}">✏️</button>${flagBtn}`;
   };
 }
 
@@ -193,11 +211,35 @@ function formatIvaPctUnified(cell) {
 
 function makeEditableCellClick(field) {
   return (_e, cell) => {
-    // Solo abrir modal si el click fue en el botón de editar
     if (_e.target.classList.contains('edit-cell-btn')) {
       openEditModal(cell.getRow().getData(), field);
+    } else if (_e.target.classList.contains('flag-cell-btn')) {
+      toggleCampoNoFiable(cell.getRow().getData(), field);
     }
   };
+}
+
+// Marca/desmarca un campo como no fiable (campos_no_fiables, JSONB en uploads).
+// Toggle idempotente, sin confirm() — es una anotación de baja fricción, no
+// una acción destructiva.
+async function toggleCampoNoFiable(rowData, displayField) {
+  const actualField = getActualField(displayField, rowData);
+  const actuales = Array.isArray(rowData.campos_no_fiables) ? rowData.campos_no_fiables : [];
+  const yaFlagueado = actuales.includes(actualField);
+  const nuevos = yaFlagueado ? actuales.filter((c) => c !== actualField) : [...actuales, actualField];
+  try {
+    const res = await authFetch(`${API_URL}/admin/facturas/${rowData.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ campos_no_fiables: nuevos }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Error al guardar');
+    const row = table.getRow(rowData.id);
+    if (row) { row.update(data.factura); row.reformat(); }
+  } catch (err) {
+    alert(`No se pudo actualizar la marca de no fiable: ${err.message}`);
+  }
 }
 
 // CellClick UNIFICADO de IVA %: siempre abre el modal de desglose completo,
@@ -287,10 +329,38 @@ function formatPct(cell) {
 }
 function formatTipo(cell) {
   const v = cell.getValue();
-  if (!v) return '<span style="color:#a0aec0">—</span>';
-  return v === 'venta'
-    ? '<span style="font-size:11px;font-weight:700;color:#6b46c1;background:#e9d8fd;padding:2px 7px;border-radius:8px;">↑ Emitida</span>'
-    : '<span style="font-size:11px;font-weight:700;color:#2b6cb0;background:#ebf8ff;padding:2px 7px;border-radius:8px;">↓ Recibida</span>';
+  const badge = !v
+    ? '<span style="color:#a0aec0">—</span>'
+    : v === 'venta'
+      ? '<span style="font-size:11px;font-weight:700;color:#6b46c1;background:#e9d8fd;padding:2px 7px;border-radius:8px;">↑ Emitida</span>'
+      : '<span style="font-size:11px;font-weight:700;color:#2b6cb0;background:#ebf8ff;padding:2px 7px;border-radius:8px;">↓ Recibida</span>';
+  return `<span class="cell-val" style="cursor:pointer;" title="Click para cambiar entre Recibida (compra) y Emitida (venta)">${badge}</span>`;
+}
+
+// Cambia invoice_type entre 'compra' y 'venta' desde el panel — antes solo se
+// podía corregir editando la BD a mano. Julio 2026-07-29: "yo no puedo cambiar
+// a mano de recibida a emitida o viceversa y quiero poder tener disponible
+// esta edición". No cambia proveedor_nombre/receptor_nombre — solo la etiqueta;
+// ver computeDisplayCompanies() en el backend para cómo interactúan ambas cosas.
+async function toggleInvoiceType(rowData) {
+  const actual = rowData.invoice_type || 'compra';
+  const nuevo = actual === 'venta' ? 'compra' : 'venta';
+  const etiquetaActual = actual === 'venta' ? 'Emitida' : 'Recibida';
+  const etiquetaNueva = nuevo === 'venta' ? 'Emitida' : 'Recibida';
+  if (!confirm(`Factura #${rowData.id}: cambiar de "${etiquetaActual}" a "${etiquetaNueva}"?`)) return;
+  try {
+    const res = await authFetch(`${API_URL}/admin/facturas/${rowData.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ invoice_type: nuevo }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Error al guardar');
+    const row = table.getRow(rowData.id);
+    if (row) { row.update(data.factura); row.reformat(); }
+  } catch (err) {
+    alert(`No se pudo cambiar el tipo: ${err.message}`);
+  }
 }
 function formatFechaHora(cell) {
   const v = cell.getValue();
@@ -377,7 +447,8 @@ function initTable() {
         formatter: makeEditableFormatter('display_empresa'), cellClick: makeEditableCellClick('display_empresa') },
       { title: 'CIF Empresa',      field: 'display_empresa_nif',  width: 130, sorter: 'string',
         formatter: makeEditableFormatter('display_empresa_nif'), cellClick: makeEditableCellClick('display_empresa_nif') },
-      { title: 'TIPO',             field: 'invoice_type',    width: 100, sorter: 'string', formatter: formatTipo, hozAlign: 'center' },
+      { title: 'TIPO',             field: 'invoice_type',    width: 100, sorter: 'string', formatter: formatTipo, hozAlign: 'center',
+        cellClick: (_e, cell) => toggleInvoiceType(cell.getRow().getData()) },
       { title: 'Cliente / Proveedor', field: 'display_contraparte', minWidth: 160, sorter: 'string',
         formatter: makeEditableFormatter('display_contraparte'), cellClick: makeEditableCellClick('display_contraparte') },
       { title: 'CIF Cl/Prov',      field: 'display_contraparte_nif', width: 130, sorter: 'string',
@@ -406,6 +477,11 @@ function initTable() {
         }
       },
       { title: 'Subido',           field: 'uploaded_at',     width: 130, sorter: 'datetime', formatter: formatFechaHora },
+      { title: '⚠',                field: 'posible_duplicado', width: 60, hozAlign: 'center', headerSort: false,
+        formatter: (cell) => cell.getValue()
+          ? '<button class="btn-tbl-del dup-resolver" title="Resolver posible duplicado">🗑️ Duplicado</button>'
+          : '',
+        cellClick: (_e, cell) => { if (cell.getValue()) openDuplicadoModal(cell.getRow().getData()); } },
       { title: 'Acciones',         field: 'id',              width: 110, hozAlign: 'center', headerSort: false,
         formatter: (cell) => {
           if (!deleteModeFacturas) return '<span style="color:#cbd5e0;font-size:11px;">—</span>';
@@ -415,6 +491,11 @@ function initTable() {
         } },
     ],
     initialSort: [{ column: 'uploaded_at', dir: 'desc' }],
+    rowFormatter: (row) => {
+      if (row.getData().posible_duplicado) {
+        row.getElement().style.background = '#fff5f5';
+      }
+    },
   });
 
   // Event delegation para botón eliminar (CSP-safe: sin onclick inline)
@@ -426,6 +507,17 @@ function initTable() {
     const num = btn.dataset.num || `#${id}`;
     eliminarFactura(id, num);
   });
+
+  // Modal de resolución de duplicados
+  document.getElementById('duplicado-lista').addEventListener('click', (e) => {
+    const btn = e.target.closest('.dup-keep');
+    if (!btn) return;
+    const keepId = parseInt(btn.dataset.keepId, 10);
+    const grupoIds = btn.dataset.group.split(',').map((s) => parseInt(s, 10));
+    resolverDuplicado(keepId, grupoIds);
+  });
+  document.getElementById('duplicado-modal-close').addEventListener('click', closeDuplicadoModal);
+  document.getElementById('duplicado-cancel').addEventListener('click', closeDuplicadoModal);
 }
 
 // Eliminación de factura con confirmación y DELETE al backend
@@ -450,6 +542,59 @@ async function eliminarFactura(id, num) {
   }
 }
 
+// ── Resolución de posibles duplicados ────────────────────────────────────────
+// Detección real: mismo numero_factura + fecha_emision + total_factura,
+// ignorando el NIF (un CIF ilegible puede producir lecturas distintas del NIF
+// para el mismo documento físico subido dos veces — ver src/lib/duplicate-detector.js).
+function openDuplicadoModal(rowData) {
+  const grupoIds = [rowData.id, ...(rowData.duplicado_grupo || [])];
+  const filas = grupoIds
+    .map((id) => table.getRow(id))
+    .filter(Boolean)
+    .map((row) => row.getData());
+
+  document.getElementById('duplicado-error').style.display = 'none';
+  const lista = document.getElementById('duplicado-lista');
+  lista.innerHTML = filas.map((f) => `
+    <div style="display:flex;align-items:center;gap:12px;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;margin-bottom:8px;">
+      <div style="flex:1;font-size:13px;line-height:1.5;">
+        <strong>Factura #${f.id}</strong> — ${escHtml(f.numero_factura || '—')}<br>
+        ${escHtml(f.display_empresa || f.proveedor_nombre || '—')} · ${escHtml(f.fecha_emision || '—')} · ${escHtml(f.total_factura || '—')} €<br>
+        <span style="color:#718096;">Subida: ${f.uploaded_at ? new Date(f.uploaded_at).toLocaleString('es-ES') : '—'} · CIF proveedor leído: ${escHtml(f.proveedor_nif || '—')}</span>
+      </div>
+      <button class="btn-primary dup-keep" data-keep-id="${f.id}" data-group="${grupoIds.join(',')}">Conservar esta</button>
+    </div>
+  `).join('');
+  document.getElementById('duplicado-modal').style.display = 'flex';
+}
+
+function closeDuplicadoModal() {
+  document.getElementById('duplicado-modal').style.display = 'none';
+}
+
+async function resolverDuplicado(keepId, grupoIds) {
+  const aEliminar = grupoIds.filter((id) => id !== keepId);
+  if (!confirm(`Se conservará la factura #${keepId} y se eliminarán definitivamente: ${aEliminar.map((id) => `#${id}`).join(', ')}.\n\n¿Continuar?`)) return;
+  const errEl = document.getElementById('duplicado-error');
+  errEl.style.display = 'none';
+  try {
+    for (const id of aEliminar) {
+      const res = await authFetch(`${API_URL}/admin/facturas/${id}`, { method: 'DELETE' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(`Factura #${id}: ${data.error || 'HTTP ' + res.status}`);
+      const row = table.getRow(id);
+      if (row) row.delete();
+    }
+    // La fila conservada ya no forma parte de ningún grupo tras el borrado —
+    // se refresca desde servidor para limpiar posible_duplicado/duplicado_grupo.
+    closeDuplicadoModal();
+    loadData(currentFilters);
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.style.display = 'block';
+  }
+}
+
 async function loadData(filters = {}) {
   const params = new URLSearchParams();
   if (filters.desde)      params.set('desde', filters.desde);
@@ -467,6 +612,13 @@ async function loadData(filters = {}) {
     const data = await res.json();
     table.setData(data.facturas);
     const n = data.total;
+
+    const nDuplicados = (data.facturas || []).filter((f) => f.posible_duplicado).length;
+    const dupBanner = document.getElementById('duplicados-banner');
+    if (dupBanner) {
+      dupBanner.style.display = nDuplicados > 0 ? 'flex' : 'none';
+      if (nDuplicados > 0) document.getElementById('duplicados-count').textContent = nDuplicados;
+    }
     const companyTag = currentCompanyFilter
       ? ` <span style="font-size:12px;background:#ebf8ff;color:#2b6cb0;padding:2px 8px;border-radius:10px;font-weight:600;">📂 ${escHtml(currentCompanyFilter.nombre)}</span>`
       : '';
