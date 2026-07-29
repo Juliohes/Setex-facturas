@@ -440,9 +440,10 @@ function initTable() {
     persistence: { sort: true, columns: ['width'] },
     persistenceID: 'setex-admin-facturas-v9',
     columns: [
-      { title: 'ID',               field: 'id',              width: 65,  sorter: 'number', hozAlign: 'center', frozen: true,
+      { title: 'ID',               field: 'id',              width: 22,  resizable: true, sorter: 'number', hozAlign: 'center', frozen: true,
         formatter: (cell) => `<code style="font-size:12px;font-weight:700;">#${cell.getValue()}</code>` },
-      { title: 'Código cliente',   field: 'codigo_cliente',  width: 110, sorter: 'string', hozAlign: 'center', frozen: true,
+      // Oculta por ahora (petición de Julio 2026-07-29) — se reactiva con visible:true si hace falta.
+      { title: 'Código cliente',   field: 'codigo_cliente',  width: 110, sorter: 'string', hozAlign: 'center', frozen: true, visible: false,
         formatter: (cell) => { const v = cell.getValue(); return v ? `<code style="font-size:12px;font-weight:700;">${escHtml(v)}</code>` : '<span style="color:#a0aec0;">—</span>'; } },
       // ── Empresa y contraparte: campos computados por el backend via matching CIF/nombre/tipo ──
       { title: 'Empresa',          field: 'display_empresa',      minWidth: 160, sorter: 'string',
