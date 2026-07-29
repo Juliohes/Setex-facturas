@@ -131,13 +131,30 @@ async function ejecutarPipelineV2Sombra({ uploadId, filePath, mimeType, context,
       }
       let arbitraje;
       if (usaMulti) {
-        const arbOpts = seleccion.arbitro ? { filePath: rutaImagen, mimeType, context, cfg, logger, motorArbitro: seleccion.arbitro } : {};
+        // Árbitro externo (OpenAI, ~8,9s medidos) FUERA del camino crítico si
+        // ocr_extraccion_v2_arbitro_bloqueante === false: no se invoca de forma
+        // bloqueante y las disputas caen a revisión humana (2026-07-29, palanca
+        // de latencia para el preview síncrono). Default (flag ausente o true) =
+        // árbitro activo, idéntico a hoy.
+        const arbitroActivo = Boolean(seleccion.arbitro) && cfg.ocr_extraccion_v2_arbitro_bloqueante !== false;
+        const arbOpts = arbitroActivo ? { filePath: rutaImagen, mimeType, context, cfg, logger, motorArbitro: seleccion.arbitro } : {};
         arbitraje = await arbiter.arbitrarFacturaMulti(resultados, arbOpts);
       } else {
         arbitraje = await arbiter.arbitrarFactura(resultados[0], resultados[1]);
       }
       return { resultados, arbitraje };
     };
+
+    // ── Tesseract (anti-alucinación) EN PARALELO con la extracción ─────────
+    // Solo necesita la imagen, no el resultado de la IA — así sus ~5,5s se
+    // solapan con la extracción (~7,3s) en vez de sumarse en serie después
+    // (2026-07-29, palanca de latencia medida). La comparación de valores
+    // críticos se hace más abajo, cuando ya tenemos camposFinales. Fail-safe:
+    // se captura aquí para no dejar una promesa rechazada suelta si el flujo
+    // retorna antes de consumirla.
+    const tesseractPromise = (cfg.ocr_extraccion_v2_tesseract_enabled && mimeType.startsWith('image/'))
+      ? tesseractAdapter.reconocerTextoBruto(filePath).catch((err) => ({ ok: false, error: err.message }))
+      : null;
 
     const inicial = await extraerYArbitrar(filePath);
     const resultadosEstandar = inicial.resultados;
@@ -242,8 +259,8 @@ async function ejecutarPipelineV2Sombra({ uploadId, filePath, mimeType, context,
     // de CLAUDE.md). Solo tras ocr_extraccion_v2_tesseract_enabled (default
     // false). Fail-safe: un fallo de Tesseract no afecta al resto.
     let alucinacionesSospechosas = [];
-    if (cfg.ocr_extraccion_v2_tesseract_enabled && mimeType.startsWith('image/')) {
-      const resultadoTesseract = await tesseractAdapter.reconocerTextoBruto(filePath);
+    if (tesseractPromise) {
+      const resultadoTesseract = await tesseractPromise; // ya iniciado en paralelo arriba
       if (resultadoTesseract.ok) {
         const criticos = extraerValoresCriticos(camposFinales);
         for (const [campo, valor] of Object.entries(criticos)) {

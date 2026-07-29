@@ -321,4 +321,26 @@ describe('ejecutarPipelineV2Sombra', () => {
       assert.equal(r.alucinaciones_sospechosas.length, 0);
     });
   });
+
+  describe('árbitro fuera del camino crítico (arbitro_bloqueante, 2026-07-29)', () => {
+    test('bloqueante=false: no invoca al árbitro externo; la disputa cae a revisión', async () => {
+      const A = candidatoCanonico({ numeroFactura: '0001' });
+      const B = candidatoCanonico({ numeroFactura: '0002' }); // discrepan en un campo SIN validador → disputa
+      mExtraccion = mock.method(extractors, 'ejecutarExtraccionV2Multi', async () => ({
+        gemini_flash: { motor: 'gemini_flash', ok: true, campos: A, tiempo_ms: 100, coste_estimado_usd: 0.006 },
+        mistral: { motor: 'mistral', ok: true, campos: B, tiempo_ms: 120, coste_estimado_usd: 0.004 },
+      }));
+      const cfg = {
+        ocr_extraccion_v2_modelos_base: ['gemini_flash', 'mistral'],
+        ocr_extraccion_v2_modelo_arbitro: 'openai',
+        ocr_extraccion_v2_arbitro_bloqueante: false, // árbitro fuera del camino crítico
+      };
+      const r = await ejecutarPipelineV2Sombra({ uploadId: 5, filePath: tmpPath, mimeType: 'image/jpeg', context: {}, cfg, logger: NOOP_LOGGER });
+      assert.ok(r);
+      // Sin árbitro externo (no hay red), la discrepancia de numero_factura
+      // persiste como disputa → la factura va a revisión humana, no se gastan
+      // ~8,9s ni una llamada a OpenAI.
+      assert.ok(r.disputas.includes('numero_factura'), `esperaba numero_factura en disputas: ${JSON.stringify(r.disputas)}`);
+    });
+  });
 });
