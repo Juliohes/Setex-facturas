@@ -452,6 +452,16 @@ Decisiones tomadas por Julio (reencuadran las Fases 0-1):
 - **Tests**: 56 nuevos (seleccion-modelos + arbitraje/extracción multi), suite completa 327/328 verde — el único fallo es la paridad v3 preexistente (no relacionado). Comando: `node --test tests/` en `app/backend`.
 - **Pendiente (gates que SÍ necesitan a Julio)**: (1) desplegar la rama a producción (procedimiento A.2.8); (2) añadir los flags a `features.json` en caliente tras el deploy; (3) sesión de dispositivo real para el estudio de latencia (§6 del plan de latencia); (4) reactivar la vía Azure cuando se contrate S0.
 
+### 2026-07-29 — [Fase 4.2 parcial] Desplegado y activada la pila nueva en SOMBRA (aprobado por Julio)
+Julio aprobó explícitamente el despliegue + activación por flags + arranque del estudio de latencia. Ejecutado con verificación en cada paso:
+- **Deploy**: imagen backend anterior etiquetada como rollback (`setex-prod-backend-rollback:2026-07-29-premodelos`) → `docker compose build backend` → `stop` → `up -d`. Arranque sano ("Server running on port 3000"), 4/4 contenedores healthy, health-check con HTTPS 200, logs sin errores. Solo backend; frontend intacto.
+- **Activación por flags**: añadidos a `features.json` `ocr_extraccion_v2_modelos_base:["gemini_flash","mistral"]` + `ocr_extraccion_v2_modelo_arbitro:"openai"`. Se disparó el gotcha del bind-mount (el contenedor veía 0 tras editar) → resuelto con `stop`+`up -d` (no `restart`), tras lo cual el contenedor SÍ ve los flags. JSON validado antes.
+- **Verificación sin coste**: `resolverConfigModelos` en el contenedor devuelve base=[gemini_flash,mistral], arbitro=openai, personalizada=true (ruta multi), 0 avisos.
+- **Verificación end-to-end (con coste, ~$0.03, autorizado)**: `ejecutarPipelineV2Sombra` sobre una factura real → confianzas de `gemini_flash`(0.92)+`mistral`(0.93), árbitro OpenAI disparado por disputa de emisor.nombre, estado pendiente_revision, coste $0.01. **La pila nueva corre en producción, sin Azure.** No se escribió en `extracciones_v2` (pool=null, llamada directa al orquestador, no al hook del server) — cero contaminación de datos.
+- **Latencia medida (pila nueva, sin Azure)**: núcleo 22,5 s (variantes off) = apilamiento serie de base(7,3s, lo marca Mistral)+árbitro OpenAI(8,9s)+Tesseract(5,5s). Desglose y palancas en `PLAN-ESTUDIO-LATENCIA-CAPTURA.md` §7. Con esto, un preview síncrono <12s es viable SOLO con: variantes off + Tesseract en paralelo + árbitro fuera del camino crítico.
+- **Estado**: v2 en sombra con la pila nueva. El usuario sigue viendo v1 (la integración en preview NO está hecha — sigue siendo la Fase 1 grande, pendiente). Rollback disponible por flags (quitar los 2 flags → vuelve a legacy azure+gemini) o por imagen (`setex-prod-backend-rollback:2026-07-29-premodelos`).
+- **Rama pendiente de commit del cambio en features.json**: NO — features.json es config de producción en caliente, no se commitea el valor activo; el snippet queda documentado en `seleccion-modelos.js:CONFIG_RECOMENDADA` y aquí.
+
 ---
 
 *Documento vivo. Cualquier desviación de este plan durante la ejecución se anota en §H con fecha y motivo ANTES de ejecutarla.*

@@ -110,6 +110,29 @@ Un informe `docs/ocr-v2/INFORME-LATENCIA-YYYY-MM-DD.md` con:
 ### 2026-07-29 — Plan creado
 - Redactado el marco del estudio. Hallazgo de partida: `extracciones_v2` NO persiste tiempos por etapa (solo total 30 s media / 74 s máx, contaminado por 429 de Azure F0 y variante x2). Medición pendiente: exige instrumentación (Opción A script de laboratorio recomendada) + sesión en dispositivo real para E1-E2-E12.
 
+### 2026-07-29 — Primera medición del backend con la pila NUEVA (sin Azure)
+Ejecutado en el contenedor de producción (`docker exec node`) sobre 3 facturas reales de `/app/uploads`, con la pila nueva (gemini_flash+mistral base, openai árbitro), `variantes=off` para aislar el núcleo. Medias por etapa (E5/E6/E9):
+
+| Etapa | Media | Peso |
+|---|---|---|
+| E5 gemini_flash (extracción) | 5.546 ms | motor rápido |
+| E5 mistral (extracción) | 7.298 ms | **cuello del paralelo base** |
+| E6 openai (árbitro, solo si disputa ~37%) | 8.889 ms | **etapa individual más lenta** |
+| E9 tesseract (anti-alucinación, serie, siempre) | 5.549 ms | corre en SERIE tras extracción |
+
+- **Núcleo medido end-to-end (variantes off) = 22.566 ms** sobre una factura con disputa = base paralelo (~7,3 s, lo marca Mistral) + árbitro OpenAI (~8,9 s) + Tesseract (~5,5 s), **los tres en serie**. Con `variantes=on` (default de producción) se suma otra pasada base (~7,3 s) → explica los 30 s de la sombra. Los 429 de Azure F0 añadían el resto hasta los 74 s máx.
+- **Conclusión (responde "qué tarda más y por qué")**: NO hay una sola etapa dominante — es el APILAMIENTO SERIE de tres etapas. Ninguna es Azure (ya fuera).
+
+**Palancas de reducción, cuantificadas:**
+1. **Tesseract en PARALELO con la extracción** (no depende del resultado, solo de la imagen) → ahorra ~5,5 s serie. Cambio de bajo riesgo. *(Pendiente de implementar.)*
+2. **`variantes` off** → ahorra la 2ª pasada base (~7,3 s) y ~la mitad del coste Azure/motor. La calidad ya es 96,3% sin variante. *(Recomendado; validar con A/B con/sin.)*
+3. **Árbitro más barato o asíncrono**: OpenAI 8,9 s es lo más caro en latencia; probar mistral/gemini_pro como árbitro, o arbitrar solo el campo en disputa, o sacar el árbitro de la ruta síncrona. Fuego ~37% de facturas.
+4. **Mistral (7,3 s) es más lento que Gemini (5,5 s)**: si se prioriza velocidad, una base gemini_flash+gemini_pro o gemini_flash solo sería más rápida — a costa de diversidad de motor. Decisión calidad vs velocidad.
+
+**Veredicto de diseño para PLAN-ACTIVACION-OCR-V2**: un preview SÍNCRONO de v2 (<12 s) ES viable si en la ruta síncrona: variantes off + Tesseract en paralelo + árbitro fuera del camino crítico (async o solo-campo). Solo con la extracción base (~7,3 s) se cumple el presupuesto. Sin esos cambios, el núcleo (22 s) NO cabe en 12 s.
+
+**Pendiente**: E1-E2-E12 (captura, subida móvil, render) siguen sin medir — necesitan sesión en dispositivo real (§6.1). La subida móvil de una foto grande puede ser una fracción grande del tiempo percibido y hoy es invisible.
+
 ---
 
 *Documento vivo. La medición se ejecuta cuando se cierren los puntos de §6.*
