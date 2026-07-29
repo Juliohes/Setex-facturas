@@ -6,7 +6,7 @@
   <title>SETEX — Panel de Administración</title>
   <link rel="icon" href="favicon-admin.svg" type="image/svg+xml">
   <link rel="stylesheet" href="tabulator.min.css">
-  <link rel="stylesheet" href="admin-facturas.css?v=20260729-003">
+  <link rel="stylesheet" href="admin-facturas.css?v=20260729-004">
 </head>
 <body>
 
@@ -238,6 +238,25 @@
     </div>
   </div>
 
+  <!-- Modal: marcar campos no fiables de una factura (bandera de la columna ID) -->
+  <div id="nofiable-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-card" style="width:min(620px,96vw);max-height:88vh;overflow-y:auto;">
+      <div class="modal-header">
+        <h3 id="nofiable-modal-title">Campos no fiables</h3>
+        <button id="nofiable-modal-close" class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body" style="padding:16px 20px;">
+        <p style="font-size:13px;color:#4a5568;margin:0 0 12px;">Marca los campos cuyo valor no sea de fiar (ilegible en la foto, dudoso, etc.). Quedarán resaltados en rojo en la tabla para avisar de que necesitan revisión.</p>
+        <div id="nofiable-lista"></div>
+        <p id="nofiable-error" class="edit-error" style="display:none;margin-top:10px;"></p>
+      </div>
+      <div class="modal-footer">
+        <button id="nofiable-cancel" class="btn-secondary">Cancelar</button>
+        <button id="nofiable-save" class="btn-primary">Guardar</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Modal: resolver facturas posiblemente duplicadas -->
   <div id="duplicado-modal" class="modal-overlay" style="display:none;">
     <div class="modal-card" style="width:min(760px,96vw);max-height:88vh;overflow-y:auto;">
@@ -383,6 +402,6 @@
 
   <script src="tabulator.min.js"></script>
   <script src="auth.js?v=20260414-003"></script>
-  <script src="admin-facturas.js?v=20260729-003"></script>
+  <script src="admin-facturas.js?v=20260729-004"></script>
 </body>
 </html>

@@ -174,20 +174,33 @@ async function saveEdit() {
 const CAMPOS_FLAGEABLES = ['proveedor_nombre', 'proveedor_nif', 'receptor_nombre', 'receptor_nif',
   'numero_factura', 'fecha_emision', 'total_factura', 'base_imponible', 'cuota_iva', 'cuota_irpf'];
 
+// Etiquetas legibles de los campos marcables, para el modal de revisión.
+const ETIQUETAS_FLAGEABLES = {
+  proveedor_nombre: 'Proveedor / Emisor (nombre)',
+  proveedor_nif:    'CIF Proveedor / Emisor',
+  receptor_nombre:  'Receptor / Cliente (nombre)',
+  receptor_nif:     'CIF Receptor / Cliente',
+  numero_factura:   'Nº Factura',
+  fecha_emision:    'Fecha de emisión',
+  total_factura:    'Total',
+  base_imponible:   'Base imponible',
+  cuota_iva:        'Cuota IVA',
+  cuota_irpf:       'Cuota IRPF',
+};
+
+// El botón 🚩 NO se pinta aquí: vive una sola vez por fila, en la celda de ID
+// (repetirlo en cada celda editable ensuciaba toda la tabla). Aquí solo queda
+// el resaltado en rojo del valor cuando ese campo está marcado como no fiable.
 function makeEditableFormatter(field, innerFormatter) {
   return (cell) => {
     const val = innerFormatter ? innerFormatter(cell) : (cell.getValue() ?? '<span style="color:#a0aec0">—</span>');
     const rowData = cell.getRow().getData();
     const actualField = getActualField(field, rowData);
-    const flagueable = CAMPOS_FLAGEABLES.includes(actualField);
-    const flagueado = flagueable && Array.isArray(rowData.campos_no_fiables) && rowData.campos_no_fiables.includes(actualField);
+    const flagueado = Array.isArray(rowData.campos_no_fiables) && rowData.campos_no_fiables.includes(actualField);
     const valSpan = flagueado
-      ? `<span class="cell-val" style="background:#fed7d7;border-radius:3px;padding:1px 4px;" title="Marcado como no fiable">${val}</span>`
+      ? `<span class="cell-val" style="background:#fc8181;border-radius:3px;padding:1px 4px;" title="Marcado como no fiable — requiere revisión">${val}</span>`
       : `<span class="cell-val">${val}</span>`;
-    const flagBtn = flagueable
-      ? `<button class="flag-cell-btn" title="${flagueado ? 'Quitar marca de no fiable' : 'Marcar como no fiable (requiere revisión)'}">🚩</button>`
-      : '';
-    return `${valSpan}<button class="edit-cell-btn" title="Editar ${EDITABLE_FIELDS[field] || field}">✏️</button>${flagBtn}`;
+    return `${valSpan}<button class="edit-cell-btn" title="Editar ${EDITABLE_FIELDS[field] || field}">✏️</button>`;
   };
 }
 
@@ -213,32 +226,63 @@ function makeEditableCellClick(field) {
   return (_e, cell) => {
     if (_e.target.classList.contains('edit-cell-btn')) {
       openEditModal(cell.getRow().getData(), field);
-    } else if (_e.target.classList.contains('flag-cell-btn')) {
-      toggleCampoNoFiable(cell.getRow().getData(), field);
     }
   };
 }
 
-// Marca/desmarca un campo como no fiable (campos_no_fiables, JSONB en uploads).
-// Toggle idempotente, sin confirm() — es una anotación de baja fricción, no
-// una acción destructiva.
-async function toggleCampoNoFiable(rowData, displayField) {
-  const actualField = getActualField(displayField, rowData);
-  const actuales = Array.isArray(rowData.campos_no_fiables) ? rowData.campos_no_fiables : [];
-  const yaFlagueado = actuales.includes(actualField);
-  const nuevos = yaFlagueado ? actuales.filter((c) => c !== actualField) : [...actuales, actualField];
+// ── Marcado de campos no fiables (una bandera por fila, en la celda de ID) ───
+// campos_no_fiables es un array JSONB en uploads: los campos ahí listados se
+// pintan en rojo en la tabla para avisar de que ese dato no es de fiar (ej.
+// un CIF ilegible incluso a simple vista).
+let noFiableRowId = null;
+
+function openNoFiableModal(rowData) {
+  noFiableRowId = rowData.id;
+  const marcados = Array.isArray(rowData.campos_no_fiables) ? rowData.campos_no_fiables : [];
+  document.getElementById('nofiable-modal-title').textContent = `Campos no fiables — Factura #${rowData.id}`;
+  document.getElementById('nofiable-error').style.display = 'none';
+  document.getElementById('nofiable-lista').innerHTML = CAMPOS_FLAGEABLES.map((campo) => {
+    const valor = rowData[campo];
+    return `
+      <label style="display:flex;align-items:center;gap:10px;padding:7px 4px;border-bottom:1px solid #edf2f7;cursor:pointer;font-size:13px;">
+        <input type="checkbox" data-campo="${campo}" ${marcados.includes(campo) ? 'checked' : ''}>
+        <span style="flex:1;">${ETIQUETAS_FLAGEABLES[campo]}</span>
+        <code style="color:#4a5568;font-size:12px;">${valor ? escHtml(String(valor)) : '—'}</code>
+      </label>`;
+  }).join('');
+  document.getElementById('nofiable-modal').style.display = 'flex';
+}
+
+function closeNoFiableModal() {
+  document.getElementById('nofiable-modal').style.display = 'none';
+  noFiableRowId = null;
+}
+
+async function saveNoFiable() {
+  if (noFiableRowId == null) return;
+  const seleccionados = [...document.querySelectorAll('#nofiable-lista input[type=checkbox]')]
+    .filter((cb) => cb.checked)
+    .map((cb) => cb.dataset.campo);
+  const errEl = document.getElementById('nofiable-error');
+  errEl.style.display = 'none';
+  const btn = document.getElementById('nofiable-save');
+  btn.disabled = true; btn.textContent = 'Guardando...';
   try {
-    const res = await authFetch(`${API_URL}/admin/facturas/${rowData.id}`, {
+    const res = await authFetch(`${API_URL}/admin/facturas/${noFiableRowId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ campos_no_fiables: nuevos }),
+      body: JSON.stringify({ campos_no_fiables: seleccionados }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Error al guardar');
-    const row = table.getRow(rowData.id);
+    const row = table.getRow(noFiableRowId);
     if (row) { row.update(data.factura); row.reformat(); }
+    closeNoFiableModal();
   } catch (err) {
-    alert(`No se pudo actualizar la marca de no fiable: ${err.message}`);
+    errEl.textContent = err.message;
+    errEl.style.display = 'block';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Guardar';
   }
 }
 
@@ -438,10 +482,29 @@ function initTable() {
     placeholder: 'No hay facturas con los filtros aplicados',
     movableColumns: true,
     persistence: { sort: true, columns: ['width'] },
-    persistenceID: 'setex-admin-facturas-v9',
+    // v10 (2026-07-29): Tabulator persiste tambien el ORDEN de columnas bajo
+    // esta clave. Al anadir la columna "id" (nueva, no presente en el layout
+    // guardado en localStorage) quedaba anexada AL FINAL y, por tener
+    // frozen:true, se congelaba a la DERECHA en vez de a la izquierda.
+    // Subir la version invalida el layout viejo y respeta el orden de aqui.
+    persistenceID: 'setex-admin-facturas-v10',
     columns: [
-      { title: 'ID',               field: 'id',              width: 22,  resizable: true, sorter: 'number', hozAlign: 'center', frozen: true,
-        formatter: (cell) => `<code style="font-size:12px;font-weight:700;">#${cell.getValue()}</code>` },
+      // La bandera de "campos no fiables" vive AQUI, una sola por fila, en vez
+      // de repetirse en cada celda editable (ensuciaba toda la tabla). Abre un
+      // modal donde se elige QUE campos concretos no son fiables — se conserva
+      // asi la granularidad por campo y el resaltado en rojo de esas celdas.
+      { title: 'ID',               field: 'id',              width: 62,  resizable: true, sorter: 'number', hozAlign: 'center', frozen: true,
+        formatter: (cell) => {
+          const rowData = cell.getRow().getData();
+          const n = Array.isArray(rowData.campos_no_fiables) ? rowData.campos_no_fiables.length : 0;
+          const flag = n > 0
+            ? `<button class="flag-row-btn marcado" title="${n} campo(s) marcados como no fiables — click para revisar">🚩${n}</button>`
+            : '<button class="flag-row-btn" title="Marcar campos no fiables (requieren revisión)">🚩</button>';
+          return `<code style="font-size:12px;font-weight:700;">#${cell.getValue()}</code>${flag}`;
+        },
+        cellClick: (e, cell) => {
+          if (e.target.closest('.flag-row-btn')) openNoFiableModal(cell.getRow().getData());
+        } },
       // Oculta por ahora (petición de Julio 2026-07-29) — se reactiva con visible:true si hace falta.
       { title: 'Código cliente',   field: 'codigo_cliente',  width: 110, sorter: 'string', hozAlign: 'center', frozen: true, visible: false,
         formatter: (cell) => { const v = cell.getValue(); return v ? `<code style="font-size:12px;font-weight:700;">${escHtml(v)}</code>` : '<span style="color:#a0aec0;">—</span>'; } },
@@ -521,6 +584,11 @@ function initTable() {
   });
   document.getElementById('duplicado-modal-close').addEventListener('click', closeDuplicadoModal);
   document.getElementById('duplicado-cancel').addEventListener('click', closeDuplicadoModal);
+
+  // Modal de campos no fiables (bandera de la columna ID)
+  document.getElementById('nofiable-modal-close').addEventListener('click', closeNoFiableModal);
+  document.getElementById('nofiable-cancel').addEventListener('click', closeNoFiableModal);
+  document.getElementById('nofiable-save').addEventListener('click', saveNoFiable);
 }
 
 // Eliminación de factura con confirmación y DELETE al backend

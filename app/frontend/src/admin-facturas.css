@@ -332,12 +332,15 @@ body {
 .tabulator-cell:hover .edit-cell-btn { opacity: 1; }
 .cell-val { vertical-align: middle; }
 
-/* Botón para marcar/desmarcar un campo como "no fiable" (revisión manual) */
-.flag-cell-btn {
-  background: none; border: none; cursor: pointer; font-size: 11px; padding: 1px 3px;
-  opacity: 0.35; transition: opacity 0.15s; vertical-align: middle; margin-left: 2px;
+/* Bandera de "campos no fiables" — una sola por fila, en la celda de ID.
+   Discreta hasta que se pasa el ratón; siempre visible si ya hay campos
+   marcados (.marcado), para que el aviso no dependa del hover. */
+.flag-row-btn {
+  background: none; border: none; cursor: pointer; font-size: 11px; padding: 1px 2px;
+  opacity: 0; transition: opacity 0.15s; vertical-align: middle; margin-left: 2px;
 }
-.tabulator-cell:hover .flag-cell-btn { opacity: 1; }
+.tabulator-cell:hover .flag-row-btn { opacity: 1; }
+.flag-row-btn.marcado { opacity: 1; font-weight: 700; color: #c53030; }
 
 /* Secciones (catálogo / seguridad) */
 .section-card {
