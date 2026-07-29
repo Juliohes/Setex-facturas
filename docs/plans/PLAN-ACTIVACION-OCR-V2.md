@@ -462,6 +462,15 @@ Julio aprobó explícitamente el despliegue + activación por flags + arranque d
 - **Estado**: v2 en sombra con la pila nueva. El usuario sigue viendo v1 (la integración en preview NO está hecha — sigue siendo la Fase 1 grande, pendiente). Rollback disponible por flags (quitar los 2 flags → vuelve a legacy azure+gemini) o por imagen (`setex-prod-backend-rollback:2026-07-29-premodelos`).
 - **Rama pendiente de commit del cambio en features.json**: NO — features.json es config de producción en caliente, no se commitea el valor activo; el snippet queda documentado en `seleccion-modelos.js:CONFIG_RECOMENDADA` y aquí.
 
+### 2026-07-29 — [Latencia] 3 palancas aplicadas y desplegadas → 22,5s a 8,8s (−61%)
+Aprobado por Julio ("apaga variantes y haz el tesseract en paralelo, y haz todo esto..."). Implementado, testeado (suite 328/329), desplegado y re-medido:
+- **Tesseract en paralelo** con la extracción (código, `orchestrator.js`): sus ~5,5s se solapan.
+- **`variantes_enabled=false`** (flag): evita la 2ª pasada ~7,3s.
+- **`arbitro_bloqueante=false`** (flag nuevo, código): OpenAI (~8,9s) fuera del camino crítico; disputas → revisión humana.
+- **Re-medición producción**: núcleo 22.566ms → **8.757ms**, por debajo del objetivo de 12s → preview síncrono viable (a falta de medir la subida móvil E1-E2). Detalle en `PLAN-ESTUDIO-LATENCIA-CAPTURA.md` §7.
+- Deploy: rollback etiquetado `setex-prod-backend-rollback:2026-07-29-prelatencia`, build+stop+up-d, 4/4 healthy, HTTPS 200. features.json commiteado (config real de producción sincronizada con el repo).
+- Commit `perf(ocr-v2): 3 palancas de latencia`. Tradeoff del árbitro no bloqueante (disputas a revisión en vez de resolución OpenAI) documentado y reversible por flag. Árbitro asíncrono real = Fase 1 del preview.
+
 ---
 
 *Documento vivo. Cualquier desviación de este plan durante la ejecución se anota en §H con fecha y motivo ANTES de ejecutarla.*

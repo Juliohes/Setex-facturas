@@ -133,6 +133,18 @@ Ejecutado en el contenedor de producción (`docker exec node`) sobre 3 facturas 
 
 **Pendiente**: E1-E2-E12 (captura, subida móvil, render) siguen sin medir — necesitan sesión en dispositivo real (§6.1). La subida móvil de una foto grande puede ser una fracción grande del tiempo percibido y hoy es invisible.
 
+### 2026-07-29 — RE-MEDICIÓN tras aplicar las 3 palancas (desplegado en producción)
+Aplicadas y desplegadas las 3 palancas: (1) Tesseract en paralelo con la extracción [código], (2) `variantes_enabled=false` [flag], (3) `arbitro_bloqueante=false` → árbitro OpenAI fuera del camino crítico, disputas a revisión [flag]. Re-medición sobre las mismas 3 facturas con la config real de producción:
+
+| | Antes | Después | Δ |
+|---|---|---|---|
+| Núcleo pipeline v2 | 22.566 ms | **8.757 ms** | **−61%** |
+
+- **Por debajo del objetivo de 12s.** El tiempo restante (~8,8s) es esencialmente la extracción base (Mistral marca el cuello ~7,3s) con Tesseract ya solapado y sin árbitro bloqueante. Estado resultante: `pendiente_revision` con la disputa de `emisor.nombre` yendo a revisión humana (tradeoff asumido de sacar el árbitro).
+- **Veredicto de diseño actualizado**: el backend de v2 YA cabe en presupuesto para un preview síncrono (<12s). El siguiente cuello, si se quiere bajar más, es **Mistral (7,3s vs Gemini 5,5s)**: una base solo-Gemini o gemini_flash+gemini_pro sería más rápida a costa de diversidad de motor.
+- **Sigue pendiente** la medición E1-E2-E12 en dispositivo real (subida móvil + render), que es la otra mitad del tiempo foto→resultado y hoy invisible.
+- Tradeoff documentado del árbitro no bloqueante: en sombra, las facturas con disputa que OpenAI habría resuelto ahora van a `pendiente_revision`. Es reversible al instante (`arbitro_bloqueante=true`). La forma "correcta" para el preview síncrono es un árbitro ASÍNCRONO (servir la base ~8s y refinar disputas en segundo plano) — pertenece a la Fase 1 de integración del preview.
+
 ---
 
 *Documento vivo. La medición se ejecuta cuando se cierren los puntos de §6.*
