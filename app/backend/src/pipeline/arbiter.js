@@ -72,6 +72,19 @@ function resolverCampoSimple(campo, valorA, fuenteA, valorB, fuenteB) {
   if (coinciden(valorA, valorB)) {
     return { campo, valor: valorA ?? valorB, fuente: valorA != null ? fuenteA : fuenteB, en_disputa: false, motivo: 'coinciden' };
   }
+  // Un motor que no encontró nada (null) no está "en desacuerdo" con el que sí
+  // encontró un valor concreto -- es una ausencia, no una discrepancia. Antes
+  // esto se trataba igual que dos valores distintos y se mandaba a arbitraje
+  // (o quedaba en null si el árbitro tampoco coincidía exactamente), perdiendo
+  // el único dato disponible. Incidente real: Azure DI (prebuilt-invoice) no
+  // reconoce numero_factura con formato "26#XXXX" y devuelve null sistemáticamente
+  // mientras Gemini sí lo lee -- facturas #5/#16/#19 del replay 2026-07-29.
+  if (valorA == null && valorB != null) {
+    return { campo, valor: valorB, fuente: fuenteB, en_disputa: false, motivo: `${fuenteA} no encontró el campo, se acepta ${fuenteB}` };
+  }
+  if (valorB == null && valorA != null) {
+    return { campo, valor: valorA, fuente: fuenteA, en_disputa: false, motivo: `${fuenteB} no encontró el campo, se acepta ${fuenteA}` };
+  }
   return {
     campo, valor: null, fuente: null, en_disputa: true,
     candidatos: { [fuenteA]: valorA, [fuenteB]: valorB },

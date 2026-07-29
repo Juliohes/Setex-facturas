@@ -76,6 +76,26 @@ describe('resolverCampoSimple (sin validación determinista propia)', () => {
     const r = resolverCampoSimple('numero_factura', '0001', 'azure', '0002', 'gemini_flash');
     assert.equal(r.en_disputa, true);
   });
+  // Incidente real 2026-07-29: Azure DI no reconoce numero_factura en formato
+  // "26#XXXX" y devuelve null, mientras Gemini sí lo lee -- antes se trataba
+  // como discrepancia y el campo se perdía (quedaba null tras arbitraje).
+  test('un motor no encuentra nada (null) y el otro sí → acepta el valor concreto sin disputa', () => {
+    const r = resolverCampoSimple('numero_factura', null, 'azure', '26#3854', 'gemini_flash');
+    assert.equal(r.en_disputa, false);
+    assert.equal(r.valor, '26#3854');
+    assert.equal(r.fuente, 'gemini_flash');
+  });
+  test('un motor no encuentra nada (null) y el otro sí, en el otro orden → acepta igual', () => {
+    const r = resolverCampoSimple('numero_factura', '26#3854', 'azure', null, 'gemini_flash');
+    assert.equal(r.en_disputa, false);
+    assert.equal(r.valor, '26#3854');
+    assert.equal(r.fuente, 'azure');
+  });
+  test('ambos null → coinciden en ausencia, sin disputa', () => {
+    const r = resolverCampoSimple('numero_factura', null, 'azure', null, 'gemini_flash');
+    assert.equal(r.en_disputa, false);
+    assert.equal(r.valor, null);
+  });
 });
 
 describe('arbitrarFactura — casos completos', () => {
