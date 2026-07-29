@@ -221,6 +221,66 @@ async function arbitrarFactura(resultadoA, resultadoB, opts = {}) {
   return { campos, disputas, decisiones, motivo: disputas.length ? `${disputas.length} campo(s) en disputa` : 'resuelto sin disputas' };
 }
 
+/**
+ * Árbitro N-modelos (2-4), petición de Julio 2026-07-29. Reutiliza el árbitro
+ * pairwise ya probado mediante un TORNEO por reducción: arbitra los dos
+ * primeros resultados y el consenso resultante se arbitra contra el siguiente,
+ * y así sucesivamente. El árbitro EXTERNO (opts.filePath + opts.motorArbitro)
+ * se aplica solo en la ronda final, para no multiplicar llamadas caras.
+ *
+ * Propiedad de seguridad clave: con EXACTAMENTE 2 resultados válidos, delega
+ * en arbitrarFactura(a, b, opts) — comportamiento byte a byte idéntico al de
+ * hoy, sin regresión del camino probado.
+ *
+ * Cada ronda preserva el valor VALIDADO (checksum NIF/CIF, coherencia IVA) del
+ * ganador parcial: el consenso nunca deja de ser fiscalmente coherente.
+ *
+ * Limitación conocida (mejora futura = "consenso N-way real", ver
+ * PLAN-ESTUDIO-LATENCIA / follow-up): el torneo depende del orden de la lista
+ * base y, en un empate 1-1 de un campo SIN validador propio (nombre, número,
+ * fecha), el 3er/4º motor rompe el empate como un voto secuencial, no como una
+ * mayoría global. Aceptable como v1; los campos fiscales (NIF, importes) sí
+ * quedan gobernados por sus validadores deterministas en cada ronda.
+ *
+ * @param {Array<{motor:string, ok:boolean, campos?:object, error?:string}>} resultados
+ * @param {{filePath?:string, mimeType?:string, context?:object, cfg?:object, logger?:object, motorArbitro?:string}} [opts]
+ * @returns {Promise<{campos:(object|null), disputas:object[], decisiones?:object, motivo:string, sin_resultado?:boolean, motores_usados?:string[]}>}
+ */
+async function arbitrarFacturaMulti(resultados, opts = {}) {
+  const ok = (resultados || []).filter((r) => r && r.ok && r.campos);
+
+  if (ok.length === 0) {
+    return { campos: null, disputas: [], motivo: 'ningún motor devolvió resultado válido', sin_resultado: true, motores_usados: [] };
+  }
+  if (ok.length === 1) {
+    return { campos: ok[0].campos, disputas: [], decisiones: {}, motivo: `único motor válido (${ok[0].motor}) — sin arbitraje cruzado`, motores_usados: [ok[0].motor] };
+  }
+  if (ok.length === 2) {
+    // Camino idéntico al probado: no se reinventa nada con 2 candidatos.
+    const r = await arbitrarFactura(ok[0], ok[1], opts);
+    return { ...r, motores_usados: [ok[0].motor, ok[1].motor] };
+  }
+
+  // 3-4 motores: torneo. El árbitro externo (opts.filePath) solo en la última
+  // ronda; las intermedias van SIN árbitro para no multiplicar el coste.
+  const optsSinArbitro = { ...opts, filePath: undefined };
+  let acumulado = ok[0];
+  let ultima = null;
+  const usados = [ok[0].motor];
+  for (let i = 1; i < ok.length; i++) {
+    const esUltima = i === ok.length - 1;
+    const parcial = await arbitrarFactura(acumulado, ok[i], esUltima ? opts : optsSinArbitro);
+    if (parcial.sin_resultado || !parcial.campos) continue;
+    ultima = parcial;
+    usados.push(ok[i].motor);
+    acumulado = { motor: `consenso(${usados.join('+')})`, ok: true, campos: parcial.campos };
+  }
+  if (!ultima) {
+    return { campos: ok[0].campos, disputas: [], decisiones: {}, motivo: 'torneo sin fusiones válidas — se usa el primer motor', motores_usados: [ok[0].motor] };
+  }
+  return { ...ultima, motivo: `torneo ${ok.length} motores (${usados.join('+')}): ${ultima.motivo}`, motores_usados: usados };
+}
+
 /** Aplana un canónico a las mismas claves que usan las decisiones (para comparar contra el árbitro). */
 function aplanarCanonico(canonico) {
   const primeraLinea = (canonico.lineas_iva || [])[0] || {};
@@ -292,6 +352,7 @@ function validarCorreccionHumana(campo, valorCorregido, canonico) {
 
 module.exports = {
   arbitrarFactura,
+  arbitrarFacturaMulti,
   resolverIdentificador,
   resolverCampoSimple,
   resolverBloqueFinanciero,

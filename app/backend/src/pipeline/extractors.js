@@ -130,10 +130,80 @@ async function ejecutarArbitro(nombreMotor, filePath, mimeType, context, cfg, lo
   throw new Error(`Árbitro desconocido: ${nombreMotor}`);
 }
 
+// ── Selección configurable de motores (2026-07-29) ────────────────────────
+// Decisión de Julio: dejar de cablear azure+gemini y poder elegir en caliente
+// entre 2-4 motores base + árbitro opcional. Azure se retira del default (plan
+// gratuito F0 insuficiente para el volumen real, ver PLAN-ACTIVACION-OCR-V2
+// §C.5) pero queda DISPONIBLE aquí para cuando se contrate S0. Cada entrada
+// construye la MISMA llamada HTTP que ya usa v1 — no duplica ni modifica los
+// adaptadores. Los nombres coinciden con las claves de COSTE_ESTIMADO_USD.
+const CONSTRUCTORES_LLAMADA = {
+  azure: (filePath, mimeType, context) => {
+    const key = getSecret('azure_di_key');
+    const endpoint = getSecret('azure_di_endpoint');
+    return () => azure.extractInvoice(filePath, mimeType, key, endpoint, context);
+  },
+  gemini_flash: (filePath, mimeType, context, cfg) => {
+    const key = getSecret('gemini_api_key');
+    const model = cfg.ocr_gemini_flash_model || gemini.DEFAULT_MODELS.flash;
+    return () => gemini.extractInvoice(filePath, mimeType, key, context, model, 'flash');
+  },
+  gemini_pro: (filePath, mimeType, context, cfg) => {
+    const key = getSecret('gemini_api_key');
+    const model = cfg.ocr_gemini_pro_model || gemini.DEFAULT_MODELS.pro;
+    return () => gemini.extractInvoice(filePath, mimeType, key, context, model, 'pro');
+  },
+  openai: (filePath, mimeType, context) => {
+    const key = getSecret('openai_api_key');
+    return () => openai.extractInvoice(filePath, mimeType, key, context);
+  },
+  mistral: (filePath, mimeType, context) => {
+    const key = getSecret('mistral_api_key');
+    return () => mistral.extractInvoice(filePath, mimeType, key, context);
+  },
+};
+
+/** Motores que pueden participar como base o árbitro. Fuente de verdad única. */
+const MOTORES_SOPORTADOS = Object.keys(CONSTRUCTORES_LLAMADA);
+
+/**
+ * Ejecuta UN motor por su nombre, con reintentos y medición (vía
+ * ejecutarExtractor). NUNCA lanza: un motor no soportado o caído se devuelve
+ * como `{ ok: false, error }` — el orquestador decide, nunca se tumba el
+ * conjunto (misma garantía que ejecutarExtractor).
+ */
+async function ejecutarExtractorPorNombre(nombreMotor, filePath, mimeType, context, cfg, logger) {
+  const constructor = CONSTRUCTORES_LLAMADA[nombreMotor];
+  if (!constructor) {
+    return { motor: nombreMotor, ok: false, campos: null, error: `motor no soportado: ${nombreMotor}`, tiempo_ms: 0, coste_estimado_usd: null };
+  }
+  const llamada = constructor(filePath, mimeType, context, cfg || {});
+  return ejecutarExtractor(nombreMotor, llamada, logger);
+}
+
+/**
+ * Ejecuta EN PARALELO la lista de motores indicada (2-4), cada uno con sus
+ * reintentos. Devuelve un mapa { [motor]: resultado } — el orquestador lo
+ * pasa al árbitro N-modelos (arbiter.arbitrarFacturaMulti). Nunca lanza.
+ *
+ * @param {string[]} nombresMotores - p.ej. ['gemini_flash','mistral']
+ */
+async function ejecutarExtraccionV2Multi(nombresMotores, filePath, mimeType, context, cfg, logger) {
+  const resultados = await Promise.all(
+    (nombresMotores || []).map((nombre) => ejecutarExtractorPorNombre(nombre, filePath, mimeType, context, cfg, logger)),
+  );
+  const mapa = {};
+  for (const r of resultados) mapa[r.motor] = r;
+  return mapa;
+}
+
 module.exports = {
   ejecutarExtractor,
   ejecutarExtraccionV2Paralelo,
+  ejecutarExtractorPorNombre,
+  ejecutarExtraccionV2Multi,
   ejecutarArbitro,
   normalizarACanonico,
   COSTE_ESTIMADO_USD,
+  MOTORES_SOPORTADOS,
 };

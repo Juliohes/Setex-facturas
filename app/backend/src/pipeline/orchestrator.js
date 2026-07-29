@@ -25,6 +25,7 @@ const ingest = require('./ingest');
 const preprocess = require('./preprocess');
 const extractors = require('./extractors');
 const arbiter = require('./arbiter');
+const seleccionModelos = require('./seleccion-modelos');
 const reextraction = require('./reextraction');
 const confidence = require('./confidence');
 const observabilidad = require('./observabilidad');
@@ -99,35 +100,69 @@ async function ejecutarPipelineV2Sombra({ uploadId, filePath, mimeType, context,
       observabilidad.logEtapaV2(logger, 'info', 'preprocesado', documentId, { passed: calidad.passed, issues: calidad.issues });
     }
 
-    // ── Fase 4: extracción azure + gemini en paralelo, con reintentos ────
-    const { azure: resAzure, gemini_flash: resGemini } = await extractors.ejecutarExtraccionV2Paralelo(filePath, mimeType, context, cfg, logger);
-    observabilidad.logEtapaV2(logger, 'info', 'extraccion', documentId, { azure_ok: resAzure.ok, gemini_ok: resGemini.ok, azure_ms: resAzure.tiempo_ms, gemini_ms: resGemini.tiempo_ms });
+    // ── Fase 4-5: extracción multi-modelo + árbitro (selección configurable)
+    // Julio 2026-07-29: base de 2-4 motores + árbitro opcional, elegibles en
+    // caliente vía features.json. SIN flag → default seguro azure+gemini y
+    // árbitro interno (ruta legacy, byte a byte idéntica a hoy). CON flag →
+    // ruta multi (extractors.ejecutarExtraccionV2Multi + arbitrarFacturaMulti),
+    // p.ej. gemini_flash+mistral base y openai como árbitro, sin Azure.
+    const seleccion = seleccionModelos.resolverConfigModelos(cfg);
+    const usaMulti = seleccionModelos.esSeleccionPersonalizada(seleccion);
+    if (seleccion.avisos.length) {
+      observabilidad.logEtapaV2(logger, 'info', 'seleccion_modelos', documentId, { base: seleccion.base, arbitro: seleccion.arbitro, avisos: seleccion.avisos });
+    }
 
-    if (!resAzure.ok && !resGemini.ok) {
-      observabilidad.logEtapaV2(logger, 'warn', 'extraccion', documentId, { motivo: 'ambos motores fallaron' });
+    // Extrae con la selección efectiva y arbitra. Devuelve { resultados[], arbitraje }.
+    // Se reutiliza para la imagen estándar y para la variante de contraste.
+    // El árbitro externo (OpenAI/Mistral) solo se invoca en la ruta multi y
+    // solo si hay disputas — nunca en la ruta legacy (idéntico al modo sombra
+    // de hoy, que no llamaba a ningún árbitro externo).
+    const extraerYArbitrar = async (rutaImagen) => {
+      let resultados;
+      if (usaMulti) {
+        const mapa = await extractors.ejecutarExtraccionV2Multi(seleccion.base, rutaImagen, mimeType, context, cfg, logger);
+        resultados = seleccion.base.map((m) => mapa[m]).filter(Boolean);
+      } else {
+        const { azure: rA, gemini_flash: rG } = await extractors.ejecutarExtraccionV2Paralelo(rutaImagen, mimeType, context, cfg, logger);
+        resultados = [rA, rG];
+      }
+      if (resultados.every((r) => !r || !r.ok)) {
+        return { resultados, arbitraje: { campos: null, disputas: [], motivo: 'ningún motor válido', sin_resultado: true } };
+      }
+      let arbitraje;
+      if (usaMulti) {
+        const arbOpts = seleccion.arbitro ? { filePath: rutaImagen, mimeType, context, cfg, logger, motorArbitro: seleccion.arbitro } : {};
+        arbitraje = await arbiter.arbitrarFacturaMulti(resultados, arbOpts);
+      } else {
+        arbitraje = await arbiter.arbitrarFactura(resultados[0], resultados[1]);
+      }
+      return { resultados, arbitraje };
+    };
+
+    const inicial = await extraerYArbitrar(filePath);
+    const resultadosEstandar = inicial.resultados;
+    observabilidad.logEtapaV2(logger, 'info', 'extraccion', documentId, {
+      motores: resultadosEstandar.map((r) => ({ motor: r?.motor, ok: !!(r && r.ok), ms: r?.tiempo_ms })),
+    });
+
+    if (resultadosEstandar.every((r) => !r || !r.ok)) {
+      observabilidad.logEtapaV2(logger, 'warn', 'extraccion', documentId, { motivo: 'todos los motores base fallaron' });
       return null;
     }
 
-    // ── Fase 5: árbitro por campo (checksum/coherencia — SIN invocar aún
-    // a OpenAI: eso se reserva para la re-extracción dirigida de la Fase 7,
-    // más barata y precisa por usar la zona exacta vía bounding boxes) ────
-    const arbitraje = await arbiter.arbitrarFactura(resAzure, resGemini); // sin opts.filePath → no llama a ningún árbitro todavía
+    const arbitraje = inicial.arbitraje;
     const disputasIniciales = arbitraje.disputas.length;
     observabilidad.logEtapaV2(logger, 'info', 'arbitraje', documentId, { disputas_iniciales: disputasIniciales, motivo: arbitraje.motivo });
 
     if (arbitraje.sin_resultado) return null;
 
-    // ── Gap "variantes de imagen en v2" (2026-07-28): comparar el resultado
-    // sobre la imagen ESTÁNDAR contra el mismo flujo sobre una variante con
-    // contraste local (CLAHE, ya usada en el panel Benchmark IA — Fase 5.4
-    // de PROMPT-PIPELINE-OCR-FACTURAS-V2.md la conecta aquí). Gana la que
-    // tenga MENOS disputas (empate → mayor confianza media). Solo tras
-    // ocr_extraccion_v2_variantes_enabled (default false): duplica el nº de
-    // llamadas de extracción — coste real, decisión explícita de Julio.
+    // ── Gap "variantes de imagen en v2" (2026-07-28): mismo flujo sobre una
+    // variante con contraste local (CLAHE). Gana la que tenga MENOS disputas.
+    // Solo tras ocr_extraccion_v2_variantes_enabled: duplica el nº de llamadas
+    // de extracción — coste real, decisión explícita de Julio.
     let variante = 'estandar';
     let arbitrajeGanador = arbitraje;
-    let resAzureGanador = resAzure;
-    let resGeminiGanador = resGemini;
+    let resultadosGanador = resultadosEstandar;
     if (cfg.ocr_extraccion_v2_variantes_enabled && mimeType.startsWith('image/')) {
       let rutaVariante = null;
       try {
@@ -135,17 +170,13 @@ async function ejecutarPipelineV2Sombra({ uploadId, filePath, mimeType, context,
         rutaVariante = path.join(os.tmpdir(), `v2-contraste-${documentId}-${Date.now()}.jpg`);
         await fsp.writeFile(rutaVariante, bufferContraste);
 
-        const { azure: resAzureV, gemini_flash: resGeminiV } = await extractors.ejecutarExtraccionV2Paralelo(rutaVariante, mimeType, context, cfg, logger);
-        if (resAzureV.ok || resGeminiV.ok) {
-          const arbitrajeV = await arbiter.arbitrarFactura(resAzureV, resGeminiV);
-          observabilidad.logEtapaV2(logger, 'info', 'variante_contraste', documentId, { disputas: arbitrajeV.disputas.length, disputas_estandar: disputasIniciales });
+        const resVar = await extraerYArbitrar(rutaVariante);
+        observabilidad.logEtapaV2(logger, 'info', 'variante_contraste', documentId, { disputas: resVar.arbitraje.disputas.length, disputas_estandar: disputasIniciales });
 
-          if (!arbitrajeV.sin_resultado && arbitrajeV.disputas.length < arbitrajeGanador.disputas.length) {
-            variante = 'contraste';
-            arbitrajeGanador = arbitrajeV;
-            resAzureGanador = resAzureV;
-            resGeminiGanador = resGeminiV;
-          }
+        if (!resVar.arbitraje.sin_resultado && resVar.arbitraje.disputas.length < arbitrajeGanador.disputas.length) {
+          variante = 'contraste';
+          arbitrajeGanador = resVar.arbitraje;
+          resultadosGanador = resVar.resultados;
         }
       } catch (err) {
         observabilidad.logEtapaV2(logger, 'warn', 'variante_contraste', documentId, { error: err.message });
@@ -160,8 +191,12 @@ async function ejecutarPipelineV2Sombra({ uploadId, filePath, mimeType, context,
     const disputasInicialesGanador = arbitrajeGanador.disputas.length;
     let camposFinales = arbitrajeGanador.campos;
     let camposEnDisputaFinal = arbitrajeGanador.disputas.map((d) => d.campo);
-    if (disputasInicialesGanador > 0 && resAzureGanador.ok && resAzureGanador.bounding_boxes) {
-      const resultadosReextraccion = await reextraction.reextraerCamposDirigidos(arbitrajeGanador.disputas, filePath, resAzureGanador.bounding_boxes, cfg, logger);
+    // Bounding boxes: hoy solo Azure los aporta (Fase 7). Si Azure no está en
+    // la selección base, no hay cajas y la re-extracción dirigida se omite —
+    // consecuencia asumida de retirar Azure del default (2026-07-29).
+    const conBoundingBoxes = resultadosGanador.find((r) => r && r.ok && r.bounding_boxes);
+    if (disputasInicialesGanador > 0 && conBoundingBoxes) {
+      const resultadosReextraccion = await reextraction.reextraerCamposDirigidos(arbitrajeGanador.disputas, filePath, conBoundingBoxes.bounding_boxes, cfg, logger);
       const resueltos = new Set();
       for (const r of resultadosReextraccion) {
         if (r.resuelto) {
@@ -226,25 +261,31 @@ async function ejecutarPipelineV2Sombra({ uploadId, filePath, mimeType, context,
 
     // ── Fase 8: score + estado ────────────────────────────────────────────
     const totalCampos = Object.keys(arbitrajeGanador.decisiones || {}).length || 1;
+    // Confianza inicial de los dos primeros motores base de la variante ganadora
+    // (para 2 motores es idéntico a azure/gemini de antes; para 3-4 se toman los
+    // dos primeros de la lista, el score es una heurística no un promedio exacto).
+    const g0 = resultadosGanador[0];
+    const g1 = resultadosGanador[1];
     const scoreGlobal = confidence.calcularScoreGlobal({
-      confianzaA: resAzureGanador.ok ? resAzureGanador.campos._confianza : null,
-      confianzaB: resGeminiGanador.ok ? resGeminiGanador.campos._confianza : null,
+      confianzaA: g0 && g0.ok ? g0.campos._confianza : null,
+      confianzaB: g1 && g1.ok ? g1.campos._confianza : null,
       totalCampos, disputasIniciales: disputasInicialesGanador, disputasFinales,
     });
     const { estado, motivo: motivoEstado } = confidence.decidirEstadoV2({ scoreGlobal, disputasFinales, esFacturaValida: camposFinales.es_factura_valida }, cfg);
     observabilidad.logEtapaV2(logger, 'info', 'confianza', documentId, { score_global: scoreGlobal, estado, motivo: motivoEstado, variante });
 
-    // Coste real de TODAS las llamadas hechas (si hubo comparación de
-    // variantes, incluye las dos, no solo la ganadora — el coste ya se
-    // incurrió aunque se descarte el resultado).
-    const costeTotal = (resAzure.coste_estimado_usd || 0) + (resGemini.coste_estimado_usd || 0)
-      + (resAzureGanador !== resAzure ? (resAzureGanador.coste_estimado_usd || 0) : 0)
-      + (resGeminiGanador !== resGemini ? (resGeminiGanador.coste_estimado_usd || 0) : 0);
+    // Coste real de las llamadas: estándar siempre; variante solo si se ejecutó
+    // y ganó (misma semántica que antes). No incluye el coste del árbitro
+    // externo, que solo se dispara ante disputa (~37% de facturas medido).
+    let costeTotal = resultadosEstandar.reduce((s, r) => s + (r?.coste_estimado_usd || 0), 0);
+    if (resultadosGanador !== resultadosEstandar) {
+      costeTotal += resultadosGanador.reduce((s, r) => s + (r?.coste_estimado_usd || 0), 0);
+    }
 
     return {
       upload_id: uploadId,
       campos_canonicos: camposFinales,
-      confianzas: { azure: resAzureGanador.campos?._confianza ?? null, gemini_flash: resGeminiGanador.campos?._confianza ?? null },
+      confianzas: Object.fromEntries(resultadosGanador.map((r) => [r?.motor, r?.campos?._confianza ?? null])),
       disputas: camposEnDisputaFinal,
       score_global: scoreGlobal,
       estado,
