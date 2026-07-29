@@ -34,7 +34,7 @@ const { decidirRouting } = require('./domain/routing');
 const { connection: redisClient } = require('./queue/index');
 const { validateVIES } = require('./services/viesValidator');
 const { validateInvoiceCifs } = require('./lib/invoice-cif-validator');
-const { normalizeToFloat } = require('./lib/normalize-amount');
+const { normalizeToFloat, toSpanishAmount } = require('./lib/normalize-amount');
 const { detectarGruposDuplicados, encontrarDuplicadoPorNumero } = require('./lib/duplicate-detector');
 
 // Rate limiters centralizados (middleware/rate-limit.js)
@@ -542,6 +542,25 @@ async function initDB() {
     -- revision antes de usarse en contabilidad. Aditiva, default '[]'.
     -- Rollback: scripts/rollback/2026-07-29-uploads-campos-no-fiables-down.sql
     ALTER TABLE uploads ADD COLUMN IF NOT EXISTS campos_no_fiables JSONB NOT NULL DEFAULT '[]';
+  `);
+
+  // 2026-07-29: helper unico para leer uploads.total_factura (VARCHAR con dos
+  // formatos historicos) como NUMERIC. Si el texto lleva coma, el punto es
+  // separador de miles ("1.234,56"); si no lleva coma, el punto es decimal
+  // ("1234.56"). Devuelve NULL si no es un numero, para no romper agregados.
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION setex_total_num(t TEXT) RETURNS NUMERIC AS $fn$
+    DECLARE s TEXT;
+    BEGIN
+      IF t IS NULL OR btrim(t) = '' THEN RETURN NULL; END IF;
+      s := btrim(t);
+      IF position(',' in s) > 0 THEN
+        s := replace(replace(s, '.', ''), ',', '.');
+      END IF;
+      IF s ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN RETURN s::NUMERIC; END IF;
+      RETURN NULL;
+    END;
+    $fn$ LANGUAGE plpgsql IMMUTABLE;
   `);
 
   // Backfill: uploads anteriores sin upload_status → 'active'
@@ -1799,6 +1818,24 @@ app.post('/api/upload-preview', authenticateToken, requireActiveCompany, uploadL
     // ── FASE 2: Validación (ANTES de guardar en BD) ─────────────────────
     const campos = ocrData.campos || {};
 
+    // ── Foto inmutable de lo que dijo LA IA, antes de tocarla ────────────────
+    // `campos` es un ALIAS POR REFERENCIA de ocrData.campos: todo lo que este
+    // endpoint escriba a continuacion (known_cifs, company_catalog,
+    // company_relationships, users) machaca el resultado de la IA en el sitio,
+    // sin dejar rastro. Por eso el panel admin mostraba como "IA (OCR raw)"
+    // valores que ninguna IA habia leido nunca (ej. factura #31: la IA leyo
+    // "Roberto Ramirez Sanchez, S.L." y el panel mostraba "ALEX DISTRIBUCIONES",
+    // que venia de known_cifs). Clonamos aqui para poder mostrar las tres
+    // columnas honestas: lo que leyo la IA -> lo que decidio el sistema -> lo
+    // que confirmo el humano.
+    const ocrIaPura = JSON.parse(JSON.stringify(campos));
+    const overridesBD = [];
+    const registrarOverride = (campo, valorAplicado, fuente) => {
+      const valorIa = ocrIaPura[campo] ?? null;
+      if (String(valorIa ?? '') === String(valorAplicado ?? '')) return; // no cambio nada
+      overridesBD.push({ campo, valor_ia: valorIa ?? null, valor_aplicado: valorAplicado ?? null, fuente });
+    };
+
     // Reconciliar CIF: doble lectura + dígito de control como árbitro
     let nifUncertain = false;
     if (cifFocused) {
@@ -1927,7 +1964,16 @@ app.post('/api/upload-preview', authenticateToken, requireActiveCompany, uploadL
 
     // ── FASE 3: Resolución de CIF (company_catalog → known_cifs → nuevo) ─────────
     const cleanNif = campos.proveedor_nif ? campos.proveedor_nif.toUpperCase().replace(/[^A-Z0-9]/g, '') : null;
+    // knownProvider  = hubo match, se aplica el valor conocido al preview.
+    // knownProviderFiable = ademas tiene respaldo suficiente para SALTARSE la
+    //   revision humana. Se separan por seguridad: antes bastaba UNA sola
+    //   confirmacion humana (posiblemente erronea) para que el NIF cacheado
+    //   sobrescribiera la lectura de la IA Y ademas empujara la factura a
+    //   auto-confirmacion, convirtiendo el error en verdad permanente sin que
+    //   nadie volviera a mirarlo. Ahora un solo respaldo sugiere, pero no
+    //   silencia la revision.
     let knownProvider = false;
+    let knownProviderFiable = false;
 
     if (campos.proveedor_nombre) {
       const nombreNorm = normalizeProveedorNombre(campos.proveedor_nombre);
@@ -1946,23 +1992,32 @@ app.post('/api/upload-preview', authenticateToken, requireActiveCompany, uploadL
         if (catalogRes.rows.length > 0) {
           const catalogNif = catalogRes.rows[0].proveedor_nif;
           logger.info(`[CIF] Catálogo admin: "${campos.proveedor_nombre}" → ${catalogNif} (OCR dijo ${cleanNif || 'null'})`);
+          registrarOverride('proveedor_nif', catalogNif, 'company_catalog');
           campos.proveedor_nif = catalogNif;
           knownProvider = true;
+          knownProviderFiable = true; // catalogo curado por un admin: maxima confianza
         }
 
         // 2º) known_cifs del usuario (confirmaciones previas)
         if (!knownProvider) {
           const knownRes = await pool.query(
-            'SELECT proveedor_nif FROM known_cifs WHERE user_id = $1 AND proveedor_nombre_norm = $2 ORDER BY confirmations DESC LIMIT 1',
+            'SELECT proveedor_nif, confirmations FROM known_cifs WHERE user_id = $1 AND proveedor_nombre_norm = $2 ORDER BY confirmations DESC LIMIT 1',
             [userInfo.userId, nombreNorm]
           );
           if (knownRes.rows.length > 0) {
             const cachedNif = knownRes.rows[0].proveedor_nif;
+            const confirmaciones = knownRes.rows[0].confirmations || 0;
             if (cachedNif !== cleanNif) {
-              logger.info(`[CIF] known_cifs: "${campos.proveedor_nombre}" → ${cachedNif} (OCR dijo ${cleanNif})`);
+              logger.info(`[CIF] known_cifs: "${campos.proveedor_nombre}" → ${cachedNif} (OCR dijo ${cleanNif}, ${confirmaciones} confirmacion(es))`);
+              registrarOverride('proveedor_nif', cachedNif, `known_cifs(${confirmaciones} confirmaciones)`);
               campos.proveedor_nif = cachedNif;
             }
             knownProvider = true;
+            // Con una sola confirmacion humana detras NO se silencia la revision.
+            knownProviderFiable = confirmaciones >= 2;
+            if (!knownProviderFiable) {
+              logger.info(`[CIF] known_cifs con solo ${confirmaciones} confirmacion(es) — se aplica pero NO se salta la revision`);
+            }
           }
         }
       }
@@ -1971,7 +2026,7 @@ app.post('/api/upload-preview', authenticateToken, requireActiveCompany, uploadL
     //     Prioridad: nombre confirmado en known_cifs → company_catalog admin.
     if (!knownProvider && cleanNif) {
       const nifRes = await pool.query(
-        `SELECT COALESCE(kc.proveedor_nombre, cc.proveedor_nombre) AS proveedor_nombre
+        `SELECT COALESCE(kc.proveedor_nombre, cc.proveedor_nombre) AS proveedor_nombre, kc.confirmations
          FROM known_cifs kc
          LEFT JOIN company_catalog cc ON cc.proveedor_nif = kc.proveedor_nif
          WHERE kc.user_id = $1 AND kc.proveedor_nif = $2
@@ -1979,18 +2034,23 @@ app.post('/api/upload-preview', authenticateToken, requireActiveCompany, uploadL
         [userInfo.userId, cleanNif]
       );
       if (nifRes.rows.length > 0 && nifRes.rows[0].proveedor_nombre) {
+        const confirmaciones = nifRes.rows[0].confirmations || 0;
+        registrarOverride('proveedor_nombre', nifRes.rows[0].proveedor_nombre, `known_cifs por NIF (${confirmaciones} confirmaciones)`);
         campos.proveedor_nombre = nifRes.rows[0].proveedor_nombre;
         knownProvider = true;
-        logger.info(`[CIF] Proveedor por NIF: ${cleanNif} → "${campos.proveedor_nombre}"`);
+        knownProviderFiable = confirmaciones >= 2;
+        logger.info(`[CIF] Proveedor por NIF: ${cleanNif} → "${campos.proveedor_nombre}" (${confirmaciones} confirmaciones)`);
       }
     }
 
     const finalNif = campos.proveedor_nif ? campos.proveedor_nif.toUpperCase().replace(/[^A-Z0-9]/g, '') : cleanNif;
 
-    // Si el proveedor es conocido y tenemos su NIF cacheado, limpiar incertidumbres OCR.
-    // El NIF cacheado fue confirmado por el usuario en una sesión anterior — es más fiable que la
-    // lectura actual. No tiene sentido pedir revisión por un NIF que ya verificamos antes.
-    if (knownProvider && finalNif) {
+    // Si el proveedor es conocido Y con respaldo suficiente, limpiar incertidumbres OCR.
+    // El NIF cacheado fue confirmado por el usuario en sesiones anteriores — es más fiable que la
+    // lectura actual. No tiene sentido pedir revisión por un NIF que ya verificamos varias veces.
+    // Con UNA sola confirmación previa (knownProviderFiable=false) NO se salta la revisión:
+    // un único error humano no debe convertirse en verdad auto-confirmada para siempre.
+    if (knownProviderFiable && finalNif) {
       nifUncertain = false;
       const nifIdx = missingFields.indexOf('proveedor_nif');
       if (nifIdx !== -1) missingFields.splice(nifIdx, 1);
@@ -2181,12 +2241,13 @@ app.post('/api/upload-preview', authenticateToken, requireActiveCompany, uploadL
         const relLookup = await lookupCounterparty(userCompanyNif, cpOcr.nif, cpOcr.nombre);
         if (relLookup) {
           if (relLookup.confidence === 'high') {
+            const fuenteRel = `company_relationships(${relLookup.method}, ${relLookup.confirmations} confirmaciones)`;
             if (invoiceType === 'venta') {
-              if (relLookup.counterparty_nif)    campos.receptor_nif    = relLookup.counterparty_nif;
-              if (relLookup.counterparty_nombre) campos.receptor_nombre = relLookup.counterparty_nombre;
+              if (relLookup.counterparty_nif)    { registrarOverride('receptor_nif', relLookup.counterparty_nif, fuenteRel);       campos.receptor_nif    = relLookup.counterparty_nif; }
+              if (relLookup.counterparty_nombre) { registrarOverride('receptor_nombre', relLookup.counterparty_nombre, fuenteRel); campos.receptor_nombre = relLookup.counterparty_nombre; }
             } else {
-              if (relLookup.counterparty_nif)    effectiveProvNif         = relLookup.counterparty_nif;
-              if (relLookup.counterparty_nombre) campos.proveedor_nombre  = relLookup.counterparty_nombre;
+              if (relLookup.counterparty_nif)    { registrarOverride('proveedor_nif', relLookup.counterparty_nif, fuenteRel);       effectiveProvNif        = relLookup.counterparty_nif; }
+              if (relLookup.counterparty_nombre) { registrarOverride('proveedor_nombre', relLookup.counterparty_nombre, fuenteRel); campos.proveedor_nombre = relLookup.counterparty_nombre; }
             }
             ocrCorrected = {
               nif:    relLookup.counterparty_nif,
@@ -2220,11 +2281,20 @@ app.post('/api/upload-preview', authenticateToken, requireActiveCompany, uploadL
     // preview seguía mostrando el guess crudo del OCR y el usuario lo "corregía"
     // a mano aunque el backend lo iba a sobrescribir igual al guardar. Se adelanta
     // aquí para que el preview ya muestre el dato correcto desde el principio.
+    // ESTO ES DELIBERADO Y NO ES UN BUG: el nombre y el CIF de la empresa que
+    // hace la foto se conocen con certeza por su registro, asi que la IA NUNCA
+    // manda sobre ellos. Queda registrado como override para que el panel lo
+    // muestre con su origen ("registro del usuario") en vez de hacerlo pasar
+    // por una lectura de la IA.
     if (userCompanyNif && userCompanyName) {
       if (invoiceType === 'venta') {
+        registrarOverride('proveedor_nif', userCompanyNif, 'registro del usuario');
+        registrarOverride('proveedor_nombre', userCompanyName, 'registro del usuario');
         effectiveProvNif        = userCompanyNif;
         campos.proveedor_nombre = userCompanyName;
       } else {
+        registrarOverride('receptor_nif', userCompanyNif, 'registro del usuario');
+        registrarOverride('receptor_nombre', userCompanyName, 'registro del usuario');
         campos.receptor_nif    = userCompanyNif;
         campos.receptor_nombre = userCompanyName;
       }
@@ -2236,6 +2306,10 @@ app.post('/api/upload-preview', authenticateToken, requireActiveCompany, uploadL
       userInfo,
       campos: { ...campos, proveedor_nif: effectiveProvNif },
       ocr_result_full: ocrData?.campos || {},
+      // Lo que dijo la IA antes de que este endpoint lo sobrescribiera con BD,
+      // y el detalle campo a campo de cada sobrescritura (ver ocrIaPura arriba).
+      ocr_merged_ia: ocrIaPura,
+      overrides_bd: overridesBD,
       ocr_dual_full: {
         dual_confirmed: ocrData?.dual_confirmed || false,
         openai: ocrData?.openai_result || null,
@@ -2516,7 +2590,12 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
         val = parseFloat(s);
       }
       if (isNaN(val)) return '0';
-      return val.toFixed(2);
+      // 2026-07-29: se guarda SIEMPRE en formato español con coma ("1.234,56").
+      // Antes salia con punto (val.toFixed(2)) mientras el resto de importes de
+      // la app usaban coma, dejando la columna con dos formatos mezclados: eso
+      // rompia sumas SQL (ver /api/admin/users) y debilitaba la deteccion de
+      // duplicados, que compara total_factura como texto exacto.
+      return toSpanishAmount(val) || '0';
     };
     const normalizeDate = (d) => {
       if (!d) return '';
@@ -2636,6 +2715,13 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
     // Construir ocr_result completo (dual AI) para JSONB
     const ocrResultJson = JSON.stringify({
       merged: preview.ocr_result_full || {},
+      // `merged` es el resultado del SISTEMA (fusion de motores + recalculos +
+      // sobrescrituras desde BD). `ia_pura` es lo que dijeron los motores antes
+      // de todo eso, y `overrides_bd` explica campo a campo la diferencia.
+      // Sin estas dos claves era imposible saber, mirando la BD, si un valor lo
+      // habia leido la IA o lo habia puesto el catalogo/registro.
+      ia_pura: preview.ocr_merged_ia || null,
+      overrides_bd: preview.overrides_bd || [],
       dual_confirmed: preview.ocr_dual_full?.dual_confirmed || false,
       openai: preview.ocr_dual_full?.openai || null,
       azure: preview.ocr_dual_full?.azure || null,
@@ -3296,9 +3382,25 @@ app.get('/api/admin/facturas/:id/ocr-detail', authenticateToken, requireAdmin, a
         cuota_irpf:       row.cuota_irpf,
         lineas_iva:       row.lineas_iva,
       },
+      // TRES COLUMNAS HONESTAS (2026-07-29):
+      //   ia_pura  = lo que leyeron los motores (fusion + recalculos del
+      //              orquestador), ANTES de tocar la BD. Null en facturas
+      //              anteriores a este cambio: no se guardaba.
+      //   ocr_raw  = lo que decidio el SISTEMA (ia_pura + sobrescrituras desde
+      //              known_cifs/company_catalog/relaciones/registro del usuario).
+      //              Se mantiene el nombre de clave por compatibilidad.
+      //   confirmed= lo que hay hoy en uploads (incluye ediciones del humano).
+      // `overrides_bd` explica campo a campo la diferencia entre las dos primeras.
+      ia_pura: ocr.ia_pura || null,
+      overrides_bd: ocr.overrides_bd || [],
       ocr_raw: ocr.merged || null,
       motors,
+      // campo_sources describe ia_pura (se calcula en ocr/index.js justo tras la
+      // fusion, antes de las sobrescrituras). Se etiqueta explicitamente para
+      // que el frontend lo pinte junto a la columna correcta y deje de parecer
+      // desfasado respecto a la columna del sistema.
       campo_sources: ocr.campo_sources || null,
+      campo_sources_describe: 'ia_pura',
       meta: {
         dual_confirmed:    ocr.dual_confirmed   ?? null,
         confidence_level:  row.confidence_level || ocr.confidence_level || null,
@@ -4793,6 +4895,17 @@ app.put('/api/admin/facturas/:id', authenticateToken, requireAdmin, requireXHR, 
     return res.status(400).json({ error: "invoice_type debe ser 'compra' o 'venta'" });
   }
 
+  // 2026-07-29: el total se guarda SIEMPRE en formato español con coma. Esta
+  // era la via por la que se colaban los puntos (el admin teclea "303.33" y se
+  // guardaba tal cual), dejando la columna con dos formatos mezclados.
+  if (updates.total_factura) {
+    const f = normalizeToFloat(updates.total_factura);
+    if (f == null || Number.isNaN(f)) {
+      return res.status(400).json({ error: `Total no numérico: "${updates.total_factura}"` });
+    }
+    updates.total_factura = toSpanishAmount(f);
+  }
+
   // 2026-07-29: admin marca campos concretos como no fiables (ej. CIF ilegible)
   // para que el panel los resalte en rojo. Solo se aceptan nombres de campo
   // conocidos, para evitar que un valor arbitrario llegue a la columna JSONB.
@@ -5454,7 +5567,16 @@ app.get('/api/admin/users', authenticateToken, requireAdmin, async (_req, res) =
       SELECT u.id, u.email, u.company_name, u.created_at,
              COUNT(up.id)::INT AS total_facturas,
              MAX(up.uploaded_at) AS ultima_factura,
-             SUM(CASE WHEN up.total_factura ~ '^[0-9]+(\.[0-9]+)?$' THEN up.total_factura::NUMERIC ELSE 0 END)::NUMERIC(15,2) AS total_importe
+             -- Acepta los dos formatos historicos de la columna: espanol
+             -- ("1.234,56": el punto es separador de miles) e ingles ("1234.56":
+             -- el punto es decimal). Si hay coma, el punto es de miles y se quita;
+             -- si no hay coma, el valor ya esta en formato numerico. La regex
+             -- anterior solo casaba el formato con punto, asi que TODAS las
+             -- facturas guardadas con coma sumaban 0 sin avisar de nada.
+             SUM(
+               CASE WHEN setex_total_num(up.total_factura) IS NULL THEN 0
+                    ELSE setex_total_num(up.total_factura) END
+             )::NUMERIC(15,2) AS total_importe
       FROM users u
       LEFT JOIN uploads up ON up.user_id = u.id
       WHERE u.is_test IS NOT TRUE

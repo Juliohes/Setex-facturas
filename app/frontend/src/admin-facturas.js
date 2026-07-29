@@ -532,7 +532,11 @@ function initTable() {
         formatter: makeEditableFormatter('irpf_porcentaje', formatPct), cellClick: makeEditableCellClick('irpf_porcentaje') },
       { title: 'Cuota IRPF',       field: 'cuota_irpf',      width: 110, sorter: 'string', hozAlign: 'right',
         formatter: makeEditableFormatter('cuota_irpf', formatCuotaIrpf), cellClick: makeEditableCellClick('cuota_irpf') },
-      { title: 'Total',            field: 'total_factura',   width: 120, sorter: 'number', hozAlign: 'right',
+      // sorter propio: los importes se guardan en formato español ("1.234,56") y
+      // el sorter 'number' de Tabulator hace parseFloat, que corta en la coma
+      // ("1.234,56" -> 1.234) y ordenaba mal.
+      { title: 'Total',            field: 'total_factura',   width: 120, hozAlign: 'right',
+        sorter: (a, b) => (parseSpanishAmountAdmin(a) ?? -Infinity) - (parseSpanishAmountAdmin(b) ?? -Infinity),
         cellStyle: () => ({ fontWeight: '700', color: '#1a365d' }),
         formatter: makeEditableFormatter('total_factura', formatEuro), cellClick: makeEditableCellClick('total_factura') },
       { title: 'Estado',           field: 'procesado_en',    width: 120, formatter: formatEstado, sorter: 'datetime' },
@@ -2233,8 +2237,10 @@ function initDesgloseModal() {
 
 function fmtOcrImporte(v) {
   if (v == null || v === '') return '—';
-  const n = parseFloat(String(v).replace(',', '.'));
-  if (isNaN(n)) return escHtml(String(v));
+  // parseSpanishAmountAdmin y no parseFloat: "1.234,56" con parseFloat ingenuo
+  // se lee como 1,23 € (corta en el punto de los miles).
+  const n = parseSpanishAmountAdmin(v);
+  if (n == null) return escHtml(String(v));
   return n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
 }
 
@@ -2251,9 +2257,14 @@ async function openOcrModal(facturaId) {
     const d = await res.json();
 
     const confirmed    = d.confirmed     || {};
-    const raw          = d.ocr_raw       || {};
+    const raw          = d.ocr_raw       || {};   // lo que decidio el SISTEMA
+    const iaPura       = d.ia_pura       || null; // lo que leyo la IA (null en facturas antiguas)
+    const overridesBd  = d.overrides_bd  || [];
     const meta         = d.meta          || {};
     const campoSources = d.campo_sources || null;
+    // Mapa campo -> quien sobrescribio a la IA y con que valor
+    const overridePorCampo = {};
+    for (const o of overridesBd) overridePorCampo[o.campo] = o;
     const motors       = d.motors        || {};
     const motorEntries = Object.entries(motors);
 
@@ -2303,10 +2314,18 @@ async function openOcrModal(facturaId) {
       { label: 'Cuota IRPF',       key: 'cuota_irpf',      fmt: fmtOcrImporte },
     ];
 
-    // Normaliza separador decimal: OCR usa "89,56", la BD devuelve "89.56" (VARCHAR con punto)
+    // Normaliza para comparar. Alineada con normalizarParaComparar() del backend
+    // (ocr/benchmark.js): mismo criterio de acierto en este panel y en el de
+    // Benchmark IA — antes uno pasaba a mayusculas y el otro no, y la misma
+    // pareja de valores salia verde en un panel y roja en el otro.
+    // Los numeros se comparan por VALOR, no por texto: "21" y "21,0" son el
+    // mismo IVA y antes se pintaban en rojo como si fueran una discrepancia.
     function normCmp(v) {
       if (v == null) return null;
-      return String(v).trim().replace(/^(-?\d+)[,.](\d+)$/, '$1.$2');
+      const s = String(v).trim().toUpperCase();
+      const num = parseFloat(s.replace(/\.(?=\d{3}\b)/g, '').replace(',', '.'));
+      if (!isNaN(num) && /^-?[\d.,]+$/.test(s)) return String(num);
+      return s;
     }
     // Compara dos importes con tolerancia numérica (2%, igual que el backend en ocr/index.js)
     function tramoNumMatch(a, b) {
@@ -2359,22 +2378,41 @@ async function openOcrModal(facturaId) {
 
     // La key en el raw OCR es 'total' (no 'total_factura')
     const rawNormalized = { ...raw, total_factura: raw.total_factura ?? raw.total };
+    const iaNormalized  = iaPura ? { ...iaPura, total_factura: iaPura.total_factura ?? iaPura.total } : null;
+
+    // Etiqueta de quien sobrescribio a la IA en este campo (known_cifs,
+    // registro del usuario, etc.). Es lo que antes hacia que el panel afirmara
+    // que "la IA acerto" un valor que la IA nunca habia leido.
+    function origenBadge(key) {
+      const o = overridePorCampo[key];
+      if (!o) return '';
+      return ` <span style="display:inline-block;font-size:10px;padding:1px 5px;border-radius:3px;background:#975a16;color:#fff;vertical-align:middle;font-family:sans-serif;" title="La IA leyó: ${escAttr(String(o.valor_ia ?? '—'))}">${escHtml(o.fuente)}</span>`;
+    }
 
     const rows = CAMPOS.map(c => {
       const fmt = c.fmt || (v => v != null && v !== '' ? escHtml(String(v)) : '—');
+      const vIa   = iaNormalized ? iaNormalized[c.key] : undefined;
       const vRaw  = rawNormalized[c.key];
       const vConf = confirmed[c.key];
-      const igual = vRaw != null && vConf != null
-        && normCmp(vRaw) === normCmp(vConf);
-      const badge = (vRaw == null || vConf == null)
-        ? '<span style="color:#a0aec0;font-size:14px;">—</span>'
-        : igual
-          ? '<span style="color:#276749;font-weight:700;font-size:14px;">&#10003;&#10003;</span>'
-          : '<span style="color:#9b2335;font-weight:700;font-size:14px;">&#10007;</span>';
-      const rowBg = (vRaw != null && vConf != null && !igual) ? 'background:#fff5f5;' : '';
+      // El acierto REAL de la IA se mide contra lo confirmado, no contra el
+      // resultado del sistema (que puede venir de la BD y coincidir siempre).
+      const comparable = iaNormalized && vIa != null && vConf != null;
+      const igualIa = comparable && normCmp(vIa) === normCmp(vConf);
+      const badge = !iaNormalized
+        ? '<span style="color:#a0aec0;font-size:11px;" title="Esta factura se procesó antes de que se guardara la lectura pura de la IA">n/d</span>'
+        : !comparable
+          ? '<span style="color:#a0aec0;font-size:14px;">—</span>'
+          : igualIa
+            ? '<span style="color:#276749;font-weight:700;font-size:14px;">&#10003;&#10003;</span>'
+            : '<span style="color:#9b2335;font-weight:700;font-size:14px;">&#10007;</span>';
+      const rowBg = (comparable && !igualIa) ? 'background:#fff5f5;' : '';
+      const celdaIa = iaNormalized
+        ? `${fmt(vIa)}${motorBadge(c.key, vIa)}`
+        : '<span style="color:#a0aec0;">n/d</span>';
       return `<tr style="${rowBg}">
         <td style="padding:7px 10px;font-weight:600;color:#2d3748;white-space:nowrap;">${escHtml(c.label)}</td>
-        <td style="padding:7px 10px;font-family:monospace;font-size:13px;">${fmt(vRaw)}${motorBadge(c.key, vRaw)}</td>
+        <td style="padding:7px 10px;font-family:monospace;font-size:13px;">${celdaIa}</td>
+        <td style="padding:7px 10px;font-family:monospace;font-size:13px;">${fmt(vRaw)}${origenBadge(c.key)}</td>
         <td style="padding:7px 10px;font-family:monospace;font-size:13px;">${fmt(vConf)}</td>
         <td style="padding:7px 10px;text-align:center;">${badge}</td>
       </tr>`;
@@ -2392,6 +2430,7 @@ async function openOcrModal(facturaId) {
     const lineasRowBg = (!lineasIgual && (rawLineas || confLineas)) ? 'background:#fff5f5;' : '';
     const rowLineas = `<tr style="${lineasRowBg}">
       <td style="padding:7px 10px;font-weight:600;color:#2d3748;white-space:nowrap;">Tramos IVA</td>
+      <td style="padding:7px 10px;font-family:monospace;font-size:12px;line-height:1.6;">${iaNormalized ? fmtLineasIva(iaPura.lineas_iva, true) : '<span style="color:#a0aec0;">n/d</span>'}</td>
       <td style="padding:7px 10px;font-family:monospace;font-size:12px;line-height:1.6;">${fmtLineasIva(rawLineas, true)}</td>
       <td style="padding:7px 10px;font-family:monospace;font-size:12px;line-height:1.6;">${fmtLineasIva(confLineas, false)}</td>
       <td style="padding:7px 10px;text-align:center;">${lineasBadge}</td>
@@ -2484,13 +2523,20 @@ async function openOcrModal(facturaId) {
         <thead>
           <tr style="background:#f7fafc;border-bottom:2px solid #e2e8f0;">
             <th style="padding:8px 10px;text-align:left;color:#4a5568;font-weight:600;">Campo</th>
-            <th style="padding:8px 10px;text-align:left;color:#4a5568;font-weight:600;">IA (OCR raw)</th>
-            <th style="padding:8px 10px;text-align:left;color:#4a5568;font-weight:600;">Confirmado humano</th>
-            <th style="padding:8px 10px;text-align:center;color:#4a5568;font-weight:600;">¿Coinciden?</th>
+            <th style="padding:8px 10px;text-align:left;color:#4a5568;font-weight:600;">1 · Leyó la IA</th>
+            <th style="padding:8px 10px;text-align:left;color:#4a5568;font-weight:600;">2 · Decidió el sistema</th>
+            <th style="padding:8px 10px;text-align:left;color:#4a5568;font-weight:600;">3 · Confirmado humano</th>
+            <th style="padding:8px 10px;text-align:center;color:#4a5568;font-weight:600;">¿Acertó la IA?</th>
           </tr>
         </thead>
         <tbody>${rows}${rowLineas}</tbody>
       </table>
+      <p style="font-size:11px;color:#718096;margin:0 0 12px;line-height:1.6;">
+        <strong>1 · Leyó la IA</strong>: fusión de los motores + recálculos aritméticos, tal cual, sin tocar la base de datos. Los badges de color dicen qué motor aportó cada valor.<br>
+        <strong>2 · Decidió el sistema</strong>: lo anterior, pero con los campos que el sistema sobrescribe desde la BD. El badge marrón indica el origen (pasa el ratón por encima para ver qué había leído la IA). El nombre y CIF de la empresa que hace la foto se toman <em>siempre</em> del registro del usuario, nunca de la IA — es deliberado.<br>
+        <strong>3 · Confirmado humano</strong>: lo que hay hoy en la base de datos, incluidas las ediciones manuales del panel.<br>
+        <strong>¿Acertó la IA?</strong> compara la columna 1 contra la 3 — es la única medida honesta de precisión. <em>n/d</em> en facturas procesadas antes del 29/07/2026, cuando aún no se guardaba la lectura pura.
+      </p>
       <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px;padding:10px 12px;background:#f7fafc;border:1px solid #e2e8f0;border-radius:6px;margin-bottom:6px;">
         <span><strong>Motor OCR:</strong> <span style="font-family:monospace;">${motorLabel}</span></span>
         <span><strong>Dual confirmado:</strong> <span style="font-family:monospace;">${dualConf}</span></span>
@@ -2619,8 +2665,9 @@ async function openShadowModal() {
           formatter: (cell) => cell.getValue() ? escHtml(cell.getValue()) : '<span style="color:#a0aec0;">(foto abandonada)</span>' },
         { title: 'NIF',        field: 'proveedor_nif', width: 110, sorter: 'string',
           formatter: (cell) => cell.getValue() ? escHtml(cell.getValue()) : '<span style="color:#a0aec0;">—</span>' },
-        { title: 'Total',      field: 'total_factura', width: 100, sorter: 'number', hozAlign: 'right',
-          formatter: (cell) => { const v = cell.getValue(); return v != null ? v.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €' : '<span style="color:#a0aec0;">—</span>'; } },
+        { title: 'Total',      field: 'total_factura', width: 100, hozAlign: 'right',
+          sorter: (a, b) => (parseSpanishAmountAdmin(a) ?? -Infinity) - (parseSpanishAmountAdmin(b) ?? -Infinity),
+          formatter: formatEuro },
         { title: 'Decisión v1 (real)', field: 'decision_v1', width: 140, sorter: 'string' },
         { title: 'Decisión v2 (nueva)', field: 'decision_v2', width: 140, sorter: 'string' },
         { title: '¿Coincide?', field: 'coincide', width: 90, hozAlign: 'center',
