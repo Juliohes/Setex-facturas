@@ -113,7 +113,7 @@ async function run() {
     catch { sinGroundTruth++; continue; }
     if (!r.v2_canonico) { sinReplay++; continue; }
 
-    const fila = { id: r.id, v1: 0, v2: 0, n: 0, fallosV1: [], fallosV2: [] };
+    const fila = { id: r.id, v1: 0, v2: 0, n: 0, fallosV1: [], fallosV2: [], fallosDocV2: [] };
     for (const campo of CAMPOS) {
       const gtCampo = gt.campos?.[campo];
       if (!gtCampo || gtCampo.estado !== 'legible') continue; // solo lo verificable
@@ -128,6 +128,7 @@ async function run() {
       fila.n++;
       if (ok1) fila.v1++; else fila.fallosV1.push(`${campo}: "${got1}" != "${esperado}"`);
       if (ok2) fila.v2++; else fila.fallosV2.push(`${campo}: "${got2}" != "${esperado}"`);
+      if (CAMPOS_DOCUMENTO.includes(campo) && !ok2) fila.fallosDocV2.push(`${campo}: "${got2}" != "${esperado}"`);
 
       tot.v1.n++; tot.v2.n++;
       if (ok1) tot.v1.ok++;
@@ -171,12 +172,18 @@ async function run() {
   console.log(`\nFacturas con sospecha de alucinación marcada por v2: ${conAlucinacion.length}`);
 
   const revisables = detalle.filter((f) => f.estado !== 'auto_aprobada');
-  const erroresEnAuto = detalle.filter((f) => f.estado === 'auto_aprobada' && f.v2 < f.n);
-  console.log(`\nRouting de v2: ${detalle.length - revisables.length} auto-aprobadas · ${revisables.length} a revisión humana`);
-  console.log(`  ⚠ Auto-aprobadas CON algún error: ${erroresEnAuto.length}` +
-    (erroresEnAuto.length ? ` → ${erroresEnAuto.map((f) => '#' + f.id).join(', ')}` : ''));
-  console.log('  (este es el número que decide si v2 puede activarse: un error auto-aprobado');
-  console.log('   entra en contabilidad sin que nadie lo mire)\n');
+  const autoAprobadas = detalle.filter((f) => f.estado === 'auto_aprobada');
+  // La metrica que decide. Solo campos de documento: un desajuste en el nombre
+  // del receptor no es un error de lectura (v2 en sombra no aplica la
+  // sustitucion por el nombre del registro que si aplica v1 al guardar).
+  const fugas = autoAprobadas.filter((f) => f.fallosDocV2.length > 0);
+  console.log(`\nRouting de v2: ${autoAprobadas.length} auto-aprobadas · ${revisables.length} a revisión humana`);
+  console.log('\n★ MÉTRICA DE DECISIÓN — errores de documento que v2 auto-aprobaría');
+  console.log('  (entrarían en contabilidad sin que nadie los mire)');
+  console.log(`  ${fugas.length} de ${autoAprobadas.length} auto-aprobadas`);
+  for (const f of fugas) console.log(`    #${f.id}: ${f.fallosDocV2.join(' · ')}`);
+  if (!fugas.length) console.log('    ninguna');
+  console.log('');
 
   await pool.end();
 }

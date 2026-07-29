@@ -280,7 +280,9 @@ describe('ejecutarPipelineV2Sombra', () => {
       }));
       mTesseract = mock.method(tesseractAdapter, 'reconocerTextoBruto', async () => ({
         ok: true,
-        textoBruto: 'ACME SL CIF B72327000 Cliente SL CIF B87654321 factura 0001 base 100,00 total 121,00',
+        // Incluye la fecha: desde 2026-07-29 fecha_emision es campo crítico y
+        // se coteja contra Tesseract (v2 alucinó el año en la factura #22).
+        textoBruto: 'ACME SL CIF B72327000 Cliente SL CIF B87654321 factura 0001 fecha 01/01/2026 base 100,00 total 121,00',
         processing_time_s: 2,
       }));
 
