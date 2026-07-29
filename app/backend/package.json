@@ -29,6 +29,7 @@
     "exceljs": "^4.4.0",
     "express": "^4.18.2",
     "express-rate-limit": "^7.1.5",
+    "fast-uri": "^3.1.4",
     "helmet": "^7.1.0",
     "ioredis": "^5.4.0",
     "jsonwebtoken": "^9.0.2",
@@ -36,7 +37,7 @@
     "nodemailer": "^9.0.3",
     "pdfjs-dist": "^6.1.200",
     "pg": "^8.11.3",
-    "sharp": "^0.33.2",
+    "sharp": "^0.35.3",
     "tesseract.js": "^7.0.0",
     "winston": "^3.11.0",
     "zod": "^3.25.76"
