@@ -4895,15 +4895,17 @@ app.put('/api/admin/facturas/:id', authenticateToken, requireAdmin, requireXHR, 
     return res.status(400).json({ error: "invoice_type debe ser 'compra' o 'venta'" });
   }
 
-  // 2026-07-29: el total se guarda SIEMPRE en formato español con coma. Esta
-  // era la via por la que se colaban los puntos (el admin teclea "303.33" y se
-  // guardaba tal cual), dejando la columna con dos formatos mezclados.
-  if (updates.total_factura) {
-    const f = normalizeToFloat(updates.total_factura);
+  // 2026-07-29: los importes se guardan SIEMPRE en formato español con coma.
+  // Esta era una de las vias por las que se colaban los puntos (el admin
+  // teclea "303.33" y se guardaba tal cual), dejando las columnas con dos
+  // formatos mezclados — lo que rompia sumas SQL y comparaciones de texto.
+  for (const campoImporte of ['total_factura', 'base_imponible', 'cuota_iva', 'cuota_irpf']) {
+    if (!updates[campoImporte]) continue;
+    const f = normalizeToFloat(updates[campoImporte]);
     if (f == null || Number.isNaN(f)) {
-      return res.status(400).json({ error: `Total no numérico: "${updates.total_factura}"` });
+      return res.status(400).json({ error: `${campoImporte} no es un número válido: "${updates[campoImporte]}"` });
     }
-    updates.total_factura = toSpanishAmount(f);
+    updates[campoImporte] = toSpanishAmount(f);
   }
 
   // 2026-07-29: admin marca campos concretos como no fiables (ej. CIF ilegible)

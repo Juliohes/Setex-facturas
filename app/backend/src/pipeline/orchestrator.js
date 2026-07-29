@@ -40,6 +40,11 @@ function extraerValoresCriticos(canonico) {
     'emisor.nif': canonico.emisor?.nif,
     'receptor.nif': canonico.receptor?.nif,
     numero_factura: canonico.numero_factura,
+    // 2026-07-29: la fecha faltaba aquí y por eso pasó desapercibida una
+    // alucinación real de v2 (factura #22: leyó "10/07/2023" cuando el papel
+    // pone "10/07/2026" — se inventó el año). Un año equivocado manda la
+    // factura a otro ejercicio fiscal: es de los errores más caros que hay.
+    fecha_emision: canonico.fecha_emision,
     total: canonico.total,
     'desglose_iva.base': primeraLinea.base,
   };

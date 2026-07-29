@@ -68,7 +68,10 @@ async function reconocerTextoBruto(filePath) {
  */
 function apareceEnTexto(valor, textoBruto) {
   if (!valor || !textoBruto) return null;
-  const norm = (s) => String(s).toUpperCase().replace(/[\s\-.,]/g, '');
+  // Se ignoran tambien las barras: la misma fecha puede venir como "10/07/2026"
+  // en el canonico y "10-07-2026" o "10.07.2026" impresa en el papel. Sin esto,
+  // cotejar fechas daria falsos positivos constantes por el separador.
+  const norm = (s) => String(s).toUpperCase().replace(/[\s\-.,/]/g, '');
   const v = norm(valor);
   if (!v) return null;
   return norm(textoBruto).includes(v);

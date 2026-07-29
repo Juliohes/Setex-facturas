@@ -41,6 +41,21 @@ describe('apareceEnTexto', () => {
     const r = tesseractAdapter.apareceEnTexto('1.234,56', 'TOTAL 1234,56 EUR');
     assert.equal(r, true);
   });
+
+  // 2026-07-29: v2 alucinó el AÑO en la factura #22 ("10/07/2023" cuando el
+  // papel pone "10/07/2026") y nadie lo detectó porque la fecha ni siquiera
+  // se cotejaba contra Tesseract. Al añadirla hubo que tolerar el separador.
+  test('fechas: tolera distinto separador entre el canónico y el papel', () => {
+    assert.equal(tesseractAdapter.apareceEnTexto('10/07/2026', 'Fecha: 10-07-2026'), true);
+    assert.equal(tesseractAdapter.apareceEnTexto('10/07/2026', 'FECHA 10.07.2026'), true);
+    assert.equal(tesseractAdapter.apareceEnTexto('10/07/2026', 'Emitida el 10/07/2026'), true);
+  });
+
+  test('fechas: detecta el año inventado (caso real factura #22)', () => {
+    const textoPapel = 'COALIMENT CASTILLA\nFactura 0306/23/00246261\nFecha: 10/07/2026\nTotal 303,33';
+    assert.equal(tesseractAdapter.apareceEnTexto('10/07/2023', textoPapel), false);
+    assert.equal(tesseractAdapter.apareceEnTexto('10/07/2026', textoPapel), true);
+  });
 });
 
 describe('reconocerTextoBruto', () => {
