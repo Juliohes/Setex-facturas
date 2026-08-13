@@ -3674,6 +3674,11 @@ Investigación a fondo de una paradoja reportada por Julio: en el modal "Vista O
 - **Alucinación de fecha de v2**: `fecha_emision` no estaba entre los campos cotejados contra Tesseract, por eso pasó desapercibido que v2 leyera `10/07/2023` donde el papel pone `10/07/2026` (factura #22). Añadida al cotejo y relajada la normalización de `apareceEnTexto` para tolerar el separador (`/`, `-`, `.`). Un año equivocado manda la factura a otro ejercicio fiscal.
 - Nueva herramienta `eval/comparar-v1-v2.js`: mide **ambos** pipelines contra el ground truth verificado, usando para v1 su salida inmutable (`ocr_result.merged`) y no las columnas de `uploads`, que ya han sido corregidas a mano y harían parecer a v1 perfecto por construcción.
 
+### 2026-08-13 — UX de captura simplificada (minimalista)
+- Petición de Julio: la pantalla de captura tenía demasiados botones. Dirección elegida "limpieza segura" (no reescribe el flujo de una foto).
+- Una sola acción grande "📷 Hacer foto"; "Enviar" oculto hasta capturar. "subir archivo" y "varias páginas" pasan a enlaces discretos (link-mini); el panel multipágina queda oculto y se abre desde su enlace. Selector de tipo compacto, por defecto Recibida.
+- Ficheros: index.html (reestructura upload-area), app.js (mostrar/ocultar Enviar, enlace mp-open-link), styles.css (.opciones-mini/.link-mini). service-worker v4→v5 + cache-busters app.js(003)/styles.css(002). Desplegado (solo frontend), 4/4 healthy.
+
 ### 2026-08-13 — Multipágina: todas las hojas enlazadas en el panel admin
 - Columna aditiva `uploads.paginas JSONB` (rollback en scripts/rollback/). Al confirmar una factura multipágina, las páginas 2..N se mueven junto a la 1ª y se persisten todas.
 - Endpoints admin `GET /api/admin/facturas/:id/paginas` y `/:id/pagina/:n` (mismas defensas de ruta que /imagen). El visor del panel (verImagenAdmin) detecta multipágina y añade navegación ◀ ▶ + contador (teclas de flecha). Facturas de una página: sin cambios. Desplegado, 4/4 healthy.
