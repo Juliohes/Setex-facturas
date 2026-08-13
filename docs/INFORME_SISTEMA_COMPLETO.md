@@ -3674,6 +3674,11 @@ Investigación a fondo de una paradoja reportada por Julio: en el modal "Vista O
 - **Alucinación de fecha de v2**: `fecha_emision` no estaba entre los campos cotejados contra Tesseract, por eso pasó desapercibido que v2 leyera `10/07/2023` donde el papel pone `10/07/2026` (factura #22). Añadida al cotejo y relajada la normalización de `apareceEnTexto` para tolerar el separador (`/`, `-`, `.`). Un año equivocado manda la factura a otro ejercicio fiscal.
 - Nueva herramienta `eval/comparar-v1-v2.js`: mide **ambos** pipelines contra el ground truth verificado, usando para v1 su salida inmutable (`ocr_result.merged`) y no las columnas de `uploads`, que ya han sido corregidas a mano y harían parecer a v1 perfecto por construcción.
 
+### 2026-08-13 — Factura multipágina ABIERTA a todos los clientes (validado el canario)
+- Julio validó en su PWA que lee bien las dos hojas. Se abre a todos: backend `ocr_multipagina_solo_tech_admin=false` (en caliente, reenganche de bind-mount vía stop+up) y frontend muestra el panel a todos los usuarios (app.js).
+- PWA: service-worker v3→v4 + cache-buster app.js (20260813-002) para propagar a las apps instaladas. Rollback frontend etiquetado `setex-prod-frontend-rollback:2026-08-13-canario`. 4/4 healthy, HTTPS 200.
+- Pendiente (refinamiento): enlazar en el registro/panel admin las páginas 2ª+ (hoy la factura guarda la 1ª hoja como imagen + datos fusionados de todas).
+
 ### 2026-08-13 — Factura multipágina DESPLEGADA en producción como canario (solo tech-admin)
 - Cerrado el hueco del guardado: el preview multipágina genera el MISMO shape que espera `/api/upload-confirm` (`{filePath,fileInfo,userInfo,campos,ocrData}`), reutilizando el confirm probado SIN tocarlo. Se aplica la identidad del registro (como el flujo de una página). La página 1 representa la factura en `uploads`; las demás quedan en disco listadas en el preview (linkado completo = refinamiento posterior).
 - Canario: `ocr_multipagina_solo_tech_admin=true` → endpoint y panel de UI solo para tech-admin (Julio). Ningún cliente lo ve hasta poner el flag a false.

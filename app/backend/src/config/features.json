@@ -38,5 +38,5 @@
   "ocr_multipagina_enabled": true,
   "ocr_multipagina_max_paginas": 6,
   "_OCR_MULTIPAGINA_CANARIO": "ocr_multipagina_solo_tech_admin (2026-08-13): mientras se valida en producción, el endpoint y el panel de UI solo están disponibles para tech-admin (tech_admin_emails). Poner a false para abrir a TODOS los clientes tras la validación de Julio en su PWA.",
-  "ocr_multipagina_solo_tech_admin": true
+  "ocr_multipagina_solo_tech_admin": false
 }

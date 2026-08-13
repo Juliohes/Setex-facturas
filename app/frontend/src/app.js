@@ -277,11 +277,10 @@ async function loadUserSettings() {
         showCompanyIdentity(data.company_name, data.is_admin === true, data.company_nif_aeat_warning === true);
         const btnTest = document.getElementById('btn-test-captura');
         if (btnTest) btnTest.style.display = userIsTechAdmin ? 'block' : 'none';
-        // Canario multipágina (2026-08-13): el panel de "varias páginas" solo se
-        // muestra a tech-admin mientras se valida en producción. Backend también
-        // lo bloquea (ocr_multipagina_solo_tech_admin). Se abre a todos quitando ambos.
+        // Multipágina abierto a TODOS los usuarios (2026-08-13, validado el canario).
+        // El backend también quitó el candado (ocr_multipagina_solo_tech_admin=false).
         const mpPanel = document.getElementById('mp-panel');
-        if (mpPanel) mpPanel.style.display = userIsTechAdmin ? 'block' : 'none';
+        if (mpPanel) mpPanel.style.display = 'block';
     } catch { /* no bloquear */ }
 }
 
