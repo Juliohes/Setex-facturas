@@ -706,6 +706,23 @@ const upload = multer({
   }
 });
 
+// Subida MULTIPÁGINA (2026-08-13): una factura repartida en varias imágenes.
+// Solo imágenes — el PDF se rasteriza a imágenes EN EL CLIENTE con el pdfjs ya
+// vendorizado (frontend), así el backend recibe siempre N fotos. El tope duro de
+// páginas se aplica en el handler (según features.json); aquí se fija un máximo
+// defensivo alto para multer y un límite de tamaño por fichero igual al de una
+// página. Mismo `storage` (rutas por usuario) que la subida de una página.
+const MULTIPAGINA_MAX_HARD = 12; // backstop de multer; el tope real lo pone el flag
+const uploadMultipagina = multer({
+  storage,
+  limits: { fileSize: 10*1024*1024, files: MULTIPAGINA_MAX_HARD },
+  fileFilter: (req, file, cb) => {
+    const allowed = ['image/jpeg', 'image/png'];
+    if (allowed.includes(file.mimetype)) cb(null, true);
+    else cb(new Error('Solo se permiten imágenes (el PDF se convierte en el navegador)'));
+  }
+});
+
 // Auth middleware — verifica JWT y token_version (revocación de sesiones)
 async function authenticateToken(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1];
@@ -2392,6 +2409,111 @@ app.post('/api/upload-preview', authenticateToken, requireActiveCompany, uploadL
   } catch (err) {
     logger.error('Upload-preview error:', err);
     res.status(500).json({ error: 'Error al procesar la imagen' });
+  }
+});
+
+// ── POST /api/upload-preview-multipagina — factura de varias páginas ──────────
+// (2026-08-13, petición de Julio). Endpoint SEPARADO del de una página a
+// propósito: no toca la ruta crítica (lección LL-002). Recibe N imágenes
+// (`paginas[]`), extrae cada una con el pipeline v2 y las fusiona en UNA factura
+// (pipeline/orquestador-multipagina + fusion-multipagina), devolviendo el shape
+// plano de siempre + `campos_faltantes` para que el frontend pida la foto extra.
+//
+// Apagado por defecto: solo responde si features.json tiene
+// ocr_multipagina_enabled=true. Tope de páginas: ocr_multipagina_max_paginas
+// (default 6), BLOQUEANTE. NO persiste todavía en `uploads` — devuelve un
+// preview que el usuario confirma (la persistencia multipágina es Fase 2.2).
+app.post('/api/upload-preview-multipagina', authenticateToken, requireActiveCompany, uploadLimiter, uploadMultipagina.array('paginas', MULTIPAGINA_MAX_HARD), async (req, res) => {
+  const { canonicoAPlano } = require('./pipeline/adaptador-v1');
+  const { ejecutarPipelineMultipagina } = require('./pipeline/orquestador-multipagina');
+  const fsp = require('fs').promises;
+
+  const ficheros = req.files || [];
+  const limpiar = () => Promise.all(ficheros.map((f) => fsp.unlink(f.path).catch(() => {})));
+
+  try {
+    const cfg = JSON.parse(fsSync.readFileSync(FEATURES_PATH, 'utf8'));
+    if (!cfg.ocr_multipagina_enabled) {
+      await limpiar();
+      return res.status(403).json({ error: 'La subida de facturas de varias páginas no está disponible.' });
+    }
+    const maxPaginas = Number.isInteger(cfg.ocr_multipagina_max_paginas) ? cfg.ocr_multipagina_max_paginas : 6;
+
+    if (ficheros.length === 0) {
+      return res.status(400).json({ error: 'No se recibió ninguna página.' });
+    }
+    if (ficheros.length > maxPaginas) {
+      await limpiar();
+      return res.status(400).json({ error: `Demasiadas páginas (${ficheros.length}). El máximo por factura es ${maxPaginas}.` });
+    }
+
+    // Validación de magic bytes por página (anti-spoofing de MIME) — fail-secure:
+    // si una sola página no valida, se rechaza el envío entero y se limpia todo.
+    for (const f of ficheros) {
+      let ok = false;
+      try { ok = await validateFileMagicBytes(f.path, f.mimetype); } catch { ok = false; }
+      if (!ok) {
+        auditLog('UPLOAD_BLOCKED', { filename: f.filename, reason: 'magic_bytes_mismatch_multipagina', mime: f.mimetype }, req.user.userId, req.ip);
+        await limpiar();
+        return res.status(400).json({ error: 'Una de las páginas no es una imagen válida. Vuelve a hacer la foto.' });
+      }
+    }
+
+    // Empresa del usuario (misma fuente que el endpoint de una página).
+    const userRow = (await pool.query('SELECT company_nif, company_name FROM users WHERE id = $1', [req.user.userId])).rows[0];
+    const userCompanyNif = userRow?.company_nif ? userRow.company_nif.toUpperCase().replace(/[^A-Z0-9]/g, '') : null;
+    const invoiceType = (req.body.invoice_type === 'venta') ? 'venta' : 'compra';
+
+    const paginas = ficheros.map((f, i) => ({ pagina: i + 1, filePath: f.path, mimeType: f.mimetype }));
+    const context = { invoice_type: invoiceType, empresa_nif: userCompanyNif, userId: req.user.userId };
+
+    const resultado = await ejecutarPipelineMultipagina(paginas, context, cfg, logger);
+
+    if (!resultado.campos) {
+      await limpiar();
+      return res.json({ success: false, error: 'No se pudo leer ninguna de las páginas. Repite las fotos con mejor luz.' });
+    }
+
+    const plano = canonicoAPlano(resultado.campos);
+    const previewId = crypto.randomUUID();
+
+    // Preview en Redis (mismo TTL 30 min que la subida de una página). Guarda las
+    // rutas de las páginas para que el confirm multipágina (Fase 2.2) pueda
+    // persistirlas; de momento el usuario revisa y confirma la factura fusionada.
+    const previewData = {
+      multipagina: true,
+      campos: plano,
+      campos_faltantes: resultado.camposFaltantes,
+      procedencia: resultado.procedencia,
+      paginas: paginas.map((p) => ({ pagina: p.pagina, path: p.filePath })),
+      invoice_type: invoiceType,
+      user_company: { nif: userCompanyNif, nombre: userRow?.company_name || null },
+      estado: resultado.estado,
+    };
+    await redisClient.setex(`preview:${previewId}`, 1800, JSON.stringify(previewData));
+
+    logger.info(`[PreviewMultipagina] preview_id=${previewId} paginas=${resultado.paginas_validas}/${resultado.paginas_total} estado=${resultado.estado} faltan=${resultado.camposFaltantes.map((c) => c.clave).join(',') || 'nada'}`);
+
+    return res.json({
+      preview: true,
+      multipagina: true,
+      preview_id: previewId,
+      campos: plano,
+      // Guía la foto extra: qué falta y en qué hoja buscarlo (fiscal/importes).
+      campos_faltantes: resultado.camposFaltantes,
+      procedencia: resultado.procedencia,
+      paginas_total: resultado.paginas_total,
+      paginas_validas: resultado.paginas_validas,
+      requires_review: resultado.estado !== 'auto_aprobada',
+      estado: resultado.estado,
+      avisos: resultado.avisos,
+      invoice_type: invoiceType,
+      user_company: { nif: userCompanyNif, nombre: userRow?.company_name || null },
+    });
+  } catch (err) {
+    await limpiar();
+    logger.error('Upload-preview-multipagina error:', err);
+    return res.status(500).json({ error: 'Error al procesar las páginas.' });
   }
 });
 

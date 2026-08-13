@@ -33,5 +33,8 @@
   "ocr_extraccion_v2_tesseract_enabled": true,
   "ocr_extraccion_v2_aprendizaje_enabled": true,
   "_QUALITY_GATE_V2": "Fase 3 (2026-07-27): analizarCalidadImagen() en pipeline/preprocess.js, umbrales recalibrados sobre 27 facturas reales (ver docs/INFORME-AUDITORIA-OCR.md). Solo corre si ocr_extraccion_v2_enabled=true; mientras ocr_extraccion_v2_quality_gate_blocking=false, SOLO calcula y loguea (línea '[QualityGate-v2]' en logs de backend) — nunca rechaza nada. Consultar distribución real: docker compose logs backend | grep QualityGate-v2. Cuando haya datos suficientes, Julio decide si pasar este flag a true para que empiece a rechazar de verdad.",
-  "ocr_extraccion_v2_quality_gate_blocking": false
+  "ocr_extraccion_v2_quality_gate_blocking": false,
+  "_OCR_MULTIPAGINA": "Subida de factura de varias páginas (2026-08-13). ocr_multipagina_enabled: activa el endpoint /api/upload-preview-multipagina (APAGADO por defecto — es funcionalidad nueva sin desplegar/probar en producción). ocr_multipagina_max_paginas: tope BLOQUEANTE de páginas por factura (coste OCR se multiplica por página; el patrón recomendado en UI es 1ª hoja fiscal + última de importes + extras = 2-4). El PDF se rasteriza en el cliente; el backend recibe siempre imágenes. Ver docs/plans/PLAN-FACTURA-MULTIPAGINA.md.",
+  "ocr_multipagina_enabled": false,
+  "ocr_multipagina_max_paginas": 6
 }

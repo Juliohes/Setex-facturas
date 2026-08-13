@@ -65,21 +65,22 @@ No es subir varios archivos: es extraer **una** factura (un total, un desglose d
 - Suite completa 341/342 (el fallo es la paridad v3 preexistente, no relacionado).
 - **Nada tocado del flujo de una página. Nada desplegado.**
 
-### Fase 2 — Endpoint + almacenamiento (pendiente)
-- `upload.array('files', N)` junto al `upload.single` actual, tras flag `ocr_multipagina_enabled` (default off → comportamiento idéntico a hoy).
-- Magic bytes por página; tope de páginas y de tamaño.
-- Columna aditiva `paginas JSONB` en `uploads` (rutas + metadatos por página), con rollback SQL. Duplicados **sin cambios** (una factura = una fila `nif+fecha+total`).
-- Guardar el PDF original como adjunto de auditoría cuando la fuente sea PDF.
+### Fase 2 — Endpoint + almacenamiento (✅ endpoint hecho en rama; persistencia pendiente)
+- ✅ Endpoint **nuevo y separado** `POST /api/upload-preview-multipagina` (NO toca `upload-preview`, lección LL-002). `uploadMultipagina.array('paginas')`, solo imágenes (el PDF se rasteriza en el cliente).
+- ✅ Flag `ocr_multipagina_enabled` (default **false**) + `ocr_multipagina_max_paginas` (default **6**, bloqueante). Magic bytes por página, fail-secure. Adaptador canónico→plano (`adaptador-v1.js`) para devolver el shape que ya espera el frontend + `campos_faltantes`.
+- ⏳ **Pendiente Fase 2.2**: persistencia en confirm — columna aditiva `paginas JSONB` en `uploads` (+ rollback SQL) y guardar el PDF original / recomponer PDF único para archivo. El endpoint hoy devuelve preview pero NO persiste en `uploads`.
+- Duplicados **sin cambios** (una factura = una fila `nif+fecha+total`).
 
-### Fase 3 — Frontend (el grueso de UX)
-- Captura múltiple con tira de miniaturas: foto → añadir / reordenar / borrar → enviar. Reutiliza jscanify.
-- **Asistente recomendado**: "Haz una foto de la 1ª hoja (datos fiscales) y otra de la última (importes)". Si `camposFaltantes` vuelve del backend, mostrar "Falta el total: haz una foto de la página de importes".
-- Selector que acepte PDF → rasterizado en el cliente con el pdfjs vendorizado → subir páginas como imágenes.
-- Cache-buster (regla 6).
+### Fase 3 — Frontend fotos-primero (✅ hecho en rama, sin desplegar)
+- ✅ `multipagina.js` — módulo autocontenido: panel plegable, añadir/reordenar/quitar páginas con miniaturas, envío a `/upload-preview-multipagina`, reutiliza `showConfirmModal`. Traduce `campos_faltantes` a un aviso dirigido ("falta el total → foto de la página de importes").
+- ✅ Asistente recomendado (texto guía 1ª hoja fiscal / última importes) integrado.
+- ✅ PDF: rasterizado en el cliente con pdfjs (degrada con aviso si pdfjs no está cargado — **fotos primero**, la carga de pdf.min.js en index.html se activa al habilitar PDF).
+- ✅ Hooks HTML en `index.html` + CSS de miniaturas + cache-buster de styles.css bumpeado (regla 6).
+- ⏳ **Pendiente**: verificación en navegador/dispositivo real (no testeable desde el servidor).
 
-### Fase 4 — Blindaje y despliegue
-- Tests de forma de respuesta del endpoint (lección LL-002) + los de fusión ya hechos.
-- Staging → producción con el flag, sombra primero si procede.
+### Fase 4 — Blindaje y despliegue (pendiente)
+- Test de forma de respuesta del endpoint nuevo (lección LL-002).
+- **Staging → prueba en navegador con fotos reales** → activar flag → producción. NADA desplegado aún.
 
 ---
 
@@ -95,6 +96,12 @@ No es subir varios archivos: es extraer **una** factura (un total, un desglose d
 - Investigación de herramientas (arriba): decisión de rasterizar PDF en el cliente con el pdfjs ya vendorizado → cero dependencias nuevas en backend.
 - `fusion-multipagina.js` + `orquestador-multipagina.js` + 13 tests. Reutilizan validadores fiscales (`iva.js`, `nif.js`), comparador (`arbiter.coinciden`), importes (`normalize-amount`), y el pipeline v2 de extracción.
 - Suite 341/342 (fallo = paridad v3 preexistente). Nada desplegado; flujo de una página intacto.
+
+### 2026-08-13 — Fase 2 (endpoint) + Fase 3 (frontend fotos-primero) construidas (rama)
+- Backend: endpoint separado `/api/upload-preview-multipagina` (flag off), `adaptador-v1.js` (canónico→plano) + test de contrato, flags `ocr_multipagina_*` en features.json (off/6). `server.js` solo añade el multer array + el handler nuevo; el endpoint de una página intacto (verificado por diff).
+- Frontend: `multipagina.js` (captura múltiple fotos-primero, miniaturas, aviso de faltantes dirigido), sección plegable en `index.html`, CSS de miniaturas, cache-buster bumpeado.
+- Suite 345/346 (fallo = paridad v3 preexistente). `node --check` OK en server.js y multipagina.js. **Nada desplegado.**
+- Pendiente: persistencia en confirm (Fase 2.2), verificación en navegador real, y despliegue por staging con el flag.
 
 ---
 
