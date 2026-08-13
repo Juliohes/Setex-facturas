@@ -730,3 +730,56 @@ body {
 .eval-campo .eval-valor { flex: 1; min-width: 90px; padding: 3px 6px; border: 1px solid #e2e8f0; border-radius: 4px; font-size: 12px; }
 .eval-campo .eval-estado { padding: 3px 4px; border: 1px solid #e2e8f0; border-radius: 4px; font-size: 11px; }
 .eval-campo .eval-verificado-label { display: flex; align-items: center; gap: 3px; white-space: nowrap; color: #276749; font-weight: 600; }
+
+/* Botón "ojo" para mostrar/ocultar contraseña (2026-08-10, petición de Julio).
+   Comparte clases con styles.css (app de usuario) pero se estiliza aparte:
+   este fichero lo cargan admin-login.html y admin-facturas.html, que usan
+   .login-field (flex column) en lugar del layout de la PWA. */
+.pwd-wrap { position: relative; display: block; }
+.pwd-wrap input { width: 100%; padding-right: 42px; }
+.pwd-wrap .pwd-toggle {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  transform: translateY(-50%);
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: #718096;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.pwd-wrap .pwd-toggle:hover { color: #2d3748; background: #edf2f7; }
+.pwd-wrap .pwd-toggle:focus-visible { outline: 2px solid #3182ce; outline-offset: 1px; }
+.pwd-wrap .pwd-toggle svg { display: block; width: 18px; height: 18px; }
+
+/* Modal de confirmación de borrado total de factura (2026-08-11, petición de
+   Julio). Sustituye al confirm() nativo: el admin ve QUÉ factura va a borrar
+   antes de una acción irreversible sobre datos fiscales. */
+.del-resumen {
+  background: #f7fafc; border: 1px solid #e2e8f0; border-left: 4px solid #e53e3e;
+  border-radius: 6px; padding: 10px 12px; margin-bottom: 14px;
+}
+.del-resumen-num { font-size: 14px; font-weight: 700; color: #1a365d; }
+.del-resumen-prov { font-size: 13px; color: #2d3748; margin-top: 2px; }
+.del-resumen-meta { font-size: 12px; color: #718096; margin-top: 4px; }
+.del-lista-titulo { font-size: 13px; font-weight: 600; color: #4a5568; margin: 0 0 6px; }
+.del-lista { margin: 0 0 12px 18px; padding: 0; font-size: 13px; color: #4a5568; line-height: 1.7; }
+.del-aviso {
+  font-size: 13px; color: #c53030; background: #fff5f5; border: 1px solid #fed7d7;
+  border-radius: 6px; padding: 8px 10px; margin: 0;
+}
+/* Botón destructivo: rojo pleno, para que no se confunda con el primario azul
+   del resto de modales (guardar/aceptar). */
+.btn-peligro {
+  width: auto; padding: 9px 16px; border: none; border-radius: 7px;
+  background: linear-gradient(135deg, #e53e3e, #c53030); color: #fff;
+  font-size: 13px; font-weight: 700; cursor: pointer; transition: filter 0.15s;
+}
+.btn-peligro:hover:not(:disabled) { filter: brightness(1.08); }
+.btn-peligro:disabled { opacity: 0.6; cursor: not-allowed; }

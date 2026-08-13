@@ -209,3 +209,104 @@
     },
   };
 })();
+
+/**
+ * Botón "ojo" para mostrar/ocultar la contraseña (2026-08-10, petición de Julio).
+ *
+ * Vive aquí y no en app.js/admin-login.js/admin-facturas.js porque auth.js es
+ * el único script cargado por las TRES páginas con campos de contraseña
+ * (index.html, admin-login.html, admin-facturas.html): una sola implementación
+ * en lugar de tres copias que se desincronizarían.
+ *
+ * Se aplica a TODOS los input[type=password] del documento, así que cualquier
+ * campo nuevo lo hereda sin tocar este fichero. Es idempotente (marca los ya
+ * procesados) y no toca los formularios ni sus handlers: solo envuelve el
+ * input y cambia su atributo `type`.
+ */
+(function () {
+  'use strict';
+
+  // Feather icons "eye" / "eye-off" — SVG inline, sin dependencias externas
+  // (la CSP bloquea recursos de terceros y el proyecto no vendoriza iconos).
+  const SVG_ABIERTO = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
+  const SVG_TACHADO = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"></path><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>';
+
+  function ocultar(input, btn) {
+    input.type = 'password';
+    btn.innerHTML = SVG_ABIERTO;
+    btn.setAttribute('aria-label', 'Mostrar contraseña');
+    btn.setAttribute('aria-pressed', 'false');
+    btn.title = 'Mostrar contraseña';
+  }
+
+  function mostrar(input, btn) {
+    input.type = 'text';
+    btn.innerHTML = SVG_TACHADO;
+    btn.setAttribute('aria-label', 'Ocultar contraseña');
+    btn.setAttribute('aria-pressed', 'true');
+    btn.title = 'Ocultar contraseña';
+  }
+
+  function equipar(input) {
+    if (input.dataset.pwdToggle === '1') return; // ya procesado
+    input.dataset.pwdToggle = '1';
+
+    const wrap = document.createElement('span');
+    wrap.className = 'pwd-wrap';
+    input.parentNode.insertBefore(wrap, input);
+    wrap.appendChild(input);
+
+    const btn = document.createElement('button');
+    // type="button" es obligatorio: dentro de un <form> el default es
+    // "submit" y pulsar el ojo enviaría el login en vez de revelar el texto.
+    btn.type = 'button';
+    btn.className = 'pwd-toggle';
+    btn.tabIndex = -1; // el tabulador salta del campo al botón "Entrar", no al ojo
+    ocultar(input, btn);
+    wrap.appendChild(btn);
+
+    btn.addEventListener('click', () => {
+      const visible = input.type === 'text';
+      if (visible) ocultar(input, btn); else mostrar(input, btn);
+      // Devolver el foco al campo y el cursor al final: si no, tras pulsar el
+      // ojo hay que volver a hacer clic en el input para seguir escribiendo.
+      input.focus();
+      try {
+        const n = input.value.length;
+        input.setSelectionRange(n, n);
+      } catch { /* setSelectionRange no aplica a algunos tipos */ }
+    });
+
+    // Volver a ocultar cuando el campo deja de estar visible (login enviado,
+    // cambio de pantalla). Evita que la contraseña siga en claro en pantalla
+    // después de entrar — shoulder surfing gratis en un móvil sobre la mesa.
+    if (typeof IntersectionObserver !== 'undefined') {
+      new IntersectionObserver((entradas) => {
+        if (!entradas[0].isIntersecting && input.type === 'text') ocultar(input, btn);
+      }).observe(input);
+    }
+  }
+
+  function equiparTodos() {
+    document.querySelectorAll('input[type="password"]').forEach(equipar);
+  }
+
+  // Mismo motivo que el IntersectionObserver: al enviar cualquier formulario,
+  // la contraseña vuelve a ocultarse. En fase de captura para que corra aunque
+  // otro handler haga preventDefault().
+  document.addEventListener('submit', () => {
+    document.querySelectorAll('.pwd-wrap input[type="text"]').forEach((input) => {
+      const btn = input.parentNode.querySelector('.pwd-toggle');
+      if (btn) ocultar(input, btn);
+    });
+  }, true);
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', equiparTodos);
+  } else {
+    equiparTodos();
+  }
+
+  // Expuesto por si alguna pantalla inyecta campos de contraseña más tarde.
+  window.initPasswordToggles = equiparTodos;
+})();

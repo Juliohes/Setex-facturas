@@ -4981,16 +4981,55 @@ app.put('/api/admin/facturas/:id', authenticateToken, requireAdmin, requireXHR, 
 });
 
 // ─── DELETE /api/admin/facturas/:id — eliminar factura (solo admin) ───────────
-// Borrado hard: elimina la fila de uploads y el fichero físico si existe.
+// Borrado hard TOTAL: fila de uploads, todo el rastro OCR asociado y los
+// ficheros en disco. Accesible a role='admin' y role='tech' (ver requireAdmin).
 // Auditoría completa: ADMIN_DELETE_FACTURA con snapshot del registro previo.
+//
+// 2026-08-11 — "eliminado total" de verdad (petición de Julio). Antes esto
+// borraba SOLO la fila de uploads, y dejaba atrás:
+//   - ocr_imagen_variante_comparativa / ocr_shadow_validaciones: se enlazan por
+//     `preview_id` y NO tienen FK a uploads, así que el ON DELETE CASCADE no las
+//     alcanzaba. Quedaban datos fiscales del cliente (proveedor, NIF, total) tras
+//     un borrado supuestamente total. (`ocr_shadow_comparativa` se listaba aquí
+//     por error: es una VISTA sobre ambas — corregido el 2026-08-12.)
+//   - `ruta_variante`: la imagen de contraste generada por el bloque 5 seguía
+//     en disco. Es una foto legible de la factura.
+// Sí estaban cubiertas por CASCADE: extracciones_v2 y ocr_benchmark_resultados.
+// failed_jobs.upload_id es ON DELETE SET NULL — deliberado, la traza del fallo
+// sobrevive al borrado del documento.
 app.delete('/api/admin/facturas/:id', authenticateToken, requireAdmin, requireXHR, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'ID inválido' });
 
+  // Solo se borran ficheros dentro del directorio de uploads. `file_path` y
+  // `ruta_variante` vienen de BD, pero el resto del código valida igual antes
+  // de servirlos (ver /imagen-variante): defensa en profundidad, un unlink()
+  // sin validar es una primitiva de borrado arbitrario si alguna vez se
+  // consigue escribir en esas columnas.
+  const UPLOADS_DIR = '/app/uploads/';
+  const borrarFichero = async (ruta, etiqueta) => {
+    if (!ruta) return null;
+    const abs = path.resolve(ruta.startsWith('/') ? ruta : `/app/${ruta}`);
+    if (!abs.startsWith(UPLOADS_DIR)) {
+      logger.warn(`[Admin] ${etiqueta} fuera de ${UPLOADS_DIR}, no se borra: ${abs}`);
+      return 'rechazado';
+    }
+    try {
+      await fs.unlink(abs);
+      return 'borrado';
+    } catch (e) {
+      // ENOENT no es un fallo: el fichero ya no estaba.
+      logger.warn(`[Admin] No se pudo borrar ${etiqueta} id=${id}: ${e.message}`);
+      return e.code === 'ENOENT' ? 'inexistente' : 'error';
+    }
+  };
+
+  const client = await pool.connect();
   try {
-    // Snapshot previo para auditoría
-    const prev = await pool.query(
-      `SELECT id, user_id, filename, file_path, proveedor_nombre, proveedor_nif,
+    // Snapshot previo para auditoría + rutas de los ficheros a borrar. La
+    // variante se lee ANTES de borrar: su fila desaparece en la transacción.
+    const prev = await client.query(
+      `SELECT id, user_id, preview_id, filename, file_path, proveedor_nombre, proveedor_nif,
               receptor_nombre, receptor_nif, numero_factura, fecha_emision,
               total_factura, base_imponible, uploaded_at
        FROM uploads WHERE id = $1`,
@@ -4998,27 +5037,66 @@ app.delete('/api/admin/facturas/:id', authenticateToken, requireAdmin, requireXH
     );
     if (prev.rows.length === 0) return res.status(404).json({ error: 'Factura no encontrada' });
     const snapshot = prev.rows[0];
+    const previewId = snapshot.preview_id;
 
-    const r = await pool.query('DELETE FROM uploads WHERE id = $1 RETURNING id', [id]);
-    if (r.rows.length === 0) return res.status(404).json({ error: 'Factura no encontrada' });
+    const variante = previewId
+      ? await client.query(
+          'SELECT ruta_variante FROM ocr_imagen_variante_comparativa WHERE preview_id = $1',
+          [previewId]
+        )
+      : { rows: [] };
 
-    // Intentar borrar el fichero físico (best-effort, no bloquea la respuesta)
-    if (snapshot.file_path) {
-      try {
-        const fsp = require('fs').promises;
-        const abs = snapshot.file_path.startsWith('/') ? snapshot.file_path : `/app/${snapshot.file_path}`;
-        await fsp.unlink(abs);
-      } catch (e) {
-        logger.warn(`[Admin] No se pudo borrar fichero físico id=${id}: ${e.message}`);
-      }
+    await client.query('BEGIN');
+
+    // Rastro OCR enlazado por preview_id (sin FK → no lo cubre el CASCADE).
+    // Se acota a previewId no nulo: un preview_id NULL casaría con filas de
+    // otras facturas y borraría de más.
+    //
+    // 2026-08-12: `ocr_shadow_comparativa` NO es una tabla, es una VISTA
+    // (`ocr_shadow_validaciones` LEFT JOIN `uploads`, ver CREATE VIEW arriba).
+    // Postgres no permite DELETE sobre una vista con join —error 55000, "cannot
+    // delete from view"— y la transacción entera hacía ROLLBACK: el borrado
+    // fallaba siempre con HTTP 500. Además era redundante: la vista no tiene
+    // datos propios, se vacía sola al purgar `ocr_shadow_validaciones` y borrar
+    // la fila de `uploads`. Se elimina la sentencia; quedan las dos tablas reales.
+    const purgadas = { variante: 0, validaciones: 0 };
+    if (previewId) {
+      purgadas.variante = (await client.query(
+        'DELETE FROM ocr_imagen_variante_comparativa WHERE preview_id = $1', [previewId])).rowCount;
+      purgadas.validaciones = (await client.query(
+        'DELETE FROM ocr_shadow_validaciones WHERE preview_id = $1', [previewId])).rowCount;
     }
 
-    auditLog('ADMIN_DELETE_FACTURA', { upload_id: id, snapshot }, req.user.userId, req.ip);
-    logger.info(`[Admin] Factura ${id} eliminada por ${req.user.email}`);
-    res.json({ success: true });
+    // uploads al final: su CASCADE limpia extracciones_v2 y ocr_benchmark_resultados.
+    const r = await client.query('DELETE FROM uploads WHERE id = $1 RETURNING id', [id]);
+    if (r.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Factura no encontrada' });
+    }
+
+    await client.query('COMMIT');
+
+    // Ficheros después del COMMIT: si la transacción falla, no queremos haber
+    // borrado ya una imagen que sigue referenciada en BD. Al revés es
+    // recuperable (fila sin fichero); en este orden, no.
+    const ficheros = {
+      original: await borrarFichero(snapshot.file_path, 'fichero original'),
+      variante: await borrarFichero(variante.rows[0]?.ruta_variante, 'variante de contraste'),
+    };
+
+    auditLog('ADMIN_DELETE_FACTURA', {
+      upload_id: id, snapshot, preview_id: previewId, purgadas, ficheros,
+    }, req.user.userId, req.ip);
+    logger.warn(`[Admin] Factura ${id} eliminada por ${req.user.email} — ` +
+      `variante=${purgadas.variante} validaciones=${purgadas.validaciones} ` +
+      `ficheros=${ficheros.original}/${ficheros.variante}`);
+    res.json({ success: true, purgadas, ficheros });
   } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
     logger.error('Admin delete factura error:', err);
     res.status(500).json({ error: 'Error al eliminar la factura' });
+  } finally {
+    client.release();
   }
 });
 

@@ -150,3 +150,41 @@ button {
 }
 .setex-badge .se { color: #FF6600; }
 .setex-badge .tex { color: #ffffff; }
+
+/* Botón "ojo" para mostrar/ocultar contraseña (2026-08-10, petición de Julio).
+   Se aplica a todos los input[type=password] — ver initPasswordToggles() en
+   auth.js. Las reglas globales `input`/`button` de este mismo fichero son
+   agresivas (width:100%, margin, transform en :hover), así que aquí hay que
+   neutralizarlas explícitamente con selectores más específicos. */
+.pwd-wrap { position: relative; display: block; margin: 8px 0; }
+.pwd-wrap input { margin: 0; padding-right: 46px; }
+.pwd-wrap .pwd-toggle {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  width: 36px;
+  height: 36px;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: #718096;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+/* :hover/:active heredarían el translateY(-1px) global de `button` y el ojo
+   saltaría fuera del campo — se reafirma el centrado vertical. */
+.pwd-wrap .pwd-toggle:hover,
+.pwd-wrap .pwd-toggle:active {
+  transform: translateY(-50%);
+  box-shadow: none;
+  color: #4a5568;
+  background: #edf2f7;
+}
+.pwd-wrap .pwd-toggle:focus-visible { outline: 2px solid #667eea; outline-offset: 1px; }
+.pwd-wrap .pwd-toggle svg { display: block; }

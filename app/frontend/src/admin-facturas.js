@@ -487,13 +487,25 @@ function initTable() {
     // guardado en localStorage) quedaba anexada AL FINAL y, por tener
     // frozen:true, se congelaba a la DERECHA en vez de a la izquierda.
     // Subir la version invalida el layout viejo y respeta el orden de aqui.
-    persistenceID: 'setex-admin-facturas-v10',
+    // v11 (2026-08-12): al quitar "Código cliente" hay que invalidar de nuevo. Un
+    // layout guardado que aun la liste la reintroduciria al final y volveria a
+    // congelar un bloque a la derecha sobre "Acciones".
+    // v12 (2026-08-12): al retirar `frozen` de la columna ID hay que invalidar otra
+    // vez, o un layout guardado con la columna congelada la seguiria anclando.
+    persistenceID: 'setex-admin-facturas-v12',
     columns: [
       // La bandera de "campos no fiables" vive AQUI, una sola por fila, en vez
       // de repetirse en cada celda editable (ensuciaba toda la tabla). Abre un
       // modal donde se elige QUE campos concretos no son fiables — se conserva
       // asi la granularidad por campo y el resaltado en rojo de esas celdas.
-      { title: 'ID',               field: 'id',              width: 62,  resizable: true, sorter: 'number', hozAlign: 'center', frozen: true,
+      // 2026-08-12: retirado `frozen: true`. La columna sigue siendo la PRIMERA por
+      // la izquierda (que es lo que se quiere ver), pero deja de estar congelada.
+      // `frozen` era la unica causa posible de un bloque de columnas anclado a la
+      // derecha sobre "Acciones": Tabulator lo reancla ahi en cada `redraw(true)`
+      // —justo lo que hace el toggle del modo eliminar— y por eso reaparecia al ir
+      // a borrar. Quitar el ancla elimina el problema de raiz. Contrapartida
+      // aceptada: el ID ya no permanece a la vista al hacer scroll horizontal.
+      { title: 'ID',               field: 'id',              width: 62,  resizable: true, sorter: 'number', hozAlign: 'center',
         formatter: (cell) => {
           const rowData = cell.getRow().getData();
           const n = Array.isArray(rowData.campos_no_fiables) ? rowData.campos_no_fiables.length : 0;
@@ -505,9 +517,11 @@ function initTable() {
         cellClick: (e, cell) => {
           if (e.target.closest('.flag-row-btn')) openNoFiableModal(cell.getRow().getData());
         } },
-      // Oculta por ahora (petición de Julio 2026-07-29) — se reactiva con visible:true si hace falta.
-      { title: 'Código cliente',   field: 'codigo_cliente',  width: 110, sorter: 'string', hozAlign: 'center', frozen: true, visible: false,
-        formatter: (cell) => { const v = cell.getValue(); return v ? `<code style="font-size:12px;font-weight:700;">${escHtml(v)}</code>` : '<span style="color:#a0aec0;">—</span>'; } },
+      // 2026-08-12: eliminada la columna "Código cliente". Estaba oculta desde el
+      // 2026-07-29 (visible:false) pero conservaba frozen:true, y Tabulator sigue
+      // montando el contenedor de columnas congeladas aunque la unica que lo ocupa
+      // este oculta. Ese bloque se anclaba a la DERECHA y tapaba "Acciones", que es
+      // la ultima columna: el boton de borrar factura quedaba inalcanzable.
       // ── Empresa y contraparte: campos computados por el backend via matching CIF/nombre/tipo ──
       { title: 'Empresa',          field: 'display_empresa',      minWidth: 160, sorter: 'string',
         formatter: makeEditableFormatter('display_empresa'), cellClick: makeEditableCellClick('display_empresa') },
@@ -595,9 +609,56 @@ function initTable() {
   document.getElementById('nofiable-save').addEventListener('click', saveNoFiable);
 }
 
-// Eliminación de factura con confirmación y DELETE al backend
-async function eliminarFactura(id, num) {
-  if (!confirm(`¿Eliminar definitivamente la factura ${num}?\n\nEsta acción no se puede deshacer. Se borrarán los datos y el fichero de imagen asociado.`)) return;
+// Eliminación de factura — confirmación en modal propio + DELETE al backend.
+// 2026-08-11 (petición de Julio): antes la confirmación era un confirm()
+// nativo, que solo mostraba el número de factura. Para una acción irreversible
+// sobre datos fiscales el admin necesita ver de qué factura se trata
+// (proveedor, fecha, importe) y comprobar que es la fila correcta.
+let _delFacturaPendiente = null; // { id, num }
+
+function cerrarDelFacturaModal() {
+  const m = document.getElementById('del-factura-modal');
+  if (m) m.style.display = 'none';
+  _delFacturaPendiente = null;
+}
+
+function eliminarFactura(id, num) {
+  const modal   = document.getElementById('del-factura-modal');
+  const resumen = document.getElementById('del-factura-resumen');
+  const errorEl = document.getElementById('del-factura-error');
+  const btn     = document.getElementById('del-factura-confirm');
+  // Sin el modal en el DOM (HTML cacheado antiguo) no se borra a ciegas:
+  // mejor no hacer nada que ejecutar un borrado irreversible sin confirmar.
+  if (!modal || !resumen || !btn) return;
+
+  const d = (table && table.getRow(id)) ? table.getRow(id).getData() : {};
+  const totalNum = parseSpanishAmountAdmin(d.total_factura);
+  const total = totalNum != null
+    ? totalNum.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €'
+    : '—';
+  const fecha = d.fecha_emision ? new Date(d.fecha_emision).toLocaleDateString('es-ES') : '—';
+  const nif   = d.proveedor_nif ? ` · ${escHtml(d.proveedor_nif)}` : '';
+
+  resumen.innerHTML = `
+    <div class="del-resumen-num">Factura ${escHtml(num)}</div>
+    <div class="del-resumen-prov">${escHtml(d.proveedor_nombre || 'Proveedor desconocido')}${nif}</div>
+    <div class="del-resumen-meta">${escHtml(fecha)} · <strong>${escHtml(total)}</strong></div>`;
+
+  errorEl.style.display = 'none';
+  errorEl.textContent = '';
+  btn.disabled = false;
+  btn.textContent = 'Eliminar definitivamente';
+  _delFacturaPendiente = { id, num };
+  modal.style.display = 'flex';
+}
+
+async function confirmarBorradoFactura() {
+  if (!_delFacturaPendiente) return;
+  const { id } = _delFacturaPendiente;
+  const btn     = document.getElementById('del-factura-confirm');
+  const errorEl = document.getElementById('del-factura-error');
+  btn.disabled = true;
+  btn.textContent = 'Eliminando…';
   try {
     const res = await authFetch(`${API_URL}/admin/facturas/${id}`, { method: 'DELETE' });
     const data = await res.json().catch(() => ({}));
@@ -612,9 +673,32 @@ async function eliminarFactura(id, num) {
       const n = parseInt(m[1].replace(/\./g, ''), 10) - 1;
       totalEl.innerHTML = `<strong>${n.toLocaleString('es-ES')}</strong> factura${n !== 1 ? 's' : ''}`;
     }
+    cerrarDelFacturaModal();
   } catch (err) {
-    alert(`No se pudo eliminar la factura: ${err.message}`);
+    // El error se queda DENTRO del modal: un alert() lo cerraría y obligaría a
+    // repetir la selección de la fila.
+    errorEl.textContent = `No se pudo eliminar la factura: ${err.message}`;
+    errorEl.style.display = 'block';
+    btn.disabled = false;
+    btn.textContent = 'Eliminar definitivamente';
   }
+}
+
+function initDelFacturaModal() {
+  const modal  = document.getElementById('del-factura-modal');
+  const cerrar = document.getElementById('del-factura-close');
+  const cancel = document.getElementById('del-factura-cancel');
+  const btn    = document.getElementById('del-factura-confirm');
+  if (!modal || !cerrar || !cancel || !btn) return;
+  cerrar.addEventListener('click', cerrarDelFacturaModal);
+  cancel.addEventListener('click', cerrarDelFacturaModal);
+  btn.addEventListener('click', confirmarBorradoFactura);
+  // Clic en el backdrop cancela; Escape también. En un modal destructivo la
+  // salida siempre es la opción segura.
+  modal.addEventListener('click', (e) => { if (e.target === modal) cerrarDelFacturaModal(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.style.display === 'flex') cerrarDelFacturaModal();
+  });
 }
 
 // ── Resolución de posibles duplicados ────────────────────────────────────────
@@ -1612,6 +1696,7 @@ function launchApp(authData) {
   initOcrModal();
   initShadowModal();
   initBenchmarkModal();
+  initDelFacturaModal();
   initEvalVerificacionModal();
   loadData();
 
@@ -2394,18 +2479,24 @@ async function openOcrModal(facturaId) {
       const vIa   = iaNormalized ? iaNormalized[c.key] : undefined;
       const vRaw  = rawNormalized[c.key];
       const vConf = confirmed[c.key];
-      // El acierto REAL de la IA se mide contra lo confirmado, no contra el
-      // resultado del sistema (que puede venir de la BD y coincidir siempre).
-      const comparable = iaNormalized && vIa != null && vConf != null;
-      const igualIa = comparable && normCmp(vIa) === normCmp(vConf);
-      const badge = !iaNormalized
-        ? '<span style="color:#a0aec0;font-size:11px;" title="Esta factura se procesó antes de que se guardara la lectura pura de la IA">n/d</span>'
-        : !comparable
-          ? '<span style="color:#a0aec0;font-size:14px;">—</span>'
-          : igualIa
-            ? '<span style="color:#276749;font-weight:700;font-size:14px;">&#10003;&#10003;</span>'
-            : '<span style="color:#9b2335;font-weight:700;font-size:14px;">&#10007;</span>';
-      const rowBg = (comparable && !igualIa) ? 'background:#fff5f5;' : '';
+      // 2026-08-01 (petición de Julio): el acierto se mide COLUMNA 2 vs COLUMNA 3
+      // — lo que el sistema decidió (ya con las sobrescrituras de BD aplicadas,
+      // que es exactamente lo que se le presentó al usuario en el modal de
+      // confirmación) contra lo que el usuario aceptó y quedó guardado.
+      // Antes se medía columna 1 (lectura pura de la IA) vs 3: mide la precisión
+      // del motor OCR aislado, pero NO mide lo que de verdad llega al usuario, y
+      // deja en n/d todas las facturas anteriores al 29/07/2026, cuando aún no se
+      // guardaba `ia_pura`. La columna 1 sigue visible con sus badges de motor.
+      // La fila "Tramos IVA" de más abajo ya usaba este mismo criterio 2 vs 3:
+      // este cambio también elimina esa incoherencia dentro de la misma tabla.
+      const comparable = vRaw != null && vConf != null;
+      const igualSistema = comparable && normCmp(vRaw) === normCmp(vConf);
+      const badge = !comparable
+        ? '<span style="color:#a0aec0;font-size:14px;">—</span>'
+        : igualSistema
+          ? '<span style="color:#276749;font-weight:700;font-size:14px;">&#10003;&#10003;</span>'
+          : '<span style="color:#9b2335;font-weight:700;font-size:14px;">&#10007;</span>';
+      const rowBg = (comparable && !igualSistema) ? 'background:#fff5f5;' : '';
       const celdaIa = iaNormalized
         ? `${fmt(vIa)}${motorBadge(c.key, vIa)}`
         : '<span style="color:#a0aec0;">n/d</span>';
@@ -2513,10 +2604,45 @@ async function openOcrModal(facturaId) {
               <td style="padding:6px 8px;font-family:monospace;font-weight:700;background:#edf2f7;">${fmt(vConf)}</td>
             </tr>`;
           }).join('')}
+          ${(() => {
+            // 2026-08-01 (petición de Julio): fila de Tramos IVA en el ranking.
+            // Faltaba porque el bucle de arriba itera CAMPOS, que solo contiene
+            // campos escalares; en la tabla principal los tramos se añaden como
+            // fila manual (rowLineas) y esa adición nunca se replicó aquí.
+            // Los datos siempre estuvieron disponibles: motors.<engine>.campos.lineas_iva
+            // ya lo consume tramoBadge() para la atribución por tramo de la columna 1.
+            // A diferencia del resto de filas, aquí no hay un valor escalar que
+            // comparar: se cuentan cuántos de los tramos confirmados reportó cada
+            // motor (tramoMatches → % exacto + importes con tolerancia del 2 %).
+            const confT = Array.isArray(confLineas) ? confLineas : [];
+            const cells = motorEntries.map(([, m]) => {
+              const mt = ((m && m.campos) || {}).lineas_iva;
+              const tramosMotor = Array.isArray(mt) ? mt : [];
+              if (tramosMotor.length === 0) {
+                return '<td style="padding:6px 8px;font-family:monospace;color:#a0aec0;">—</td>';
+              }
+              const aciertos = confT.filter(t => tramosMotor.some(tm => tramoMatches(t, tm))).length;
+              const total    = confT.length;
+              let bg = '', marcador = '';
+              if (total > 0) {
+                const col = aciertos === total ? '#276749' : (aciertos === 0 ? '#9b2335' : '#975a16');
+                bg = aciertos === total ? 'background:#f0fff4;' : (aciertos === 0 ? 'background:#fff5f5;' : 'background:#fffbeb;');
+                // Señal extra cuando el motor inventa tramos que nadie confirmó.
+                const sobra = tramosMotor.length > total ? ` (+${tramosMotor.length - total} no confirmado${tramosMotor.length - total !== 1 ? 's' : ''})` : '';
+                marcador = `<div style="margin-top:4px;font-family:sans-serif;font-size:11px;font-weight:700;color:${col};">${aciertos}/${total} tramos${sobra}</div>`;
+              }
+              return `<td style="padding:6px 8px;font-family:monospace;${bg}">${fmtLineasIva(tramosMotor, false)}${marcador}</td>`;
+            }).join('');
+            return `<tr>
+              <td style="padding:6px 8px;font-weight:600;color:#2d3748;white-space:nowrap;">Tramos IVA</td>
+              ${cells}
+              <td style="padding:6px 8px;font-family:monospace;font-weight:700;background:#edf2f7;">${fmtLineasIva(confLineas, false)}</td>
+            </tr>`;
+          })()}
         </tbody>
       </table>
       </div>
-      <p style="font-size:11px;color:#718096;margin:0 0 14px;">Verde = coincide con lo confirmado · Rojo = discrepa. Para comparar qué motor se equivoca más en esta factura concreta.</p>`;
+      <p style="font-size:11px;color:#718096;margin:0 0 14px;">Verde = coincide con lo confirmado · Rojo = discrepa. Para comparar qué motor se equivoca más en esta factura concreta.<br>En <strong>Tramos IVA</strong> se cuenta cuántos tramos confirmados reportó cada motor (<em>n/total</em>): verde = todos, ámbar = algunos, rojo = ninguno. Los importes se comparan con tolerancia del 2 %, el tipo de IVA debe ser exacto. <em>—</em> = ese motor no devolvió tramos.</p>`;
 
     body.innerHTML = `
       <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:14px;">
@@ -2526,7 +2652,7 @@ async function openOcrModal(facturaId) {
             <th style="padding:8px 10px;text-align:left;color:#4a5568;font-weight:600;">1 · Leyó la IA</th>
             <th style="padding:8px 10px;text-align:left;color:#4a5568;font-weight:600;">2 · Decidió el sistema</th>
             <th style="padding:8px 10px;text-align:left;color:#4a5568;font-weight:600;">3 · Confirmado humano</th>
-            <th style="padding:8px 10px;text-align:center;color:#4a5568;font-weight:600;">¿Acertó la IA?</th>
+            <th style="padding:8px 10px;text-align:center;color:#4a5568;font-weight:600;" title="Compara la columna 2 (lo que el sistema le presentó al usuario) con la 3 (lo que el usuario aceptó)">¿Acertó el sistema?</th>
           </tr>
         </thead>
         <tbody>${rows}${rowLineas}</tbody>
@@ -2535,7 +2661,7 @@ async function openOcrModal(facturaId) {
         <strong>1 · Leyó la IA</strong>: fusión de los motores + recálculos aritméticos, tal cual, sin tocar la base de datos. Los badges de color dicen qué motor aportó cada valor.<br>
         <strong>2 · Decidió el sistema</strong>: lo anterior, pero con los campos que el sistema sobrescribe desde la BD. El badge marrón indica el origen (pasa el ratón por encima para ver qué había leído la IA). El nombre y CIF de la empresa que hace la foto se toman <em>siempre</em> del registro del usuario, nunca de la IA — es deliberado.<br>
         <strong>3 · Confirmado humano</strong>: lo que hay hoy en la base de datos, incluidas las ediciones manuales del panel.<br>
-        <strong>¿Acertó la IA?</strong> compara la columna 1 contra la 3 — es la única medida honesta de precisión. <em>n/d</em> en facturas procesadas antes del 29/07/2026, cuando aún no se guardaba la lectura pura.
+        <strong>¿Acertó el sistema?</strong> compara la columna <strong>2 contra la 3</strong>: lo que el sistema decidió y le presentó al usuario, frente a lo que el usuario aceptó y quedó guardado. Mide lo que de verdad llega al cliente, no la precisión del motor OCR aislado. Para eso último, mira la columna 1 y el ranking por motor. Disponible en <em>todas</em> las facturas, también en las anteriores al 29/07/2026.
       </p>
       <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px;padding:10px 12px;background:#f7fafc;border:1px solid #e2e8f0;border-radius:6px;margin-bottom:6px;">
         <span><strong>Motor OCR:</strong> <span style="font-family:monospace;">${motorLabel}</span></span>
