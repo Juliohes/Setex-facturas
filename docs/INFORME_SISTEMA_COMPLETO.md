@@ -3674,6 +3674,13 @@ Investigación a fondo de una paradoja reportada por Julio: en el modal "Vista O
 - **Alucinación de fecha de v2**: `fecha_emision` no estaba entre los campos cotejados contra Tesseract, por eso pasó desapercibido que v2 leyera `10/07/2023` donde el papel pone `10/07/2026` (factura #22). Añadida al cotejo y relajada la normalización de `apareceEnTexto` para tolerar el separador (`/`, `-`, `.`). Un año equivocado manda la factura a otro ejercicio fiscal.
 - Nueva herramienta `eval/comparar-v1-v2.js`: mide **ambos** pipelines contra el ground truth verificado, usando para v1 su salida inmutable (`ocr_result.merged`) y no las columnas de `uploads`, que ya han sido corregidas a mano y harían parecer a v1 perfecto por construcción.
 
+### 2026-08-13 — Factura multipágina DESPLEGADA en producción como canario (solo tech-admin)
+- Cerrado el hueco del guardado: el preview multipágina genera el MISMO shape que espera `/api/upload-confirm` (`{filePath,fileInfo,userInfo,campos,ocrData}`), reutilizando el confirm probado SIN tocarlo. Se aplica la identidad del registro (como el flujo de una página). La página 1 representa la factura en `uploads`; las demás quedan en disco listadas en el preview (linkado completo = refinamiento posterior).
+- Canario: `ocr_multipagina_solo_tech_admin=true` → endpoint y panel de UI solo para tech-admin (Julio). Ningún cliente lo ve hasta poner el flag a false.
+- PWA: `service-worker.js` CACHE_NAME v2→v3 + `multipagina.js` al precache → las apps ya instaladas reciben la actualización al reabrir.
+- Despliegue prod: rollback etiquetado `setex-prod-{backend,frontend}-rollback:2026-08-13-premultipagina`, build+stop+up-d, 4/4 healthy, HTTPS 200. Endpoint responde 401 (existe). Flag `ocr_multipagina_enabled=true`, `solo_tech_admin=true`, `max_paginas=6`. Suite 345/346 (fallo = paridad v3 preexistente).
+- Pendiente: validación de Julio en su PWA con factura real de 2 hojas; luego abrir a todos (`solo_tech_admin=false`); refinamiento de linkado de todas las páginas en el registro.
+
 ### 2026-08-13 — Factura de varias páginas: Fases 1-3 (backend + frontend fotos-primero), en rama sin desplegar
 - Funcionalidad nueva pedida por Julio: subir una factura de más de una página. Decisiones: ambos formatos (fotos + PDF), siempre 1 factura, OCR de todas las páginas + fusión. UX: 1ª hoja fiscal + última importes + fotos extra si falta algo (máx 2-4). Plan: `docs/plans/PLAN-FACTURA-MULTIPAGINA.md`.
 - **Herramienta clave** (investigada en GitHub/oficiales): el PDF se rasteriza EN EL NAVEGADOR con el pdfjs ya vendorizado → el backend recibe siempre N imágenes. **Cero dependencias nuevas** (evita poppler/canvas nativo). Captura reutiliza jscanify+opencv ya presentes.
