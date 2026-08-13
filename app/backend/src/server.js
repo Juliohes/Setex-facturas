@@ -542,6 +542,11 @@ async function initDB() {
     -- revision antes de usarse en contabilidad. Aditiva, default '[]'.
     -- Rollback: scripts/rollback/2026-07-29-uploads-campos-no-fiables-down.sql
     ALTER TABLE uploads ADD COLUMN IF NOT EXISTS campos_no_fiables JSONB NOT NULL DEFAULT '[]';
+    -- Factura multipágina (2026-08-13): lista de páginas [{pagina, path}] cuando
+    -- la factura se subió como varias imágenes. NULL para facturas de una página.
+    -- La página 1 también está en file_path; aquí se guardan todas para el visor
+    -- del panel admin. Rollback: scripts/rollback/2026-08-13-uploads-paginas-down.sql
+    ALTER TABLE uploads ADD COLUMN IF NOT EXISTS paginas JSONB;
   `);
 
   // 2026-07-29: helper unico para leer uploads.total_factura (VARCHAR con dos
@@ -3025,6 +3030,33 @@ app.post('/api/upload-confirm', authenticateToken, requireActiveCompany, confirm
     );
     const uploadId = dbResult.rows[0].id;
 
+    // ── Multipágina (2026-08-13): mover las páginas 2..N junto a la página 1
+    // (que el confirm ya renombró a finalFilePath) y persistir la lista en
+    // uploads.paginas para que el panel admin muestre TODAS las hojas. Solo
+    // para facturas multipágina; fail-safe (un error se registra, no rompe el
+    // guardado ya hecho). La página 1 se guarda como finalFilePath.
+    if (preview.multipagina && Array.isArray(preview.paginas) && preview.paginas.length > 1) {
+      try {
+        const destDir = path.dirname(finalFilePath);
+        const paginasPersist = [];
+        for (const pg of preview.paginas) {
+          if (pg.pagina === 1) { paginasPersist.push({ pagina: 1, path: finalFilePath }); continue; }
+          let dest = pg.path;
+          try {
+            dest = `${destDir}/${path.basename(pg.path)}`;
+            if (dest !== pg.path) await fs.rename(pg.path, dest);
+          } catch (mvErr) {
+            logger.warn(`[Multipagina] no se pudo mover pág ${pg.pagina} (id=${uploadId}): ${mvErr.message}`);
+            dest = pg.path;
+          }
+          paginasPersist.push({ pagina: pg.pagina, path: dest });
+        }
+        await pool.query('UPDATE uploads SET paginas = $1::jsonb WHERE id = $2', [JSON.stringify(paginasPersist), uploadId]);
+      } catch (pgErr) {
+        logger.warn(`[Multipagina] no se pudieron persistir las páginas (id=${uploadId}): ${pgErr.message}`);
+      }
+    }
+
     // ── Benchmark multi-imagen × multi-motor (2026-07-23, petición de Julio) ──
     // FIRE-AND-FORGET: nunca se espera (await) — no debe añadir latencia a la
     // respuesta real ni afectar lo que ve el usuario. Solo corre si el flag
@@ -3356,6 +3388,45 @@ app.get('/api/admin/facturas/:id/imagen', authenticateToken, requireAdmin, async
   } catch (err) {
     logger.error('Error sirviendo imagen admin:', err);
     res.status(500).json({ error: 'Error al obtener la imagen' });
+  }
+});
+
+// GET /api/admin/facturas/:id/paginas — lista de páginas de una factura multipágina
+// (2026-08-13). Devuelve [{pagina}] (sin exponer rutas de disco). Vacío si es de
+// una sola página. El panel admin lo usa para pintar el visor multipágina.
+app.get('/api/admin/facturas/:id/paginas', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT paginas FROM uploads WHERE id = $1', [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'No encontrada' });
+    const paginas = Array.isArray(result.rows[0].paginas) ? result.rows[0].paginas : [];
+    res.json({ paginas: paginas.map((p) => ({ pagina: p.pagina })).sort((a, b) => a.pagina - b.pagina) });
+  } catch (err) {
+    logger.error('Error listando páginas admin:', err);
+    res.status(500).json({ error: 'Error al obtener las páginas' });
+  }
+});
+
+// GET /api/admin/facturas/:id/pagina/:n — sirve la imagen de la página N de una
+// factura multipágina (2026-08-13). Mismas defensas que /imagen: ruta validada
+// dentro de /app/uploads, headers de embebido same-origin.
+app.get('/api/admin/facturas/:id/pagina/:n', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const n = parseInt(req.params.n, 10);
+    if (!Number.isInteger(n) || n <= 0) return res.status(400).json({ error: 'Página inválida' });
+    const result = await pool.query('SELECT paginas FROM uploads WHERE id = $1', [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'No encontrada' });
+    const paginas = Array.isArray(result.rows[0].paginas) ? result.rows[0].paginas : [];
+    const pg = paginas.find((p) => p.pagina === n);
+    if (!pg || !pg.path) return res.status(404).json({ error: 'Página no disponible' });
+    const safePath = path.resolve(pg.path);
+    if (!safePath.startsWith('/app/uploads/')) return res.status(403).json({ error: 'Acceso denegado' });
+    res.removeHeader('X-Frame-Options');
+    res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.sendFile(safePath);
+  } catch (err) {
+    logger.error('Error sirviendo página admin:', err);
+    res.status(500).json({ error: 'Error al obtener la página' });
   }
 });
 

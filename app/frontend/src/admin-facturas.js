@@ -420,8 +420,6 @@ function formatImagen(cell) {
 }
 
 async function verImagenAdmin(id) {
-  const url = `${API_URL}/admin/facturas/${id}/imagen`;
-
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:9999;display:flex;align-items:center;justify-content:center;';
 
@@ -434,29 +432,30 @@ async function verImagenAdmin(id) {
   closeBtn.setAttribute('aria-label', 'Cerrar');
   closeBtn.style.cssText = 'position:fixed;top:18px;right:18px;background:#fff;border:none;border-radius:50%;width:36px;height:36px;font-size:22px;cursor:pointer;line-height:1;box-shadow:0 2px 8px rgba(0,0,0,0.4);z-index:10000;';
 
+  // Barra de navegación de páginas (solo visible en facturas multipágina).
+  const nav = document.createElement('div');
+  nav.style.cssText = 'position:fixed;bottom:18px;left:50%;transform:translateX(-50%);display:none;align-items:center;gap:14px;background:#fff;border-radius:24px;padding:8px 16px;box-shadow:0 2px 8px rgba(0,0,0,0.4);z-index:10000;';
+  nav.innerHTML = '<button data-nav="prev" aria-label="Anterior" style="border:none;background:transparent;font-size:20px;cursor:pointer;">◀</button>' +
+    '<span data-nav="label" style="font-size:14px;font-weight:600;color:#2d3748;min-width:90px;text-align:center;"></span>' +
+    '<button data-nav="next" aria-label="Siguiente" style="border:none;background:transparent;font-size:20px;cursor:pointer;">▶</button>';
+
   let imgUrl = null;
   const cleanup = () => {
     if (imgUrl) { URL.revokeObjectURL(imgUrl); imgUrl = null; }
     document.removeEventListener('keydown', onKey);
     overlay.remove();
   };
-  const onKey = (e) => { if (e.key === 'Escape') cleanup(); };
 
-  closeBtn.addEventListener('click', cleanup);
-  overlay.appendChild(content);
-  overlay.appendChild(closeBtn);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) cleanup(); });
-  document.addEventListener('keydown', onKey);
-  document.body.appendChild(overlay);
-
-  try {
+  // Carga una URL autenticada (imagen o PDF) en el área de contenido.
+  const cargarUrl = async (url) => {
+    content.innerHTML = '<p style="color:#fff;font-size:14px;">Cargando...</p>';
+    if (imgUrl) { URL.revokeObjectURL(imgUrl); imgUrl = null; }
     const res = await authFetch(url);
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const blob = await res.blob();
     imgUrl = URL.createObjectURL(blob);
-    const isPdf = (blob.type || '').toLowerCase().includes('pdf');
     content.innerHTML = '';
-    if (isPdf) {
+    if ((blob.type || '').toLowerCase().includes('pdf')) {
       const frame = document.createElement('iframe');
       frame.src = imgUrl;
       frame.style.cssText = 'width:90vw;height:90vh;border:0;border-radius:8px;background:#fff;box-shadow:0 4px 32px rgba(0,0,0,0.6);';
@@ -468,9 +467,50 @@ async function verImagenAdmin(id) {
       img.style.cssText = 'max-width:90vw;max-height:90vh;border-radius:8px;box-shadow:0 4px 32px rgba(0,0,0,0.6);';
       content.appendChild(img);
     }
-  } catch (err) {
-    content.innerHTML = `<p style="color:#fff;font-size:14px;">No se pudo cargar la imagen (${escHtml(err.message || 'error')}).</p>`;
-  }
+  };
+
+  let paginaActual = 1;
+  let totalPaginas = 1;
+  const irAPagina = async (n) => {
+    if (n < 1 || n > totalPaginas) return;
+    paginaActual = n;
+    const url = totalPaginas > 1
+      ? `${API_URL}/admin/facturas/${id}/pagina/${n}`
+      : `${API_URL}/admin/facturas/${id}/imagen`;
+    try { await cargarUrl(url); } catch (err) {
+      content.innerHTML = `<p style="color:#fff;font-size:14px;">No se pudo cargar la imagen (${escHtml(err.message || 'error')}).</p>`;
+    }
+    nav.querySelector('[data-nav="label"]').textContent = `Página ${paginaActual} / ${totalPaginas}`;
+    nav.querySelector('[data-nav="prev"]').disabled = paginaActual <= 1;
+    nav.querySelector('[data-nav="next"]').disabled = paginaActual >= totalPaginas;
+  };
+
+  const onKey = (e) => {
+    if (e.key === 'Escape') cleanup();
+    else if (e.key === 'ArrowLeft' && totalPaginas > 1) irAPagina(paginaActual - 1);
+    else if (e.key === 'ArrowRight' && totalPaginas > 1) irAPagina(paginaActual + 1);
+  };
+
+  closeBtn.addEventListener('click', cleanup);
+  nav.querySelector('[data-nav="prev"]').addEventListener('click', () => irAPagina(paginaActual - 1));
+  nav.querySelector('[data-nav="next"]').addEventListener('click', () => irAPagina(paginaActual + 1));
+  overlay.appendChild(content);
+  overlay.appendChild(closeBtn);
+  overlay.appendChild(nav);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) cleanup(); });
+  document.addEventListener('keydown', onKey);
+  document.body.appendChild(overlay);
+
+  // Averiguar cuántas páginas tiene; si son varias, mostrar la navegación.
+  try {
+    const pr = await authFetch(`${API_URL}/admin/facturas/${id}/paginas`);
+    if (pr.ok) {
+      const data = await pr.json();
+      totalPaginas = Array.isArray(data.paginas) && data.paginas.length > 1 ? data.paginas.length : 1;
+    }
+  } catch { /* si falla, se trata como una sola página */ }
+  if (totalPaginas > 1) nav.style.display = 'flex';
+  await irAPagina(1);
 }
 
 function initTable() {
