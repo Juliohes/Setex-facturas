@@ -2437,6 +2437,13 @@ app.post('/api/upload-preview-multipagina', authenticateToken, requireActiveComp
       await limpiar();
       return res.status(403).json({ error: 'La subida de facturas de varias páginas no está disponible.' });
     }
+    // CANARIO (2026-08-13): mientras se valida en producción, solo los tech-admin
+    // pueden usarlo (mismo criterio que el botón "Probar flujo"). Se abre a todos
+    // quitando este check tras la validación de Julio en su PWA.
+    if (cfg.ocr_multipagina_solo_tech_admin !== false && !isTechAdmin(req.user.email)) {
+      await limpiar();
+      return res.status(403).json({ error: 'La subida de varias páginas está en pruebas y aún no está disponible para tu cuenta.' });
+    }
     const maxPaginas = Number.isInteger(cfg.ocr_multipagina_max_paginas) ? cfg.ocr_multipagina_max_paginas : 6;
 
     if (ficheros.length === 0) {
@@ -2475,19 +2482,39 @@ app.post('/api/upload-preview-multipagina', authenticateToken, requireActiveComp
     }
 
     const plano = canonicoAPlano(resultado.campos);
-    const previewId = crypto.randomUUID();
 
-    // Preview en Redis (mismo TTL 30 min que la subida de una página). Guarda las
-    // rutas de las páginas para que el confirm multipágina (Fase 2.2) pueda
-    // persistirlas; de momento el usuario revisa y confirma la factura fusionada.
+    // Identidad del registro: el nombre/CIF de la empresa que hace la foto se
+    // conocen con certeza por su registro — la IA NUNCA manda sobre ellos. Mismo
+    // criterio deliberado que la subida de una página (server.js ~2306).
+    const userCompanyName = userRow?.company_name || null;
+    if (userCompanyNif && userCompanyName) {
+      if (invoiceType === 'venta') { plano.proveedor_nif = userCompanyNif; plano.proveedor_nombre = userCompanyName; }
+      else { plano.receptor_nif = userCompanyNif; plano.receptor_nombre = userCompanyName; }
+    }
+
+    const previewId = crypto.randomUUID();
+    // La página 1 representa la factura en `uploads` (el confirm persiste un
+    // file_path). Las demás páginas quedan en disco y se listan en `paginas`.
+    const p1 = ficheros[0];
+
+    // Preview en Redis con el MISMO shape que espera /api/upload-confirm
+    // ({ filePath, fileInfo, userInfo, campos, ocrData }) — así se reutiliza el
+    // confirm probado SIN tocarlo. Se añaden las claves multipágina como extra.
     const previewData = {
-      multipagina: true,
+      filePath: p1.path,
+      fileInfo: { filename: p1.filename, mimetype: p1.mimetype, size: p1.size },
+      userInfo: { userId: req.user.userId, email: req.user.email },
       campos: plano,
+      ocr_result_full: plano,
+      ocrData: { campos: plano, dual_confirmed: false, ocr_engine: 'multipagina_v2' },
+      client_company_id: null,
+      client_company_data: null,
+      // Extras multipágina (no los usa el confirm; sí el registro/depuración).
+      multipagina: true,
+      paginas: paginas.map((p) => ({ pagina: p.pagina, path: p.filePath })),
       campos_faltantes: resultado.camposFaltantes,
       procedencia: resultado.procedencia,
-      paginas: paginas.map((p) => ({ pagina: p.pagina, path: p.filePath })),
       invoice_type: invoiceType,
-      user_company: { nif: userCompanyNif, nombre: userRow?.company_name || null },
       estado: resultado.estado,
     };
     await redisClient.setex(`preview:${previewId}`, 1800, JSON.stringify(previewData));

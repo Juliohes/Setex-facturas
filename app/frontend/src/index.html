@@ -131,7 +131,7 @@
                  Aditivo y separado del flujo de una foto. Solo activo si el
                  backend tiene ocr_multipagina_enabled=true (si no, el endpoint
                  responde 403 y se muestra el aviso). Ver multipagina.js. -->
-            <details id="mp-panel" style="margin-top:16px;border:1px solid #e2e8f0;border-radius:10px;padding:10px 14px;">
+            <details id="mp-panel" style="display:none;margin-top:16px;border:1px solid #e2e8f0;border-radius:10px;padding:10px 14px;">
                 <summary style="cursor:pointer;font-weight:600;color:#2d3748;">📑 ¿Factura de varias páginas?</summary>
                 <p id="mp-info" style="font-size:13px;color:#4a5568;margin:10px 0;"></p>
                 <div id="mp-thumbs" class="mp-thumbs"></div>
@@ -341,7 +341,7 @@
     </div>
     <script src="auth.js?v=20260810-001"></script>
     <script src="cif-validator.js?v=20260713-001"></script>
-    <script src="app.js?v=20260727-001"></script>
+    <script src="app.js?v=20260813-001"></script>
     <script src="multipagina.js?v=20260813-001"></script>
     <script>
         // ── Service Worker: registro + detección de actualizaciones ─────────
