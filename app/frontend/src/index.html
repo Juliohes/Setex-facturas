@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SETEX - Captura de Facturas</title>
     <link rel="icon" href="favicon-app.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="styles.css?v=20260813-001">
+    <link rel="stylesheet" href="styles.css?v=20260813-002">
     <!-- PWA -->
     <link rel="manifest" href="/manifest.json">
     <meta name="theme-color" content="#667eea">
@@ -105,35 +105,39 @@
                 </div>
             </div>
             <div class="upload-area">
-                <!-- ── Selector tipo de factura (siempre visible) ──────────── -->
-                <div style="display:flex; gap:8px; margin-bottom:14px; width:100%;">
-                    <button id="btn-type-recibida" style="flex:1; padding:13px 6px; background:#ebf8ff; border:2px solid #4299e1; border-radius:10px; cursor:pointer; text-align:center; font-size:13px; font-weight:700; color:#2b6cb0; box-shadow:0 0 0 2px #4299e1; transition:all 0.15s;">
-                        📥 Factura Recibida
+                <!-- ── Tipo de factura (compacto, por defecto Recibida) ─────── -->
+                <div style="display:flex; gap:6px; margin-bottom:12px; width:100%;">
+                    <button id="btn-type-recibida" style="flex:1; padding:9px 6px; background:#ebf8ff; border:2px solid #4299e1; border-radius:9px; cursor:pointer; text-align:center; font-size:12px; font-weight:700; color:#2b6cb0; box-shadow:0 0 0 2px #4299e1; transition:all 0.15s;">
+                        📥 Recibida
                     </button>
-                    <button id="btn-type-emitida" style="flex:1; padding:13px 6px; background:#f7fafc; border:2px solid #e2e8f0; border-radius:10px; cursor:pointer; text-align:center; font-size:13px; font-weight:700; color:#a0aec0; transition:all 0.15s;">
-                        📤 Factura Emitida
+                    <button id="btn-type-emitida" style="flex:1; padding:9px 6px; background:#f7fafc; border:2px solid #e2e8f0; border-radius:9px; cursor:pointer; text-align:center; font-size:12px; font-weight:700; color:#a0aec0; transition:all 0.15s;">
+                        📤 Emitida
                     </button>
                 </div>
-                <!-- ── Botones de acción ───────────────────────────────────── -->
-                <button id="btn-capture-photo" class="btn-primary">📷 Capturar Foto</button>
-                <button id="btn-select-file" class="btn-secondary">📄 Subir Archivo</button>
-                <!-- 2026-07-27: solo tech-admin (mostrado por JS tras cargar /api/me/settings).
-                     Ejecuta el flujo real de captura+OCR sin guardar nada — ver /api/test-captura. -->
+                <!-- ── Acción principal: una sola ──────────────────────────── -->
+                <button id="btn-capture-photo" class="btn-primary">📷 Hacer foto</button>
+                <!-- 2026-07-27: solo tech-admin (mostrado por JS tras cargar /api/me/settings). -->
                 <button id="btn-test-captura" class="btn-secondary" style="display:none;background:#fefcbf;border:1px solid #d69e2e;color:#744210;" title="Prueba el flujo completo de captura+OCR SIN guardar nada">🧪 Probar flujo (sin guardar)</button>
                 <input type="file" id="file-input" accept="image/*,application/pdf" style="display:none">
                 <input type="file" id="camera-input" accept="image/*" capture="environment" style="display:none">
                 <div id="preview"></div>
-                <button id="upload-btn" disabled>Enviar</button>
+                <button id="upload-btn" style="display:none;" disabled>Enviar</button>
+                <!-- ── Opciones secundarias como enlaces discretos ─────────── -->
+                <div class="opciones-mini">
+                    <button type="button" id="btn-select-file" class="link-mini">📄 subir archivo</button>
+                    <span class="link-sep">·</span>
+                    <button type="button" id="mp-open-link" class="link-mini">📑 varias páginas</button>
+                </div>
             </div>
             <div id="message"></div>
 
             <!-- ── Factura de varias páginas (2026-08-13) ─────────────────────────
-                 Aditivo y separado del flujo de una foto. Solo activo si el
-                 backend tiene ocr_multipagina_enabled=true (si no, el endpoint
-                 responde 403 y se muestra el aviso). Ver multipagina.js. -->
-            <details id="mp-panel" style="display:none;margin-top:16px;border:1px solid #e2e8f0;border-radius:10px;padding:10px 14px;">
-                <summary style="cursor:pointer;font-weight:600;color:#2d3748;">📑 ¿Factura de varias páginas?</summary>
-                <p id="mp-info" style="font-size:13px;color:#4a5568;margin:10px 0;"></p>
+                 Oculto por defecto; se abre desde el enlace "varias páginas".
+                 El backend gobierna su disponibilidad (ocr_multipagina_enabled).
+                 Ver multipagina.js. -->
+            <div id="mp-panel" style="display:none;margin-top:14px;border:1px solid #e2e8f0;border-radius:10px;padding:12px 14px;">
+                <p style="font-weight:600;color:#2d3748;margin:0 0 6px;">📑 Factura de varias páginas</p>
+                <p id="mp-info" style="font-size:13px;color:#4a5568;margin:0 0 10px;"></p>
                 <div id="mp-thumbs" class="mp-thumbs"></div>
                 <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
                     <button type="button" id="mp-add" class="btn-secondary">➕ Añadir página (foto o PDF)</button>
@@ -142,7 +146,7 @@
                 </div>
                 <input type="file" id="mp-input" accept="image/*,application/pdf" capture="environment" style="display:none">
                 <div id="mp-message" style="margin-top:10px;"></div>
-            </details>
+            </div>
 
             <div style="margin-top:20px;">
                 <button id="btn-toggle-history" style="width:100%;background:#f7fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 16px;font-size:13px;font-weight:700;color:#4a5568;cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
@@ -341,7 +345,7 @@
     </div>
     <script src="auth.js?v=20260810-001"></script>
     <script src="cif-validator.js?v=20260713-001"></script>
-    <script src="app.js?v=20260813-002"></script>
+    <script src="app.js?v=20260813-003"></script>
     <script src="multipagina.js?v=20260813-001"></script>
     <script>
         // ── Service Worker: registro + detección de actualizaciones ─────────

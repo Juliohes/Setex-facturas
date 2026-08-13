@@ -277,10 +277,8 @@ async function loadUserSettings() {
         showCompanyIdentity(data.company_name, data.is_admin === true, data.company_nif_aeat_warning === true);
         const btnTest = document.getElementById('btn-test-captura');
         if (btnTest) btnTest.style.display = userIsTechAdmin ? 'block' : 'none';
-        // Multipágina abierto a TODOS los usuarios (2026-08-13, validado el canario).
-        // El backend también quitó el candado (ocr_multipagina_solo_tech_admin=false).
-        const mpPanel = document.getElementById('mp-panel');
-        if (mpPanel) mpPanel.style.display = 'block';
+        // Multipágina abierto a todos (2026-08-13). El panel está oculto y se
+        // abre desde el enlace "varias páginas" (ver listener de mp-open-link).
     } catch { /* no bloquear */ }
 }
 
@@ -867,7 +865,9 @@ function processFile(file) {
     document.getElementById('preview').innerHTML = `
         <p>Archivo: ${selectedFile.name} (${(selectedFile.size/1024).toFixed(2)} KB)</p>
         <span style="display:inline-block;font-size:12px;font-weight:700;color:${typeColor};background:${selectedInvoiceType === 'venta' ? '#e9d8fd' : '#ebf8ff'};padding:3px 10px;border-radius:10px;">${typeLabel}</span>`;
-    document.getElementById('upload-btn').disabled = false;
+    const uploadBtn = document.getElementById('upload-btn');
+    uploadBtn.style.display = '';   // Enviar aparece al capturar (oculto en el estado limpio)
+    uploadBtn.disabled = false;
     document.getElementById('message').innerHTML = '';
 }
 
@@ -1430,7 +1430,9 @@ let _confirmHistoryActive = false;
 function _hideConfirmModalUI() {
     document.getElementById('confirm-modal').style.display = 'none';
     currentPreviewId = null;
-    document.getElementById('upload-btn').disabled = false;
+    const b = document.getElementById('upload-btn');
+    b.disabled = false;
+    if (selectedFile) b.style.display = ''; // volver al preview con Enviar disponible
 }
 
 function _resetCaptureUI() {
@@ -1438,7 +1440,9 @@ function _resetCaptureUI() {
     document.getElementById('preview').innerHTML = '';
     document.getElementById('file-input').value = '';
     document.getElementById('camera-input').value = '';
-    document.getElementById('upload-btn').disabled = true;
+    const b = document.getElementById('upload-btn');
+    b.disabled = true;
+    b.style.display = 'none'; // vuelve al estado limpio (sin Enviar)
 }
 
 function closeConfirmModal() {
@@ -2135,6 +2139,15 @@ document.getElementById('test-captura-modal-close')?.addEventListener('click', c
 document.getElementById('file-input').addEventListener('change', handleFile);
 document.getElementById('camera-input').addEventListener('change', handleFile);
 document.getElementById('upload-btn').addEventListener('click', uploadFile);
+
+// Enlace "varias páginas": abre/cierra el panel multipágina (oculto por defecto).
+document.getElementById('mp-open-link')?.addEventListener('click', () => {
+    const panel = document.getElementById('mp-panel');
+    if (!panel) return;
+    const abierto = panel.style.display !== 'none';
+    panel.style.display = abierto ? 'none' : 'block';
+    if (!abierto) panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+});
 document.getElementById('btn-close-camera').addEventListener('click', closeCamera);
 document.getElementById('btn-take-photo').addEventListener('click', takePhoto);
 
