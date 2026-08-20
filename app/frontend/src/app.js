@@ -2114,7 +2114,13 @@ async function uploadFile() {
             document.getElementById('upload-btn').disabled = false;
         }
     } catch (err) {
-        msgEl.innerHTML = '<p class="error">Error de conexión. Comprueba tu conexión a internet.</p>';
+        // Diagnóstico temporal (2026-08-13): distinguir un fallo de red REAL de un
+        // error de JS al pintar el modal (que antes se disfrazaba de "conexión").
+        console.error('[uploadFile] error:', err);
+        const esRed = (err && (err.name === 'TypeError') && /fetch|network|Failed to fetch/i.test(err.message || ''));
+        msgEl.innerHTML = esRed
+            ? '<p class="error">Error de conexión. Comprueba tu conexión a internet.</p>'
+            : `<p class="error">Fallo al mostrar la factura: ${(err && err.message) ? String(err.message).replace(/[<>]/g, '') : 'desconocido'}. Avísame de este mensaje.</p>`;
         document.getElementById('upload-btn').disabled = false;
     }
 }
