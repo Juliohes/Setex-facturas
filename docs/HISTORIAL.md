@@ -107,3 +107,15 @@ Documentos VIVOS PARALELOS que contienen referencias obsoletas no corregidas (la
 6. UTF-8 sin BOM: ✅ verificado (`file -i` reporta `charset=utf-8`)
 7. Line endings LF (no CRLF): ✅ verificado (`grep -c $'\r'` reporta `0`)
 8. MD5 de inmutables idéntico pre/post: ✅ verificado (diff `/tmp/inmutables-md5-pre.txt` vs `/tmp/inmutables-md5-post.txt` vacío)
+
+---
+
+## 2026-08-20 — GitHub solo con la versión de producción (repo público)
+
+- `docs/HISTORIAL.md`: nueva entrada de historial (esta).
+- GitHub Juliohes/Setex-facturas alineado a producción: `main` = `9001d9e` (force-push autorizado temporalmente, protección de rama restaurada idéntica después).
+- Borradas las ~36 ramas del remoto (develop, feature/*, fix/*, chore/*, docs/*, hotfix/*, recovery/*, dependabot/*) — staging y ramas de trabajo ya no existen en GitHub.
+- Commit `9001d9e`: diagnóstico de errores de red vs JS (frontend, desplegado en prod 2026-08-13) + PWA cache v6 + `.claude/01-CLAUDE.md`.
+- Repo hecho PÚBLICO para acceso externo desde el perfil de Julio; auditoría previa de secretos/datos correcta (solo fixtures sintéticas ACME y opencv.js).
+- Backups locales: `/opt/setex/shared/backups/github-prod-sync-2026-08-20/` (bundle del repo completo + tar del working tree).
+- AVISO: el repo de staging (`/opt/setex/staging`, mismo remote) no debe volver a hacer `git push` — volvería a crear ramas en GitHub.
