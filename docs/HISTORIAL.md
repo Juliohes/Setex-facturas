@@ -119,3 +119,12 @@ Documentos VIVOS PARALELOS que contienen referencias obsoletas no corregidas (la
 - Repo hecho PÚBLICO para acceso externo desde el perfil de Julio; auditoría previa de secretos/datos correcta (solo fixtures sintéticas ACME y opencv.js).
 - Backups locales: `/opt/setex/shared/backups/github-prod-sync-2026-08-20/` (bundle del repo completo + tar del working tree).
 - AVISO: el repo de staging (`/opt/setex/staging`, mismo remote) no debe volver a hacer `git push` — volvería a crear ramas en GitHub.
+
+---
+
+## 2026-08-20 — Cierre de vulnerabilidades de dependencias (Dependabot 44 → 0)
+
+- `app/backend/package.json` + lock: `pdfjs-dist` ^6.1.200 → ^6.2.108 (GHSA-hq66-cqwq-w95j, ejecución de JS arbitrario con PDF malicioso, high — usado por el pipeline OCR en backend).
+- `app/backend/package-lock.json`: `body-parser` 1.20.5 → 1.20.6 (GHSA-v422-hmwv-36x6, DoS low), `brace-expansion` 1.1.14/2.1.0 → parcheadas (GHSA-3jxr-9vmj-r5cp, GHSA-mh99-v99m-4gvg, GHSA-rgw5-rvv9-x895, DoS high), `fast-uri` 3.1.4 → 3.1.5 (GHSA-7p8r-x3mc-p8w7, high).
+- `package-lock.json` root (tooling dev): `fast-uri` → 3.1.5 y `js-yaml` → 4.3.1 (GHSA-5p4m-2wfm-xmqj, DoS high, solo build-time).
+- Tests backend 345/346 (el fallo único es api-surface-parity preexistente). `npm audit` = 0 en root y backend. Frontend no afectado (pdf.min.js estático v3.11.174 fuera de rango).
