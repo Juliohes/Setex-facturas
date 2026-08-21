@@ -1,7 +1,8 @@
 // ── Indicador de progreso orientativo durante el procesado de la factura ─────
 // Barra parcial sobre .upload-area con frases rotativas. El % es una ESTIMACIÓN
-// visual (el backend no emite eventos de progreso): avanza linealmente hasta
-// 99% y solo llega a 100% cuando llega la respuesta real del servidor.
+// visual (el backend no emite eventos de progreso): curva ease-out que llena en
+// ~10s (rápida al principio, lenta al final) y solo llega a 100% cuando llega
+// la respuesta real del servidor.
 // Interruptor de seguridad: PROGRESO_HABILITADO = false → flujo idéntico al anterior.
 'use strict';
 
@@ -16,11 +17,13 @@ var FASES = [
 ];
 
 // Núcleo puro (sin DOM) — testeable con node --test.
-// opciones: { ahora: fn→ms, duracionTotal: ms para llegar a 99%, intervaloFrase: ms }
+// Curva ease-out cuadrática: rápida al inicio, lenta al final, llena (99%)
+// exactamente en `tiempoLlenado` ms (10s por defecto, petición de Julio).
+// opciones: { ahora: fn→ms, tiempoLlenado: ms, intervaloFrase: ms }
 function crearNucleoProgreso(opciones) {
     opciones = opciones || {};
     var ahora = opciones.ahora || function () { return Date.now(); };
-    var duracionTotal = opciones.duracionTotal || 45000;
+    var tiempoLlenado = opciones.tiempoLlenado || 10000;
     var intervaloFrase = opciones.intervaloFrase || 2500;
     var t0 = ahora();
 
@@ -28,7 +31,8 @@ function crearNucleoProgreso(opciones) {
         // Estado actual: { porcentaje (0-99), frase }. Nunca 100 sin completar().
         estado: function () {
             var transcurrido = Math.max(0, ahora() - t0);
-            var pct = Math.min(99, Math.floor((transcurrido / duracionTotal) * 99));
+            var factor = Math.min(transcurrido / tiempoLlenado, 1); // 0→1 en 10s
+            var pct = Math.round(99 * (1 - (1 - factor) * (1 - factor))); // ease-out
             var fase = null;
             for (var i = 0; i < FASES.length; i++) {
                 if (pct < FASES[i].hasta) { fase = FASES[i]; break; }
@@ -89,9 +93,9 @@ if (typeof document !== 'undefined') {
             if (box) box.setAttribute('aria-valuenow', '100');
             var self = this;
             _closeTimeoutId = setTimeout(function () {
-                overlay.hidden = true;                      // cierre ≤ 200 ms tras respuesta
+                overlay.hidden = true;                      // cierre visible: la barra se ve llena brevemente
                 self._detenerTimers();
-            }, 150);
+            }, 450);
         },
         abortar: function () {
             this._detenerTimers();

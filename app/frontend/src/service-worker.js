@@ -2,7 +2,7 @@
 // actualización (subida de factura multipágina). Al cambiar el nombre se limpia
 // la caché vieja en 'activate' y se re-precachean los assets nuevos.
 // v7 (2026-08-21): indicador de progreso de captura (progreso.js + app.js nuevo).
-const CACHE_NAME = 'setex-v7';
+const CACHE_NAME = 'setex-v8';
 
 // Assets estáticos a pre-cachear en la instalación
 const PRECACHE_ASSETS = [
