@@ -1,13 +1,15 @@
 // v3 (2026-08-13): subida de versión para que las PWA ya instaladas reciban la
 // actualización (subida de factura multipágina). Al cambiar el nombre se limpia
 // la caché vieja en 'activate' y se re-precachean los assets nuevos.
-const CACHE_NAME = 'setex-v6';
+// v7 (2026-08-21): indicador de progreso de captura (progreso.js + app.js nuevo).
+const CACHE_NAME = 'setex-v7';
 
 // Assets estáticos a pre-cachear en la instalación
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
   '/app.js',
+  '/progreso.js',
   '/multipagina.js',
   '/manifest.json'
   // NO incluyas /icons/ aquí — los iconos se cachearán on-demand

@@ -3674,6 +3674,16 @@ Investigación a fondo de una paradoja reportada por Julio: en el modal "Vista O
 - **Alucinación de fecha de v2**: `fecha_emision` no estaba entre los campos cotejados contra Tesseract, por eso pasó desapercibido que v2 leyera `10/07/2023` donde el papel pone `10/07/2026` (factura #22). Añadida al cotejo y relajada la normalización de `apareceEnTexto` para tolerar el separador (`/`, `-`, `.`). Un año equivocado manda la factura a otro ejercicio fiscal.
 - Nueva herramienta `eval/comparar-v1-v2.js`: mide **ambos** pipelines contra el ground truth verificado, usando para v1 su salida inmutable (`ocr_result.merged`) y no las columnas de `uploads`, que ya han sido corregidas a mano y harían parecer a v1 perfecto por construcción.
 
+### 2026-08-21 — Indicador de progreso orientativo en captura (rama `feature/progreso-captura-v1`, PR a main, SIN desplegar)
+- Petición de Julio: barra/círculo que se rellene mientras se procesa la foto, con frases rotativas, desde «Enviar» hasta el panel de verificación. Overlay PARCIAL sobre `.upload-area`, progreso ORIENTATIVO (el backend no emite eventos).
+- `app/frontend/src/progreso.js` (NUEVO): núcleo puro testeable (fases 0-15/15-70/70-90/90-99, asíntota — nunca 100% sin respuesta real) + capa DOM; frases rotan cada 2,5 s; interruptor `PROGRESO_HABILITADO=false` restaura el flujo anterior sin deploy.
+- `app/frontend/src/app.js`: 5 llamadas guardadas (`window.Progreso`) en `uploadFile()` sobre la versión vigente en main (con diagnóstico red/JS del 2026-08-13 intacto); lógica de errores y botón sin cambios.
+- `app/frontend/src/index.html`: contenedor `#progress-overlay` (role=progressbar + aria) tras `#upload-btn`; `progreso.js?v=20260821-001`; cache-buster app.js→`?v=20260821-001`.
+- `app/frontend/src/styles.css`: bloque nuevo al final (overlay parcial pointer-events:none, barra, prefers-reduced-motion); sin tocar estilos existentes.
+- `app/frontend/src/service-worker.js`: bump setex-v6→setex-v7 + precache `/progreso.js`.
+- `app/backend/tests/unit/progreso.test.js` (NUEVO): 6 tests (F2/F4/F8). Suite: 314 pass / 9 fail — los mismos 9 fallos preexistentes verificados en main puro con checkout prístino (entorno local: tesseract/replay/parity), ninguno causado por este cambio (+6 tests nuevos todos en verde).
+- `docs/plans/PLAN-INDICADOR-PROGRESO-CAPTURA-V1.md` (NUEVO): especificación con baseline medible, criterios F1-F8 y checklist E2E §6.3 pendiente de ejecutar contra entorno real antes de prod.
+
 ### 2026-08-13 — UX de captura simplificada (minimalista)
 - Petición de Julio: la pantalla de captura tenía demasiados botones. Dirección elegida "limpieza segura" (no reescribe el flujo de una foto).
 - Una sola acción grande "📷 Hacer foto"; "Enviar" oculto hasta capturar. "subir archivo" y "varias páginas" pasan a enlaces discretos (link-mini); el panel multipágina queda oculto y se abre desde su enlace. Selector de tipo compacto, por defecto Recibida.
