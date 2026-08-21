@@ -2077,6 +2077,7 @@ async function uploadFile() {
     try {
         document.getElementById('upload-btn').disabled = true;
         msgEl.innerHTML = '';
+        if (window.Progreso) Progreso.iniciar();
 
         const res = await Auth.apiFetch(`${API_URL}/upload-preview`, {
             method: 'POST',
@@ -2084,6 +2085,7 @@ async function uploadFile() {
         });
 
         if (res.status === 401 || res.status === 403) {
+            if (window.Progreso) Progreso.abortar();
             forceLogin();
             alert('Tu sesión ha expirado. Por favor, inicia sesión de nuevo.');
             return;
@@ -2093,6 +2095,7 @@ async function uploadFile() {
 
         if (data.preview) {
             msgEl.innerHTML = '';
+            if (window.Progreso) Progreso.finalizar();
             showConfirmModal(data.preview_id, data.campos, {
                 cif_confident:          data.cif_confident,
                 known_provider:         data.known_provider,
@@ -2112,6 +2115,7 @@ async function uploadFile() {
         } else {
             msgEl.innerHTML = `<p class="error">${data.error || 'Error al procesar la imagen'}</p>`;
             document.getElementById('upload-btn').disabled = false;
+            if (window.Progreso) Progreso.abortar();
         }
     } catch (err) {
         // Diagnóstico temporal (2026-08-13): distinguir un fallo de red REAL de un
@@ -2122,6 +2126,7 @@ async function uploadFile() {
             ? '<p class="error">Error de conexión. Comprueba tu conexión a internet.</p>'
             : `<p class="error">Fallo al mostrar la factura: ${(err && err.message) ? String(err.message).replace(/[<>]/g, '') : 'desconocido'}. Avísame de este mensaje.</p>`;
         document.getElementById('upload-btn').disabled = false;
+        if (window.Progreso) Progreso.abortar();
     }
 }
 

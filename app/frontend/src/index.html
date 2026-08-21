@@ -122,6 +122,13 @@
                 <input type="file" id="camera-input" accept="image/*" capture="environment" style="display:none">
                 <div id="preview"></div>
                 <button id="upload-btn" style="display:none;" disabled>Enviar</button>
+                <!-- ── Indicador de progreso orientativo (parcial sobre .upload-area) ── -->
+                <div id="progress-overlay" hidden>
+                    <div class="progress-box" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Procesando la factura">
+                        <div class="progress-bar-track"><div class="progress-bar-fill"></div></div>
+                        <p class="progress-frase">Procesando la factura…</p>
+                    </div>
+                </div>
                 <!-- ── Opciones secundarias como enlaces discretos ─────────── -->
                 <div class="opciones-mini">
                     <button type="button" id="btn-select-file" class="link-mini">📄 subir archivo</button>
@@ -345,7 +352,8 @@
     </div>
     <script src="auth.js?v=20260810-001"></script>
     <script src="cif-validator.js?v=20260713-001"></script>
-    <script src="app.js?v=20260813-004"></script>
+    <script src="progreso.js?v=20260821-001"></script>
+    <script src="app.js?v=20260821-001"></script>
     <script src="multipagina.js?v=20260813-001"></script>
     <script>
         // ── Service Worker: registro + detección de actualizaciones ─────────
