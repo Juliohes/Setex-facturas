@@ -4100,28 +4100,98 @@ app.put('/api/admin/client-companies/:id', authenticateToken, requireAdmin, requ
 app.delete('/api/admin/client-companies/:id', authenticateToken, requireAdmin, requireXHR, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'ID inválido' });
+  // Opción A (2026-08-21): borrado completo en cascada con confirmación == CIF.
+  // Sin usuarios → borrado simple (comportamiento original). Con usuarios → se
+  // exige { confirmation: CIF } y se borran en una transacción: facturas,
+  // usuarios y empresa (refresh_tokens/pw_reset por CASCADE; audit_logs queda
+  // anonimizado por SET NULL).
+  const confirmation = String((req.body || {}).confirmation || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const client = await pool.connect();
   try {
-    const cc = await pool.query('SELECT cif, nombre FROM client_companies WHERE id = $1', [id]);
+    const cc = await client.query('SELECT cif, nombre FROM client_companies WHERE id = $1', [id]);
     if (cc.rows.length === 0) return res.status(404).json({ error: 'Empresa no encontrada' });
     const { cif, nombre } = cc.rows[0];
     const cleanCif = cif.toUpperCase().replace(/[^A-Z0-9]/g, '');
-    const usersCheck = await pool.query(
-      `SELECT COUNT(*) FROM users WHERE UPPER(REPLACE(company_nif, ' ', '')) = $1`,
+
+    const usersRes = await client.query(
+      `SELECT id, email FROM users WHERE UPPER(REPLACE(company_nif, ' ', '')) = $1`,
       [cleanCif]
     );
-    const numUsers = parseInt(usersCheck.rows[0].count, 10);
-    if (numUsers > 0) {
+    const userIds = usersRes.rows.map((u) => u.id);
+
+    let numFacturas = 0;
+    if (userIds.length > 0) {
+      const fc = await client.query('SELECT COUNT(*) FROM uploads WHERE user_id = ANY($1::int[])', [userIds]);
+      numFacturas = parseInt(fc.rows[0].count, 10);
+    }
+
+    // Sin usuarios → borrado simple original
+    if (userIds.length === 0) {
+      await client.query('DELETE FROM client_companies WHERE id = $1', [id]);
+      auditLog('ADMIN_DELETE_CLIENT_COMPANY', { id, cif, nombre }, req.user.userId, req.ip);
+      logger.info(`[Admin] Empresa cliente eliminada: ${nombre} (${cif}) por ${req.user.email}`);
+      return res.json({ success: true });
+    }
+
+    // Con usuarios: exigir confirmation == CIF para el borrado completo
+    if (!confirmation) {
       return res.status(409).json({
-        error: `No se puede eliminar: hay ${numUsers} usuario(s) registrado(s) con esta empresa. Desactívala primero.`
+        error: `Esta empresa tiene ${userIds.length} usuario(s) y ${numFacturas} factura(s). Para eliminarlo TODO definitivamente, confirma repitiendo la petición con el CIF de la empresa.`,
+        num_usuarios: userIds.length,
+        num_facturas: numFacturas,
+        requiere_confirmacion: cleanCif
       });
     }
-    await pool.query('DELETE FROM client_companies WHERE id = $1', [id]);
-    auditLog('ADMIN_DELETE_CLIENT_COMPANY', { id, cif, nombre }, req.user.userId, req.ip);
-    logger.info(`[Admin] Empresa cliente eliminada: ${nombre} (${cif}) por ${req.user.email}`);
-    res.json({ success: true });
+    if (confirmation !== cleanCif) {
+      return res.status(400).json({ error: 'La confirmación no coincide con el CIF de la empresa. Escríbelo exactamente igual.' });
+    }
+
+    // ── Borrado completo transaccional ────────────────────────────────────────
+    await client.query('BEGIN');
+    const filesRes = await client.query(
+      'SELECT id, file_path FROM uploads WHERE user_id = ANY($1::int[]) AND file_path IS NOT NULL',
+      [userIds]
+    );
+    const delUp = await client.query('DELETE FROM uploads WHERE user_id = ANY($1::int[]) RETURNING id', [userIds]);
+    // known_cifs.user_id no tiene ON DELETE action → anonimizar antes de borrar users
+    await client.query('UPDATE known_cifs SET user_id = NULL WHERE user_id = ANY($1::int[])', [userIds]);
+    const delUsers = await client.query('DELETE FROM users WHERE id = ANY($1::int[]) RETURNING id', [userIds]);
+    await client.query('DELETE FROM client_companies WHERE id = $1 RETURNING id', [id]);
+    await client.query('COMMIT');
+
+    // Ficheros físicos best-effort fuera de la transacción (no bloquean la respuesta)
+    const fsp = require('fs').promises;
+    let ficherosBorrados = 0;
+    for (const f of filesRes.rows) {
+      try {
+        const abs = f.file_path.startsWith('/') ? f.file_path : `/app/${f.file_path}`;
+        await fsp.unlink(abs);
+        ficherosBorrados++;
+      } catch (e) {
+        logger.warn(`[Admin] No se pudo borrar fichero físico upload=${f.id}: ${e.message}`);
+      }
+    }
+
+    auditLog('ADMIN_DELETE_CLIENT_COMPANY_FORCED', {
+      id, cif, nombre,
+      usuarios_borrados: delUsers.rowCount,
+      facturas_borradas: delUp.rowCount,
+      ficheros_borrados: ficherosBorrados,
+      emails_eliminados: usersRes.rows.map((u) => u.email)
+    }, req.user.userId, req.ip);
+    logger.warn(`[Admin] Empresa ELIMINADA COMPLETA: ${nombre} (${cif}) por ${req.user.email} — usuarios=${delUsers.rowCount} facturas=${delUp.rowCount} ficheros=${ficherosBorrados}`);
+    res.json({
+      success: true,
+      usuarios_borrados: delUsers.rowCount,
+      facturas_borradas: delUp.rowCount,
+      ficheros_borrados: ficherosBorrados
+    });
   } catch (err) {
+    try { await client.query('ROLLBACK'); } catch (_) { /* ya en rollback o sin tx */ }
     logger.error('Admin client-companies DELETE error:', err);
     res.status(500).json({ error: 'Error al eliminar la empresa' });
+  } finally {
+    client.release();
   }
 });
 

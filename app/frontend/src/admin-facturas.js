@@ -552,7 +552,12 @@ function initTable() {
           const flag = n > 0
             ? `<button class="flag-row-btn marcado" title="${n} campo(s) marcados como no fiables — click para revisar">🚩${n}</button>`
             : '<button class="flag-row-btn" title="Marcar campos no fiables (requieren revisión)">🚩</button>';
-          return `<code style="font-size:12px;font-weight:700;">#${cell.getValue()}</code>${flag}`;
+          // Modo eliminar: ✕ junto al ID (primera columna, siempre visible sin
+          // scroll horizontal). El botón de la columna Acciones se mantiene.
+          const del = deleteModeFacturas
+            ? `<button class="btn-tbl-del fac-delete" data-id="${rowData.id}" data-num="${escAttr(rowData.numero_factura || `#${rowData.id}`)}">✕</button>`
+            : '';
+          return `<code style="font-size:12px;font-weight:700;">#${cell.getValue()}</code>${flag}${del}`;
         },
         cellClick: (e, cell) => {
           if (e.target.closest('.flag-row-btn')) openNoFiableModal(cell.getRow().getData());
@@ -738,6 +743,26 @@ function initDelFacturaModal() {
   modal.addEventListener('click', (e) => { if (e.target === modal) cerrarDelFacturaModal(); });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && modal.style.display === 'flex') cerrarDelFacturaModal();
+  });
+}
+
+// ── Wiring del modal de eliminación completa de empresa (Opción A) ───────────
+function initEmpDelModal() {
+  const modal  = document.getElementById('emp-del-modal');
+  const cerrar = document.getElementById('emp-del-close');
+  const cancel = document.getElementById('emp-del-cancel');
+  const btn    = document.getElementById('emp-del-confirm');
+  const input  = document.getElementById('emp-del-cif-input');
+  if (!modal || !cerrar || !cancel || !btn || !input) return;
+  cerrar.addEventListener('click', closeEmpDelModal);
+  cancel.addEventListener('click', closeEmpDelModal);
+  btn.addEventListener('click', confirmarEliminacionEmpresa);
+  // Enter en el input confirma; en un modal destructivo la salida (Escape,
+  // backdrop) siempre es la opción segura.
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') confirmarEliminacionEmpresa(); });
+  modal.addEventListener('click', (e) => { if (e.target === modal) closeEmpDelModal(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.style.display === 'flex') closeEmpDelModal();
   });
 }
 
@@ -952,10 +977,17 @@ function initEmpresasTable() {
     columns: [
       { title: 'ID',             field: 'codigo_cliente', width: 120, sorter: 'number', hozAlign: 'center',
         editor: 'input', cssClass: 'emp-cell-editable',
+        // En modo eliminar la celda deja de ser editable: el click debe ir al
+        // botón ✕ (primera columna, visible sin scroll), no abrir el editor.
+        editable: () => !deleteMode,
         editorParams: { search: false, elementAttributes: { maxlength: '50', placeholder: 'Ej: CLI-001' } },
         formatter: (cell) => {
           const v = cell.getValue();
-          return v ? `<code style="font-size:13px;font-weight:700;">${escHtml(v)}</code>` : '<span style="color:#cbd5e0;font-size:12px;">— editar —</span>';
+          const row = cell.getData();
+          const del = deleteMode
+            ? `<button class="btn-tbl-del emp-action" data-action="eliminar" data-id="${row.id}" data-cif="${escAttr(row.cif)}" data-nombre="${escAttr(row.nombre)}">✕ Eliminar</button>`
+            : '';
+          return `${v ? `<code style="font-size:13px;font-weight:700;">${escHtml(v)}</code>` : '<span style="color:#cbd5e0;font-size:12px;">— editar —</span>'}${del}`;
         } },
       { title: 'Empresa',        field: 'nombre',         minWidth: 220, sorter: 'string',
         editor: 'input', cssClass: 'emp-cell-editable',
@@ -1060,7 +1092,7 @@ function initEmpresasTable() {
     if (action === 'ver')      window._empVerFacturas(id, cif, nombre);
     if (action === 'aprobar')  window._empRevisar(id, nombre);  // abre modal completo de revisión
     if (action === 'rechazar') window._empRechazar(id, nombre);
-    if (action === 'eliminar') window._empEliminar(id, nombre);
+    if (action === 'eliminar') window._empEliminar(id, nombre, cif);
   });
 }
 
@@ -1310,8 +1342,10 @@ window._empRevisar = async function(id, nombre) {
   } catch (err) { alert('Error de red: ' + err.message); }
 };
 
-// Eliminar empresa (solo si no tiene usuarios)
-window._empEliminar = async function(id, nombre) {
+// Eliminar empresa. Sin usuarios → borrado simple con confirm(). Con usuarios
+// (409 del backend) → modal que exige escribir el CIF para el borrado completo
+// (Opción A 2026-08-21: empresa + usuarios + facturas + ficheros).
+window._empEliminar = async function(id, nombre, cif) {
   if (!confirm(`¿Eliminar definitivamente la empresa "${nombre}"?\nEsta acción no se puede deshacer.`)) return;
   try {
     const res = await authFetch(`${API_URL}/admin/client-companies/${id}`, {
@@ -1319,10 +1353,74 @@ window._empEliminar = async function(id, nombre) {
       headers: { 'Content-Type': 'application/json' },
     });
     const data = await res.json();
-    if (!res.ok) { alert(data.error || 'Error al eliminar'); return; }
-    loadEmpresas();
+    if (res.ok) { loadEmpresas(); return; }
+    if (res.status === 409 && data.requiere_confirmacion) {
+      openEmpDelModal(id, nombre, cif, data.num_usuarios, data.num_facturas);
+      return;
+    }
+    alert(data.error || 'Error al eliminar');
   } catch (err) { alert('Error de red: ' + err.message); }
 };
+
+// ── Modal de eliminación completa de empresa (Opción A) ──────────────────────
+let _empDelCtx = null; // { id, nombre, cifEsperado }
+
+function openEmpDelModal(id, nombre, cif, numUsuarios, numFacturas) {
+  _empDelCtx = { id, nombre, cifEsperado: String(cif || '').toUpperCase().replace(/[^A-Z0-9]/g, '') };
+  document.getElementById('emp-del-resumen').innerHTML =
+    `<strong>${escHtml(nombre)}</strong> <code>${escHtml(cif || '')}</code>`;
+  document.getElementById('emp-del-info-usuarios').innerHTML =
+    `<strong>${numUsuarios}</strong> usuario(s) registrados (sus cuentas dejarán de existir)`;
+  document.getElementById('emp-del-info-facturas').innerHTML =
+    `<strong>${numFacturas}</strong> factura(s) con sus imágenes`;
+  const errEl = document.getElementById('emp-del-error');
+  errEl.style.display = 'none';
+  const input = document.getElementById('emp-del-cif-input');
+  input.value = '';
+  document.getElementById('emp-del-modal').style.display = 'flex';
+  input.focus();
+}
+
+function closeEmpDelModal() {
+  document.getElementById('emp-del-modal').style.display = 'none';
+  _empDelCtx = null;
+}
+
+async function confirmarEliminacionEmpresa() {
+  if (!_empDelCtx) return;
+  const errEl = document.getElementById('emp-del-error');
+  const btn = document.getElementById('emp-del-confirm');
+  const escrito = document.getElementById('emp-del-cif-input').value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!escrito) {
+    errEl.textContent = 'Escribe el CIF de la empresa para confirmar.';
+    errEl.style.display = '';
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = 'Eliminando…';
+  try {
+    const res = await authFetch(`${API_URL}/admin/client-companies/${_empDelCtx.id}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirmation: escrito }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      errEl.textContent = data.error || 'No se pudo eliminar la empresa.';
+      errEl.style.display = '';
+      return;
+    }
+    closeEmpDelModal();
+    showEmpresaToast(`✓ Empresa eliminada completa: ${data.usuarios_borrados} usuario(s), ${data.facturas_borradas} factura(s)`, 'ok');
+    loadEmpresas();
+  } catch (err) {
+    errEl.textContent = 'Error de red: ' + err.message;
+    errEl.style.display = '';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Eliminar todo definitivamente';
+  }
+}
 
 function actualizarBadgePendientes() {
   if (!tableEmpresas) return;
@@ -1737,6 +1835,7 @@ function launchApp(authData) {
   initShadowModal();
   initBenchmarkModal();
   initDelFacturaModal();
+  initEmpDelModal();
   initEvalVerificacionModal();
   loadData();
 
