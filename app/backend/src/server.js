@@ -6170,6 +6170,46 @@ async function start() {
     }
   }, 60 * 60 * 1000);
 
+  // CLEANUP ADMIN: endpoint temporal para limpiar duplicados en uploads.
+  // Ruta: POST /api/admin/cleanup-duplicate-invoices?user_id=X&proveedor_nif=Y&fecha_emision=Z&total_factura=T
+  // Requiere admin + XHR. Borra todos excepto el más antiguo (id menor).
+  app.post('/api/admin/cleanup-duplicate-invoices', authenticateToken, requireAdmin, requireXHR, async (req, res) => {
+    const { user_id, proveedor_nif, fecha_emision, total_factura } = req.query;
+    if (!user_id || !proveedor_nif || !fecha_emision || !total_factura) {
+      return res.status(400).json({ error: 'Faltan parámetros: user_id, proveedor_nif, fecha_emision, total_factura' });
+    }
+    try {
+      const dup = await pool.query(`
+        SELECT id, numero_factura, uploaded_at
+        FROM uploads
+        WHERE user_id = $1 
+          AND proveedor_nif = $2 
+          AND fecha_emision = $3 
+          AND total_factura = $4
+        ORDER BY id;
+      `, [parseInt(user_id, 10), proveedor_nif, fecha_emision, total_factura]);
+
+      if (dup.rows.length <= 1) {
+        return res.json({ success: true, message: 'No hay duplicados', count: 0 });
+      }
+
+      const keep = dup.rows[0];
+      const toDelete = dup.rows.slice(1);
+      let deleted = 0;
+      for (const row of toDelete) {
+        await pool.query('DELETE FROM uploads WHERE id = $1', [row.id]);
+        deleted++;
+      }
+
+      auditLog('ADMIN_CLEANUP_DUPLICATES', { user_id, proveedor_nif, fecha_emision, total_factura, kept_id: keep.id, deleted_ids: toDelete.map(r => r.id) }, req.user.userId, req.ip);
+      logger.info(`[Admin] Duplicados limpiados: mantuvieron ID ${keep.id}, borrados IDs ${toDelete.map(r => r.id).join(', ')}`);
+      res.json({ success: true, message: `Duplicados limpios: ${deleted} borradas`, kept_id: keep.id, deleted_count: deleted });
+    } catch (err) {
+      logger.error('Admin cleanup-duplicates error:', err);
+      res.status(500).json({ error: 'Error al limpiar duplicados' });
+    }
+  });
+
   // SANDBOX: purga periódica (cada 60s) de uploads/audit/tokens de usuarios is_test=true
   // No requiere cron del sistema; corre dentro del propio proceso Node.
   const { startTestCleanup } = require('./services/test-cleanup');
