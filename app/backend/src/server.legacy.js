@@ -4821,6 +4821,50 @@ async function start() {
     }
   });
 
+  // ADMIN EMERGENCY FIX: corrección manual de factura 57 (error OCR de base tramo 3)
+  // POST /api/admin/fix-factura-57
+  app.post('/api/admin/fix-factura-57', authenticateToken, requireAdmin, requireXHR, async (req, res) => {
+    try {
+      const newLineas = [
+        {base: "60,93", cuota: "2,44", productos: [], porcentaje: "4"},
+        {base: "48,03", cuota: "4,80", productos: [], porcentaje: "10"},
+        {base: "64,79", cuota: "13,61", productos: [], porcentaje: "21"}
+      ];
+      
+      const result = await pool.query(
+        `UPDATE uploads 
+         SET total_factura = $1,
+             base_imponible = $2,
+             cuota_iva = $3,
+             lineas_iva = $4,
+             iva_porcentaje = $5
+         WHERE id = 57
+         RETURNING id, numero_factura, total_factura, base_imponible, iva_porcentaje, cuota_iva, lineas_iva`,
+        ["194,60", "173,75", "20,85", JSON.stringify(newLineas), "21"]
+      );
+      
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: 'Factura 57 no encontrada' });
+      }
+      
+      auditLog('ADMIN_EMERGENCY_FIX_FAC57', {
+        before: { total: '194,62', base_tramo3: '64,81' },
+        after: { total: '194,60', base_tramo3: '64,79' }
+      }, req.user.userId, req.ip);
+      
+      logger.warn(`[ADMIN] CORRECCIÓN EMERGENCIA Factura 57: 194,62 → 194,60 (base tramo 3: 64,81 → 64,79)`);
+      
+      res.json({
+        success: true,
+        message: 'Factura 57 corregida',
+        factura: result.rows[0]
+      });
+    } catch (err) {
+      logger.error('Admin fix-factura-57 error:', err);
+      res.status(500).json({ error: 'Error al corregir factura', details: err.message });
+    }
+  });
+
   // SANDBOX: purga periódica (cada 60s) de uploads/audit/tokens de usuarios is_test=true
   // No requiere cron del sistema; corre dentro del propio proceso Node.
   const { startTestCleanup } = require('./services/test-cleanup');
