@@ -4786,6 +4786,41 @@ async function start() {
     }
   });
 
+  // DEBUG ADMIN: ver estado actual de una factura en BD
+  // GET /api/admin/debug-factura/:id
+  app.get('/api/admin/debug-factura/:id', authenticateToken, requireAdmin, requireXHR, async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'ID inválido' });
+    try {
+      const fac = await pool.query(
+        `SELECT id, numero_factura, proveedor_nif, fecha_emision, total_factura, 
+                user_id, base_imponible, iva_porcentaje, cuota_iva, lineas_iva
+         FROM uploads WHERE id = $1`,
+        [id]
+      );
+      if (fac.rows.length === 0) return res.status(404).json({ error: 'Factura no encontrada' });
+      
+      const row = fac.rows[0];
+      // Buscar si hay otra factura idéntica (duplicado)
+      const dups = await pool.query(`
+        SELECT id FROM uploads 
+        WHERE user_id = $1 AND proveedor_nif = $2 AND fecha_emision = $3 AND total_factura = $4
+        ORDER BY id`,
+        [row.user_id, row.proveedor_nif, row.fecha_emision, row.total_factura]
+      );
+      
+      res.json({
+        factura: row,
+        lineas_iva_parsed: typeof row.lineas_iva === 'string' ? JSON.parse(row.lineas_iva) : row.lineas_iva,
+        duplicados_encontrados: dups.rows.length,
+        ids_con_mismo_contenido: dups.rows.map(r => r.id)
+      });
+    } catch (err) {
+      logger.error('Debug factura error:', err);
+      res.status(500).json({ error: 'Error al obtener datos', details: err.message });
+    }
+  });
+
   // SANDBOX: purga periódica (cada 60s) de uploads/audit/tokens de usuarios is_test=true
   // No requiere cron del sistema; corre dentro del propio proceso Node.
   const { startTestCleanup } = require('./services/test-cleanup');
