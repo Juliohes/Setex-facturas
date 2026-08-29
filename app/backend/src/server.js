@@ -6305,8 +6305,26 @@ async function start() {
 
   // ADMIN EMERGENCY FIX: corrección manual de factura 57 (error OCR de base tramo 3)
   // POST /api/admin/fix-factura-57
+  // Primero elimina cualquier otra factura del mismo proveedor/fecha/usuario con total 194,60
+  // Luego actualiza la 57 a los valores correctos
   app.post('/api/admin/fix-factura-57', authenticateToken, requireAdmin, requireXHR, async (req, res) => {
     try {
+      // Paso 1: eliminar otras facturas con el total correcto (para evitar constraint violation)
+      const otherDups = await pool.query(
+        `DELETE FROM uploads 
+         WHERE user_id = 36 
+           AND proveedor_nif = 'A45039617' 
+           AND fecha_emision = '17/08/2026' 
+           AND total_factura = '194,60'
+           AND id != 57
+         RETURNING id`
+      );
+      
+      if (otherDups.rows.length > 0) {
+        logger.warn(`[Fix 57] Borrados ${otherDups.rows.length} duplicados con total 194,60: IDs ${otherDups.rows.map(r => r.id).join(', ')}`);
+      }
+      
+      // Paso 2: actualizar factura 57 con los datos correctos
       const newLineas = [
         {base: "60,93", cuota: "2,44", productos: [], porcentaje: "4"},
         {base: "48,03", cuota: "4,80", productos: [], porcentaje: "10"},
@@ -6330,15 +6348,17 @@ async function start() {
       }
       
       auditLog('ADMIN_EMERGENCY_FIX_FAC57', {
+        duplicados_eliminados: otherDups.rowCount,
         before: { total: '194,62', base_tramo3: '64,81' },
         after: { total: '194,60', base_tramo3: '64,79' }
       }, req.user.userId, req.ip);
       
-      logger.warn(`[ADMIN] CORRECCIÓN EMERGENCIA Factura 57: 194,62 → 194,60 (base tramo 3: 64,81 → 64,79)`);
+      logger.warn(`[ADMIN] CORRECCIÓN EMERGENCIA Factura 57: 194,62 → 194,60 (duplicados eliminados: ${otherDups.rowCount})`);
       
       res.json({
         success: true,
         message: 'Factura 57 corregida',
+        duplicados_eliminados: otherDups.rowCount,
         factura: result.rows[0]
       });
     } catch (err) {
