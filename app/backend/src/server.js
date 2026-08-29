@@ -6268,6 +6268,41 @@ async function start() {
     }
   });
 
+  // DEBUG ADMIN: listar TODAS las facturas del mismo proveedor/fecha/usuario
+  // GET /api/admin/debug-group?user_id=36&proveedor_nif=A45039617&fecha_emision=17/08/2026
+  app.get('/api/admin/debug-group', authenticateToken, requireAdmin, requireXHR, async (req, res) => {
+    const { user_id, proveedor_nif, fecha_emision } = req.query;
+    if (!user_id || !proveedor_nif || !fecha_emision) {
+      return res.status(400).json({ error: 'Parámetros requeridos: user_id, proveedor_nif, fecha_emision' });
+    }
+    try {
+      const result = await pool.query(
+        `SELECT id, numero_factura, total_factura, base_imponible, iva_porcentaje, cuota_iva, lineas_iva
+         FROM uploads
+         WHERE user_id = $1 AND proveedor_nif = $2 AND fecha_emision = $3
+         ORDER BY id`,
+        [parseInt(user_id, 10), proveedor_nif, fecha_emision]
+      );
+      
+      res.json({
+        grupo: { user_id, proveedor_nif, fecha_emision },
+        total_facturas: result.rows.length,
+        facturas: result.rows.map(r => ({
+          id: r.id,
+          numero_factura: r.numero_factura,
+          total_factura: r.total_factura,
+          base_imponible: r.base_imponible,
+          iva_porcentaje: r.iva_porcentaje,
+          cuota_iva: r.cuota_iva,
+          lineas_iva: typeof r.lineas_iva === 'string' ? JSON.parse(r.lineas_iva) : r.lineas_iva
+        }))
+      });
+    } catch (err) {
+      logger.error('Debug group error:', err);
+      res.status(500).json({ error: 'Error al obtener datos', details: err.message });
+    }
+  });
+
   // DEBUG ADMIN: ver estado actual de una factura en BD
   // GET /api/admin/debug-factura/:id
   app.get('/api/admin/debug-factura/:id', authenticateToken, requireAdmin, requireXHR, async (req, res) => {
