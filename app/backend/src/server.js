@@ -5993,9 +5993,67 @@ async function start() {
       WHERE proveedor_nif IS NOT NULL AND fecha_emision IS NOT NULL AND total_factura IS NOT NULL
     `);
     logger.info('Unique index para duplicados creado/verificado');
+    
+    // Limpieza automática de duplicados: si hay varias facturas exactamente iguales,
+    // borra todos excepto el más antiguo (ID menor). Esto soluciona violations del constraint
+    // en facturas que se subieron dos veces por error del usuario.
+    try {
+      const dupQuery = `
+        WITH dups AS (
+          SELECT id, 
+                 ROW_NUMBER() OVER (PARTITION BY user_id, proveedor_nif, fecha_emision, total_factura ORDER BY id) as rn
+          FROM uploads
+          WHERE proveedor_nif IS NOT NULL AND fecha_emision IS NOT NULL AND total_factura IS NOT NULL
+        )
+        SELECT id FROM dups WHERE rn > 1;
+      `;
+      const dupRes = await pool.query(dupQuery);
+      if (dupRes.rows.length > 0) {
+        const dupIds = dupRes.rows.map(r => r.id);
+        await pool.query('DELETE FROM uploads WHERE id = ANY($1::int[])', [dupIds]);
+        logger.warn(`[Cleanup] Eliminados ${dupIds.length} duplicados de upload: IDs ${dupIds.join(', ')}`);
+      }
+    } catch (err) {
+      logger.warn('No se pudo limpiar duplicados:', err.message);
+    }
   } catch (err) {
     logger.warn('No se pudo crear unique index (puede que ya exista):', err.message);
   }
+
+  // ── Cleanup automático de duplicados (nuevamente, por transacciones)
+  // Si hay duplicados que no se borraron la primera vez (ej: constraint ya violado
+  // cuando se creó el index), fuerza su borrado aquí.
+  try {
+    const finalDupCheck = `
+      SELECT COUNT(*) as total FROM (
+        SELECT 1
+        FROM uploads
+        WHERE proveedor_nif IS NOT NULL AND fecha_emision IS NOT NULL AND total_factura IS NOT NULL
+        GROUP BY user_id, proveedor_nif, fecha_emision, total_factura
+        HAVING COUNT(*) > 1
+      ) as g;
+    `;
+    const dupCheck = await pool.query(finalDupCheck);
+    const dupCount = parseInt(dupCheck.rows[0].total, 10);
+    if (dupCount > 0) {
+      logger.warn(`[Warning] Aún hay ${dupCount} grupo(s) con duplicados. Limpiando fuerza...`);
+      const forceClean = `
+        DELETE FROM uploads
+        WHERE id NOT IN (
+          SELECT MIN(id)
+          FROM uploads
+          WHERE proveedor_nif IS NOT NULL AND fecha_emision IS NOT NULL AND total_factura IS NOT NULL
+          GROUP BY user_id, proveedor_nif, fecha_emision, total_factura
+        )
+        AND proveedor_nif IS NOT NULL AND fecha_emision IS NOT NULL AND total_factura IS NOT NULL;
+      `;
+      const cleanRes = await pool.query(forceClean);
+      logger.info(`[Cleanup] Borrados ${cleanRes.rowCount} duplicados (limpieza fuerza)`);
+    }
+  } catch (err) {
+    logger.warn('Error en limpieza fuerza de duplicados:', err.message);
+  }
+
 
   // MT-001: Migración known_cifs → company_catalog ELIMINADA (2026-04-10).
   // Este bloque promovía datos privados de usuarios al catálogo global en cada reinicio.
