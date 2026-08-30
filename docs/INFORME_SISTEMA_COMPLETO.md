@@ -3821,3 +3821,8 @@ Investigación a fondo de una paradoja reportada por Julio: en el modal "Vista O
 - `admin-facturas.js/html`: modal `emp-del-modal` que exige escribir el CIF; resultado con conteos vía toast; cache-buster js v002.
 - Fix visibilidad: botón ✕ del modo eliminar duplicado en la primera columna de ambas tablas (antes solo en Acciones, última columna → requería scroll horizontal y parecía no aparecer); celda ID de empresas no editable mientras deleteMode activo.
 - Suite 315 pass / 9 fail preexistentes. Desplegado a prod (workflow manual), healthchecks verdes, js nuevo servido verificado.
+
+### 2026-08-30 — Limpieza de endpoints temporales de debug (DESPLEGADO)
+- Removidos POST /api/admin/cleanup-duplicate-invoices, GET /api/admin/debug-factura/:id, GET /api/admin/debug-group, POST /api/admin/fix-factura-57
+- Se mantiene la limpieza automática de duplicados en startup (mejora robusta general, no específica)
+- Sistema vuelve a estado de producción limpio sin endpoints de debugging
